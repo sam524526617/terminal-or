@@ -1,4 +1,5 @@
 # Robot du Terminal or : génère le tableau de bord et le publie sur GitHub Pages.
+# Emplacement dans le dépôt : .github/workflows/terminal-or.yml
 name: Terminal or
 
 on:
@@ -23,6 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # GitHub désactive les tâches planifiées d'un dépôt public sans activité depuis 60 jours.
+      # Ce petit commit mensuel l'en empêche.
       - name: Maintien en vie (1er du mois)
         if: github.event.schedule == '17 6 1 * *'
         run: |
@@ -50,6 +53,9 @@ jobs:
 
       - name: Générer le tableau de bord
         run: python terminal_or.py --site site
+        env:
+          # Analyste IA (optionnel) : sans ce secret, la page fonctionne normalement.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - uses: actions/upload-pages-artifact@v5
         with:
