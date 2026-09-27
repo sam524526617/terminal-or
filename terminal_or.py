@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TERMINAL OR v3 : poste de marché XAU/USD
+TERMINAL OR v4 : poste de marché XAU/USD
 =========================================
 
 Ce que fait ce programme, à chaque exécution :
@@ -62,7 +62,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "3.0"
+VERSION = "4.0"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -144,12 +144,35 @@ DECALAGE_CFD = 0.0
 # Flux en direct (widgets TradingView). Si ton broker a un flux sur TradingView, tu peux le mettre
 # à la place (ex. "PEPPERSTONE:XAUUSD", "ICMARKETS:XAUUSD", "FOREXCOM:XAUUSD").
 TV_OR = "OANDA:XAUUSD"
-TV_BANDEAU = [("OANDA:XAUUSD", "XAU/USD"), ("OANDA:XAGUSD", "XAG/USD"), ("TVC:DXY", "Dollar index"),
-              ("TVC:US02Y", "US 2 ans"), ("TVC:US10Y", "US 10 ans"), ("TVC:UKOIL", "Brent"),
-              ("FOREXCOM:SPXUSD", "S&P 500"), ("TVC:VIX", "VIX"), ("FX:EURUSD", "EUR/USD"), ("FX:USDJPY", "USD/JPY")]
-TV_MINIS = [("TVC:DXY", "Dollar index"), ("TVC:US10Y", "US 10 ans"), ("TVC:UKOIL", "Brent"),
-            ("FOREXCOM:SPXUSD", "S&P 500")]
+# Les widgets gratuits refusent certains symboles (TVC:DXY, TVC:US10Y, TVC:VIX...) : on utilise des équivalents CFD.
+# T-Note = prix de l'obligation américaine : il MONTE quand les taux BAISSENT.
+TV_BANDEAU = [("OANDA:XAUUSD", "XAU/USD"), ("OANDA:XAGUSD", "XAG/USD"), ("CAPITALCOM:DXY", "Dollar index"),
+              ("OANDA:USB02YUSD", "T-Note 2 ans"), ("OANDA:USB10YUSD", "T-Note 10 ans"), ("TVC:UKOIL", "Brent"),
+              ("FOREXCOM:SPXUSD", "S&P 500"), ("CAPITALCOM:VIX", "VIX"), ("FX:EURUSD", "EUR/USD"),
+              ("FX:USDJPY", "USD/JPY")]
+TV_MINIS = [("CAPITALCOM:DXY", "Dollar index"), ("OANDA:USB10YUSD", "T-Note 10 ans (monte si les taux baissent)"),
+            ("TVC:UKOIL", "Brent"), ("FOREXCOM:SPXUSD", "S&P 500")]
 TV_LANGUE_ACTUS = "en"   # le fil d'actualité en direct est plus fourni en anglais
+
+# Règles de ta prop firm, utilisées par le contrôle Achat / Vente (modifie-les selon ton compte)
+PROP = {
+    "capital": 50000,            # taille du compte, en $
+    "risque_pct": 0.5,           # risque par trade, en % du capital
+    "perte_max_jour_pct": 5.0,   # perte maximale autorisée sur la journée, en %
+    "duree_min_minutes": 2,      # durée minimale d'une position (certaines prop firms bloquent le scalping trop court)
+    "news_minutes": 5,           # interdiction de trader X minutes avant et après une annonce forte
+    "once_par_lot": 100,         # XAU/USD : 1 lot = 100 onces, donc 1 $ de mouvement = 100 $ par lot
+}
+
+# Vue de marché : poids des composantes (fondamental, tendance multi-unités, momentum du jour, sentiment)
+POIDS_VUE = {"fondamental": 0.35, "tendance": 0.35, "momentum": 0.15, "sentiment": 0.15}
+HORIZON_H = 4  # horizon des scénarios et du suivi des prévisions, en heures
+
+# Réunions passées de la Fed (décision à 14 h, heure de New York), pour mesurer la réaction de l'or
+FOMC_PASSES = ["2024-01-31", "2024-03-20", "2024-05-01", "2024-06-12", "2024-07-31", "2024-09-18", "2024-11-07",
+               "2024-12-18", "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18", "2025-07-30", "2025-09-17",
+               "2025-10-29", "2025-12-10", "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17", "2026-07-29",
+               "2026-09-16"]
 
 # Alertes avant chaque annonce USD à fort impact (minutes avant) et vérification des nouvelles analyses
 ALERTES_MIN = [15, 5, 1]
@@ -200,11 +223,13 @@ AJUST = 0.0  # conversion future COMEX -> prix affiché (spot + DECALAGE_CFD), c
 # ---------------------------------------------------------------------------
 
 SESSION = requests.Session()
-SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-})
+UA_NAVIGATEUR = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                 "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+# Depuis les serveurs de GitHub, la FRED et les sites de la Fed laissent en attente les requêtes qui se présentent
+# comme un navigateur, mais répondent aussitôt à un client de type script. On essaie donc les deux, dans cet ordre.
+UA_SCRIPT = "curl/8.5.0"
+AGENTS_OFFICIELS = (UA_SCRIPT, UA_NAVIGATEUR)
+SESSION.headers.update({"Accept-Language": "en-US,en;q=0.9"})
 
 # Statut de chaque source, affiché en bas de page : nom -> dict(ok, message, heure)
 STATUT = {}
@@ -228,23 +253,33 @@ def noter(source, ok, message=""):
     STATUT[source] = {"ok": ok, "message": message, "heure": maintenant()}
 
 
-def http_get(url, params=None, ttl_min=0, timeout=25):
-    """GET avec cache disque. Si la source tombe, on ressert la dernière version en cache."""
+def http_get(url, params=None, ttl_min=0, timeout=20, agents=(UA_NAVIGATEUR,), valider=None):
+    """GET avec cache disque et plusieurs identités de client. Si la source tombe, on ressert la dernière
+    version en cache (et on le signale via AGE_CACHE). valider(texte) peut rejeter une page d'erreur."""
     cle = hashlib.md5((url + json.dumps(params or {}, sort_keys=True)).encode()).hexdigest()
     fichier = DOSSIER_CACHE / cle
     if ttl_min and fichier.exists() and time.time() - fichier.stat().st_mtime < ttl_min * 60:
         return fichier.read_text(encoding="utf-8")
-    try:
-        r = SESSION.get(url, params=params, timeout=timeout)
-        r.raise_for_status()
-        texte = r.text
-        DOSSIER_CACHE.mkdir(exist_ok=True)
-        fichier.write_text(texte, encoding="utf-8")
-        return texte
-    except Exception:
-        if fichier.exists():  # donnée périmée mais utilisable
-            return fichier.read_text(encoding="utf-8")
-        raise
+    erreur = None
+    for ua in agents:
+        try:
+            r = SESSION.get(url, params=params, timeout=timeout, headers={"User-Agent": ua})
+            r.raise_for_status()
+            texte = r.text
+            if valider and not valider(texte):
+                raise RuntimeError("réponse inattendue (page d'erreur ou format changé)")
+            DOSSIER_CACHE.mkdir(exist_ok=True)
+            fichier.write_text(texte, encoding="utf-8")
+            return texte
+        except Exception as e:
+            erreur = e
+    if fichier.exists():  # donnée périmée mais utilisable
+        AGE_CACHE[url] = (time.time() - fichier.stat().st_mtime) / 3600
+        return fichier.read_text(encoding="utf-8")
+    raise erreur
+
+
+AGE_CACHE = {}  # url -> âge en heures d'une donnée resservie depuis le cache
 
 
 def normaliser_index(idx):
@@ -414,8 +449,11 @@ def charger_intraday():
     """Bougies 15 min de l'or sur 5 jours (heure de Paris) + bougies quotidiennes pour l'ATR."""
     if yf is None:
         return None
-    ib = extraire_ohlcv(telecharger_yahoo("GC=F", "5d", "15m"), "GC=F")
-    jb = extraire_ohlcv(telecharger_yahoo("GC=F", "6mo", "1d"), "GC=F")
+    ib = extraire_ohlcv(telecharger_yahoo("GC=F", "60d", "15m"), "GC=F")
+    if ib.empty:
+        ib = extraire_ohlcv(telecharger_yahoo("GC=F", "5d", "15m"), "GC=F")
+    jb = extraire_ohlcv(telecharger_yahoo("GC=F", "1y", "1d"), "GC=F")
+    hb = extraire_ohlcv(telecharger_yahoo("GC=F", "730d", "1h"), "GC=F")
     if ib.empty:
         noter("Yahoo intraday", False, "bougies 15 min indisponibles")
         return None
@@ -426,8 +464,13 @@ def charger_intraday():
     ib.index = idx.tz_convert(tz) if tz else idx
     if not jb.empty:
         jb.index = normaliser_index(jb.index)
-    noter("Yahoo intraday", True, f"{len(ib)} bougies 15 min")
-    return {"barres": ib, "jours": jb}
+    if not hb.empty:
+        hidx = pd.to_datetime(hb.index)
+        if hidx.tz is None:
+            hidx = hidx.tz_localize("UTC")
+        hb.index = hidx.tz_convert(tz) if tz else hidx
+    noter("Yahoo intraday", True, f"{len(ib)} bougies 15 min, {len(hb)} bougies horaires")
+    return {"barres": ib, "jours": jb, "heures": hb}
 
 
 CODES_MOIS = "FGHJKMNQUVXZ"
@@ -459,26 +502,26 @@ def charger_courbe_or():
     now = maintenant()
     actifs = [2, 4, 6, 8, 10, 12]
     contrats, a, m = [], now.year, now.month
-    while len(contrats) < 4:
+    while len(contrats) < 5:
         if m > 12:
             m, a = 1, a + 1
-        # on saute l'échéance qui expire dans moins de 35 jours : peu liquide, prix peu fiable
-        if m in actifs and (date(a, m, 27) - now.date()).days > 35:
+        if m in actifs and (date(a, m, 27) - now.date()).days > 3:
             contrats.append((f"GC{CODES_MOIS[m - 1]}{str(a)[2:]}.CMX", a, m))
         m += 1
     close = extraire_close(telecharger_yahoo([c[0] for c in contrats], "5d"), [c[0] for c in contrats])
     out = []
     for t, a, m in contrats:
         if t in close.columns and close[t].dropna().size:
+            ech = date(a, m, 27)
             out.append({"libelle": f"{MOIS_FR[m - 1]} {a}", "prix": float(close[t].dropna().iloc[-1]),
-                        "echeance": date(a, m, 27)})
+                        "echeance": ech, "proche": (ech - now.date()).days <= 35})
     noter("Courbe des futures or", len(out) >= 2, f"{len(out)} échéances" if out else "indisponible")
     return out
 
 
 def charger_fred_serie(code, depuis):
-    txt = http_get("https://fred.stlouisfed.org/graph/fredgraph.csv",
-                   {"id": code, "cosd": depuis}, ttl_min=30)
+    txt = http_get("https://fred.stlouisfed.org/graph/fredgraph.csv", {"id": code, "cosd": depuis}, ttl_min=30,
+                   timeout=15, agents=AGENTS_OFFICIELS, valider=lambda t: t.lstrip().lower().startswith(("date", "observation")))
     df = pd.read_csv(io.StringIO(txt))
     dates = pd.to_datetime(df[df.columns[0]], errors="coerce")
     vals = pd.to_numeric(df[df.columns[-1]], errors="coerce")
@@ -490,7 +533,7 @@ def charger_fred_serie(code, depuis):
 def charger_fred():
     depuis = (datetime.now() - timedelta(days=4 * 365)).strftime("%Y-%m-%d")
     out, erreurs = {}, []
-    with cf.ThreadPoolExecutor(max_workers=6) as ex:
+    with cf.ThreadPoolExecutor(max_workers=4) as ex:
         futs = {ex.submit(charger_fred_serie, code, depuis): cle for cle, (code, _) in FRED.items()}
         for f in cf.as_completed(futs):
             cle = futs[f]
@@ -561,9 +604,12 @@ def charger_cot():
 
 def charger_gld():
     """Avoirs en tonnes du plus gros ETF or (SPDR GLD)."""
-    txt = http_get("https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv", ttl_min=120)
+    txt = http_get("https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv", ttl_min=120,
+                   agents=(UA_NAVIGATEUR, UA_SCRIPT), valider=lambda t: "Tonnes" in t[:5000])
     lignes = txt.splitlines()
-    debut = next(i for i, l in enumerate(lignes) if "Tonnes" in l)
+    debut = next((i for i, l in enumerate(lignes) if "Tonnes" in l), None)
+    if debut is None:
+        raise RuntimeError("fichier GLD : colonne des tonnes introuvable")
     lecteur = csv.reader(lignes[debut:])
     entete = next(lecteur)
     col = next(i for i, h in enumerate(entete) if "Tonnes" in h)
@@ -618,9 +664,9 @@ def charger_calendrier():
     return out
 
 
-def lire_rss(url, params=None, ttl_min=10, n=7):
+def lire_rss(url, params=None, ttl_min=10, n=7, agents=(UA_NAVIGATEUR,)):
     tz = tz_local()
-    txt = http_get(url, params, ttl_min=ttl_min)
+    txt = http_get(url, params, ttl_min=ttl_min, agents=agents, valider=lambda t: "<rss" in t[:2000] or "<?xml" in t[:200])
     racine = ET.fromstring(txt.encode("utf-8"))
     items = []
     for it in racine.findall("./channel/item")[:n]:
@@ -655,30 +701,130 @@ def charger_fed_officiel():
     for cle, url in (("communiques", "https://www.federalreserve.gov/feeds/press_all.xml"),
                      ("discours", "https://www.federalreserve.gov/feeds/speeches.xml")):
         try:
-            out[cle] = lire_rss(url, ttl_min=30, n=6)
+            out[cle] = lire_rss(url, ttl_min=30, n=6, agents=AGENTS_OFFICIELS)
         except Exception:
             out[cle] = []
-    noter("Réserve fédérale (RSS)", any(out.values()))
+    if any(out.values()):
+        noter("Réserve fédérale (RSS)", True)
+        return out
+    # Secours : les mêmes informations via Google News
+    for cle, q in (("communiques", "Federal Reserve statement OR FOMC decision"),
+                   ("discours", "Fed governor OR Fed chair speech")):
+        try:
+            out[cle] = lire_rss("https://news.google.com/rss/search",
+                                {"q": q + " when:7d", "hl": "en-US", "gl": "US", "ceid": "US:en"}, n=6)
+        except Exception:
+            out[cle] = []
+    noter("Réserve fédérale (RSS)", any(out.values()), "via Google News (flux officiel indisponible)"
+          if any(out.values()) else "flux officiel et secours indisponibles")
     return out
 
 
-def charger_spot():
-    """Cours spot XAU/USD (Stooq), pour convertir les niveaux du future COMEX en prix spot."""
-    txt = http_get("https://stooq.com/q/l/?s=xauusd&f=sd2t2ohlc&h&e=csv", ttl_min=5)
-    lignes = [l for l in txt.strip().splitlines() if l.strip()]
-    entete = [h.strip().lower() for h in lignes[0].split(",")]
-    vals = [v.strip() for v in lignes[1].split(",")]
-    prix = float(vals[entete.index("close")])
-    if not 100 < prix < 100000:
-        raise RuntimeError("cours spot incohérent")
-    noter("Stooq (or spot)", True, f"XAU/USD {nb(prix, 2)}")
-    return {"prix": prix}
+def _csv_tresor(annee, typ):
+    url = (f"https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/"
+           f"{annee}/all?type={typ}&field_tdr_date_value={annee}&page&_format=csv")
+    txt = http_get(url, ttl_min=60, agents=AGENTS_OFFICIELS, valider=lambda t: t.lstrip().lower().startswith("date"))
+    df = pd.read_csv(io.StringIO(txt))
+    df.index = normaliser_index(pd.DatetimeIndex(pd.to_datetime(df[df.columns[0]], errors="coerce", format="%m/%d/%Y")))
+    df = df[df.index.notna()]
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df.sort_index()
+
+
+def charger_tresor():
+    """Courbes des taux nominaux et réels publiées par le Trésor américain (secours de la FRED)."""
+    annee = maintenant().year
+    out = {}
+    for typ, champs in (("daily_treasury_yield_curve", {"tr_3m": "3 mo", "tr_2a": "2 yr", "tr_5a": "5 yr",
+                                                         "tr_10a": "10 yr", "tr_30a": "30 yr"}),
+                        ("daily_treasury_real_yield_curve", {"tr_reel5": "5 yr", "tr_reel10": "10 yr",
+                                                              "tr_reel30": "30 yr"})):
+        morceaux = []
+        for an in (annee - 1, annee):
+            try:
+                morceaux.append(_csv_tresor(an, typ))
+            except Exception:
+                pass
+        if not morceaux:
+            continue
+        df = pd.concat(morceaux).sort_index()
+        df = df[~df.index.duplicated(keep="last")]
+        for cle, col in champs.items():
+            if col in df.columns:
+                s = pd.to_numeric(df[col], errors="coerce").dropna()
+                if len(s):
+                    out[cle] = s
+    noter("Trésor américain (courbes)", bool(out), f"{len(out)} maturités" if out else "indisponible")
+    return out
+
+
+def charger_nyfed():
+    """Taux EFFR (avec la fourchette cible de la Fed) et SOFR, API publique de la Fed de New York."""
+    out = {}
+    for cle, url in (("effr", "https://markets.newyorkfed.org/api/rates/unsecured/effr/last/500.json"),
+                     ("sofr", "https://markets.newyorkfed.org/api/rates/secured/sofr/last/500.json")):
+        try:
+            lignes = json.loads(http_get(url, ttl_min=60, agents=AGENTS_OFFICIELS)).get("refRates", [])
+        except Exception:
+            continue
+        dates = normaliser_index(pd.to_datetime([l.get("effectiveDate") for l in lignes], errors="coerce"))
+        out[cle] = pd.Series(pd.to_numeric([l.get("percentRate") for l in lignes], errors="coerce"),
+                             index=dates).dropna().sort_index()
+        if cle == "effr":
+            for champ, nom in (("targetRateFrom", "cible_bas"), ("targetRateTo", "cible_haut")):
+                s = pd.Series(pd.to_numeric([l.get(champ) for l in lignes], errors="coerce"), index=dates)
+                if s.notna().any():
+                    out[nom] = s.dropna().sort_index()
+    noter("Fed de New York (EFFR, SOFR)", bool(out), "" if out else "indisponible")
+    return out
+
+
+def charger_adjudications():
+    """Adjudications de dette américaine : calendrier à venir et résultats récents (TreasuryDirect)."""
+    base = "https://www.treasurydirect.gov/TA_WS/securities/"
+    ok_json = lambda t: t.lstrip().startswith("[")
+    avenir = json.loads(http_get(base + "upcoming?format=json", ttl_min=120, agents=AGENTS_OFFICIELS, valider=ok_json))
+    try:
+        passees = json.loads(http_get(base + "auctioned?format=json&days=400", ttl_min=120,
+                                      agents=AGENTS_OFFICIELS, valider=ok_json))
+    except Exception:
+        passees = []
+    noter("TreasuryDirect (adjudications)", True, f"{len(avenir)} à venir")
+    return {"avenir": avenir, "passees": passees}
+
+
+def completer_taux(data):
+    """Complète les séries FRED manquantes avec le Trésor et la Fed de New York."""
+    f, tr, ny = data["fred"], data.get("tresor") or {}, data.get("nyfed") or {}
+    rempl = []
+    for cle, src in (("reel5", tr.get("tr_reel5")), ("reel10", tr.get("tr_reel10")), ("reel30", tr.get("tr_reel30")),
+                     ("us2", tr.get("tr_2a")), ("effr", ny.get("effr")), ("sofr", ny.get("sofr")),
+                     ("cible_bas", ny.get("cible_bas")), ("cible_haut", ny.get("cible_haut"))):
+        if cle not in f and src is not None and len(src):
+            f[cle] = src
+            rempl.append(cle)
+    for cle, nom, reel in (("be5", "tr_5a", "tr_reel5"), ("be10", "tr_10a", "tr_reel10")):
+        if cle not in f and tr.get(nom) is not None and tr.get(reel) is not None:
+            be = (tr[nom] - tr[reel]).dropna()
+            if len(be):
+                f[cle] = be
+                rempl.append(cle)
+    if "pente2s10s" not in f and tr.get("tr_2a") is not None and tr.get("tr_10a") is not None:
+        f["pente2s10s"] = (tr["tr_10a"] - tr["tr_2a"]).dropna()
+        rempl.append("pente2s10s")
+    if "pente3m10a" not in f and tr.get("tr_3m") is not None and tr.get("tr_10a") is not None:
+        f["pente3m10a"] = (tr["tr_10a"] - tr["tr_3m"]).dropna()
+        rempl.append("pente3m10a")
+    if rempl:
+        st = STATUT.get("FRED (Fed de St. Louis)", {})
+        noter("FRED (Fed de St. Louis)", bool(f), (st.get("message", "") + " ; " if st.get("message") else "") +
+              "complété par le Trésor et la Fed de New York : " + ", ".join(rempl))
 
 
 def collecter():
     """Lance toutes les collectes en parallèle. Une source en panne n'empêche pas les autres."""
     data = {"yahoo": {}, "fred": {}, "cot": None, "gld": None, "cal": [], "news": {}, "zq": {},
-            "intraday": None, "courbe": [], "fed_off": {}, "spot": None}
+            "intraday": None, "courbe": [], "fed_off": {}, "tresor": {}, "nyfed": {}, "adjudic": None}
     taches = {
         "yahoo": (charger_yahoo, "Yahoo Finance"),
         "fred": (charger_fred, "FRED (Fed de St. Louis)"),
@@ -690,7 +836,9 @@ def collecter():
         "intraday": (charger_intraday, "Yahoo intraday"),
         "zq": (charger_zq, "Futures fed funds"),
         "courbe": (charger_courbe_or, "Courbe des futures or"),
-        "spot": (charger_spot, "Stooq (or spot)"),
+        "tresor": (charger_tresor, "Trésor américain (courbes)"),
+        "nyfed": (charger_nyfed, "Fed de New York (EFFR, SOFR)"),
+        "adjudic": (charger_adjudications, "TreasuryDirect (adjudications)"),
     }
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
         futs = {ex.submit(fn): (cle, nom) for cle, (fn, nom) in taches.items()}
@@ -701,7 +849,8 @@ def collecter():
                 if res is not None:
                     data[cle] = res
             except Exception as e:
-                noter(nom, False, str(e)[:160])
+                noter(nom, False, (str(e) or type(e).__name__)[:160])
+    completer_taux(data)
     return data
 
 
@@ -890,6 +1039,10 @@ def seance(intra):
         niveaux += [("Plus haut de la veille", pdh), ("Plus bas de la veille", pdl), ("Clôture de la veille", pdc),
                     ("Pivot", p), ("R1", 2 * p - pdl), ("S1", 2 * p - pdh), ("R2", p + (pdh - pdl)),
                     ("S2", p - (pdh - pdl))]
+        pvv = profil_volume(bv)
+        if pvv:
+            res["profil_veille"] = pvv
+            niveaux += [("POC de la veille", pvv["poc"]), ("VAH de la veille", pvv["vah"]), ("VAL de la veille", pvv["val"])]
 
     if "volume" in bj and float(bj["volume"].sum()) > 0:
         tp = (bj["high"] + bj["low"] + bj["close"]) / 3
@@ -928,6 +1081,8 @@ def seance(intra):
         propres.append({"lib": lib, "niveau": v, "cfd": v + AJUST, "dist": v - prix,
                         "dist_atr": ((v - prix) / res["atr"]) if res["atr"] else None})
     res["niveaux"] = propres
+    lundi = auj - timedelta(days=auj.weekday())
+    res["profil_semaine"] = profil_volume(b[(b.index.date >= lundi)])
     res["barres_graph"] = b[b.index.date >= (veille or auj)]
     return res
 
@@ -990,6 +1145,8 @@ def liquidite(f):
 
 def structure_or(courbe, sofr):
     """Coût de portage entre échéances comparé au SOFR : un portage anormalement bas signale une tension physique."""
+    liquides = [c for c in courbe or [] if not c.get("proche")]
+    courbe = liquides if len(liquides) >= 2 else courbe
     if not courbe or len(courbe) < 2 or sofr is None:
         return None
     f1, lignes = courbe[0], []
@@ -1402,9 +1559,15 @@ def fiche_annonce(e, a):
         nuances.append("Dans le régime actuel, l'or réagit moins aux données US : la réaction risque d'être courte.")
     elif reg.get("nom") == "Taux et dollar aux commandes":
         nuances.append("Dans le régime actuel, l'or suit de près taux et dollar : attends-toi à une réaction franche.")
+    histo = ""
+    ta = type_annonce(titre)
+    r = next((x for x in a.get("reactions") or [] if x["type"] == ta), None)
+    if r:
+        histo = (f"Historique ({r['n']} publications) : amplitude médiane de {nb(r['med_rng'], 0)} $ dans l'heure, "
+                 f"premier mouvement retourné dans {nb(r['retour_pct'], 0)} % des cas.")
     return {"titre": titre, "nom": nom, "type": typ, "pourquoi": pourquoi, "haut": haut, "bas": bas,
             "nuances": nuances, "date": e["date"], "prevision": e["prevision"], "precedent": e["precedent"],
-            "amplitude": a.get("range_jour")}
+            "amplitude": a.get("range_jour"), "histo": histo}
 
 
 def point_30s(a, y):
@@ -1445,6 +1608,700 @@ def expliquer(data, a):
     a["point"] = point_30s(a, data["yahoo"])
     now = maintenant()
     a["fiches"] = [fiche_annonce(e, a) for e in data["cal"] if e["impact"] == "High" and e["date"] >= now][:4]
+
+
+# ---------------------------------------------------------------------------
+# ANALYSE v4 : ÉCART FUTURE-SPOT, TENDANCE, RISQUE, PROFILS, VUE DE MARCHÉ
+# ---------------------------------------------------------------------------
+
+def tz_ny():
+    try:
+        return ZoneInfo("America/New_York") if ZoneInfo else None
+    except Exception:
+        return None
+
+
+def ecart_future_spot(prix_ref, courbe, sofr):
+    """Écart entre le future suivi par Yahoo et l'or spot, estimé par le coût de portage de la courbe."""
+    if not prix_ref or not courbe:
+        return None
+    c = min(courbe, key=lambda x: abs(x["prix"] - prix_ref))
+    if abs(c["prix"] - prix_ref) > prix_ref * 0.005:
+        return None
+    liquides = [x for x in courbe if not x.get("proche")]
+    if len(liquides) >= 2 and (liquides[1]["echeance"] - liquides[0]["echeance"]).days > 0:
+        a, b = liquides[0], liquides[1]
+        taux = (b["prix"] / a["prix"]) ** (365 / (b["echeance"] - a["echeance"]).days) - 1
+    elif sofr:
+        taux = sofr / 100
+    else:
+        return None
+    jours = max((c["echeance"] - maintenant().date()).days, 0)
+    base = prix_ref - prix_ref / (1 + taux) ** (jours / 365)
+    if not 0 <= base < prix_ref * 0.03:
+        return None
+    return {"base": base, "contrat": c["libelle"], "taux": taux * 100, "jours": jours}
+
+
+def _ohlc(df, regle):
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last"}
+    if "volume" in df:
+        agg["volume"] = "sum"
+    return df.resample(regle).agg(agg).dropna(subset=["close"])
+
+
+def _tendance(df, nom):
+    if df is None or len(df) < 60 or not {"high", "low", "close"} <= set(df.columns):
+        return None
+    df = df.tail(400)
+    c = df["close"].astype(float)
+    e20, e50 = c.ewm(span=20, adjust=False).mean(), c.ewm(span=50, adjust=False).mean()
+    pente = float(e20.iloc[-1] - e20.iloc[-6])
+    h, l = df["high"].values[-150:], df["low"].values[-150:]
+    hauts = [h[i] for i in range(2, len(h) - 2) if h[i] == max(h[i - 2:i + 3])][-2:]
+    creux = [l[i] for i in range(2, len(l) - 2) if l[i] == min(l[i - 2:i + 3])][-2:]
+    struct = 0
+    if len(hauts) == 2 and len(creux) == 2:
+        if hauts[1] > hauts[0] and creux[1] > creux[0]:
+            struct = 1
+        elif hauts[1] < hauts[0] and creux[1] < creux[0]:
+            struct = -1
+    px = float(c.iloc[-1])
+    ema = 1 if (px > e20.iloc[-1] > e50.iloc[-1] and pente > 0) else (
+        -1 if (px < e20.iloc[-1] < e50.iloc[-1] and pente < 0) else 0)
+    score = ema + struct
+    label = {2: "Haussière", 1: "Haussière, fragile", 0: "Range", -1: "Baissière, fragile", -2: "Baissière"}[score]
+    det = []
+    det.append("prix au-dessus des moyennes 20 et 50" if ema > 0 else
+               ("prix sous les moyennes 20 et 50" if ema < 0 else "moyennes sans ordre net"))
+    det.append({1: "sommets et creux ascendants", -1: "sommets et creux descendants",
+                0: "structure sans direction"}[struct])
+    return {"nom": nom, "score": score, "sens": (score > 0) - (score < 0), "label": label, "ema20": float(e20.iloc[-1]),
+            "ema50": float(e50.iloc[-1]), "detail": ", ".join(det)}
+
+
+def matrice_tendance(intra):
+    if not intra or intra.get("barres") is None or intra["barres"].empty:
+        return []
+    b, hb, jb = intra["barres"], intra.get("heures"), intra.get("jours")
+    h1 = hb if hb is not None and len(hb) > 100 else _ohlc(b, "1h")
+    out = [_tendance(b, "15 min"), _tendance(h1, "1 heure"), _tendance(_ohlc(h1, "4h"), "4 heures"),
+           _tendance(jb, "Journalier")]
+    return [t for t in out if t]
+
+
+def jauge_risque(a, f):
+    """Appétit pour le risque : actions, volatilité, crédit, yen, cuivre (z-scores sur 5 jours)."""
+    z = {m["cle"]: m["z5"] for m in a["mouvements"] if m["z5"] is not None}
+    comp = []
+    for cle, signe, lib in (("spx", 1, "Actions"), ("vix", -1, "VIX"), ("usdjpy", 1, "Yen (USD/JPY)"),
+                            ("move", -1, "Volatilité obligataire")):
+        if cle in z:
+            comp.append((lib, clamp(z[cle] * signe, -3, 3)))
+    hy = f.get("hy")
+    if hy is not None and len(hy.dropna()) > 70:
+        ch = hy.dropna().diff() * 100
+        sig = float(ch.iloc[-61:-1].std()) or None
+        d5 = variation(hy, 5, "pb")
+        if sig and d5 is not None:
+            comp.append(("Crédit high yield", clamp(-d5 / (sig * math.sqrt(5)), -3, 3)))
+    if not comp:
+        return None
+    score = sum(v for _, v in comp) / len(comp) * 33
+    score = clamp(score, -100, 100)
+    etat = "Risk-on" if score > 25 else ("Risk-off" if score < -25 else "Neutre")
+    lecture = {"Risk-on": "Les investisseurs prennent du risque : la demande refuge pour l'or est faible, il dépend "
+                          "surtout des taux et du dollar.",
+               "Risk-off": "Les investisseurs cherchent la sécurité : soutien pour l'or, sauf si la chute des marchés "
+                           "force des ventes pour lever des liquidités.",
+               "Neutre": "Pas de mouvement de fond sur l'appétit pour le risque."}[etat]
+    return {"score": score, "etat": etat, "lecture": lecture, "composantes": comp}
+
+
+def profil_volatilite(intra, horizon_h=HORIZON_H):
+    """Amplitude moyenne de l'or par tranche de 15 min (heure de Paris) et volatilité attendue sur l'horizon."""
+    if not intra or intra.get("barres") is None or len(intra["barres"]) < 400:
+        return None
+    b = intra["barres"]
+    b = b[b.index.dayofweek < 5]
+    auj = b.index[-1].date()
+    hist = b[b.index.date < auj]
+    slot = lambda idx: idx.hour * 4 + idx.minute // 15
+    rng = (hist["high"] - hist["low"]).groupby(slot(hist.index)).mean()
+    ret = hist["close"].pct_change()
+    var = ret.groupby(slot(hist.index)).var()
+    bj = b[b.index.date == auj]
+    auj_rng = (bj["high"] - bj["low"]).groupby(slot(bj.index)).mean()
+    commun = [s_ for s_ in auj_rng.index if s_ in rng.index]
+    ratio = float(auj_rng[commun].mean() / rng[commun].mean()) if commun and rng[commun].mean() else None
+    now = maintenant()
+    s0 = now.hour * 4 + now.minute // 15
+    prochains = [(s0 + k) % 96 for k in range(1, horizon_h * 4 + 1)]
+    v = sum(float(var.get(k, 0) or 0) for k in prochains)
+    px = float(b["close"].iloc[-1])
+    sigma = px * math.sqrt(v) if v > 0 else None
+    moy_jour = float(rng.mean()) if len(rng) else None
+    return {"moy": rng.reindex(range(96)), "auj": auj_rng.reindex(range(96)), "ratio": ratio, "sigma": sigma,
+            "slot": s0, "moy_slot": float(rng.get(s0, float("nan"))) if len(rng) else None, "moy_jour": moy_jour,
+            "jours": len(set(hist.index.date))}
+
+
+def profil_volume(barres, pas=1.0):
+    """Profil de volume approximatif (volume réparti sur la plage de chaque bougie) : POC et zone de valeur 70 %."""
+    if barres is None or len(barres) < 8 or "volume" not in barres or float(barres["volume"].sum()) <= 0:
+        return None
+    lo, hi = float(barres["low"].min()), float(barres["high"].max())
+    n = int((hi - lo) / pas) + 1
+    if n < 3 or n > 5000:
+        return None
+    vol = np.zeros(n)
+    for h, l, v in zip(barres["high"].values, barres["low"].values, barres["volume"].values):
+        i0, i1 = int((l - lo) / pas), int((h - lo) / pas)
+        vol[i0:i1 + 1] += v / (i1 - i0 + 1)
+    poc = int(vol.argmax())
+    tot, cible = vol.sum(), vol.sum() * 0.7
+    b_, h_, acc = poc, poc, vol[poc]
+    while acc < cible and (b_ > 0 or h_ < n - 1):
+        bas_v = vol[b_ - 1] if b_ > 0 else -1
+        haut_v = vol[h_ + 1] if h_ < n - 1 else -1
+        if haut_v >= bas_v:
+            h_ += 1
+            acc += vol[h_]
+        else:
+            b_ -= 1
+            acc += vol[b_]
+    return {"poc": lo + poc * pas + pas / 2, "vah": lo + h_ * pas + pas, "val": lo + b_ * pas, "total": float(tot)}
+
+
+def niveaux_autour(a, prix):
+    s = a.get("seance")
+    if not s:
+        return [], []
+    niv = [(n["lib"], n["cfd"]) for n in s["niveaux"]]
+    dessus = sorted([n for n in niv if n[1] > prix + 0.05], key=lambda x: x[1])
+    dessous = sorted([n for n in niv if n[1] < prix - 0.05], key=lambda x: -x[1])
+    return dessus, dessous
+
+
+def vue_marche(a, data):
+    """La vue de marché : direction, conviction, scénarios à quelques heures, sentiment et catalyseurs."""
+    s = a.get("seance")
+    b = a["biais"]
+    comp = {}
+    comp["fondamental"] = (b["total"] / b["n"]) if b["n"] else 0.0
+    poids_tf = {"15 min": 0.15, "1 heure": 0.30, "4 heures": 0.35, "Journalier": 0.20}
+    mt = a.get("matrice") or []
+    tot_p = sum(poids_tf[t["nom"]] for t in mt) or 1
+    comp["tendance"] = sum(poids_tf[t["nom"]] * t["score"] / 2 for t in mt) / tot_p if mt else 0.0
+    mom = 0.0
+    if s:
+        if s.get("vwap"):
+            mom += 0.5 if s["prix"] > s["vwap"] else -0.5
+        if s.get("var_jour") is not None:
+            mom += 0.5 * clamp(s["var_jour"] / 0.5, -1, 1)
+    comp["momentum"] = mom
+
+    sent, sent_det = 0.0, []
+    c = a.get("cot")
+    if c:
+        if c["pct3a"] is not None and c["pct3a"] >= SEUILS["cot_haut"]:
+            sent -= 0.4
+            sent_det.append(("Fonds (COT)", f"très chargés à l'achat (percentile {nb(c['pct3a'], 0)})", "down"))
+        elif c["pct3a"] is not None and c["pct3a"] <= SEUILS["cot_bas"]:
+            sent += 0.4
+            sent_det.append(("Fonds (COT)", f"peu exposés (percentile {nb(c['pct3a'], 0)}) : marge pour racheter", "up"))
+        if c.get("lecture"):
+            nom_l = c["lecture"][0]
+            v = {"Nouveaux achats des fonds": 0.3, "Achats sur repli": 0.3, "Rachats de ventes à découvert": 0.15,
+                 "Rachats de ventes malgré la baisse": 0.1, "Liquidation de positions acheteuses": -0.15,
+                 "Allègement malgré la hausse": -0.15, "Nouvelles ventes à découvert": -0.3,
+                 "Vendeurs contre la hausse": -0.3}.get(nom_l, 0)
+            sent += v
+            sent_det.append(("Flux des fonds", nom_l.lower(), "up" if v > 0 else ("down" if v < 0 else "flat")))
+    g = a.get("gld")
+    if g and g.get("d5") is not None:
+        v = 0.4 if g["d5"] >= 3 else (-0.4 if g["d5"] <= -3 else 0)
+        sent += v
+        sent_det.append(("ETF or", f"{nb(g['d5'], 1, True)} t sur 5 jours", "up" if v > 0 else ("down" if v < 0 else "flat")))
+    br = a.get("barometre")
+    if br:
+        fed_net = br["hawk"] - br["dove"]
+        geo_net = br["esc"] - br["desc"]
+        v = -0.1 * clamp(fed_net, -3, 3) + effet_petrole() * 0.07 * clamp(geo_net, -3, 3)
+        sent += v
+        ton = "Fed dure" if fed_net > 0 else ("Fed souple" if fed_net < 0 else "Fed neutre")
+        geo = "escalade" if geo_net > 0 else ("détente" if geo_net < 0 else "géopolitique calme")
+        sent_det.append(("Titres de presse", f"{ton}, {geo}", "up" if v > 0.05 else ("down" if v < -0.05 else "flat")))
+    dc = a.get("decomp")
+    if dc and abs(dc["semaine"]["residu"]) >= 0.5:
+        v = 0.3 if dc["semaine"]["residu"] > 0 else -0.3
+        sent += v
+        sent_det.append(("Demande de fond", ("l'or fait mieux que ce que la macro explique" if v > 0 else
+                                            "l'or fait moins bien que ce que la macro explique") + " sur 5 jours",
+                         "up" if v > 0 else "down"))
+    comp["sentiment"] = clamp(sent, -1, 1)
+
+    score = sum(POIDS_VUE[k] * comp[k] for k in POIDS_VUE)
+    sens = 1 if score >= 0.2 else (-1 if score <= -0.2 else 0)
+    niveaux_conv = ["faible", "moyenne", "forte"]
+    ic = 2 if abs(score) >= 0.55 else (1 if abs(score) >= 0.35 else 0)
+    alertes = []
+    if abs(comp["fondamental"]) >= 0.2 and abs(comp["tendance"]) >= 0.2 and comp["fondamental"] * comp["tendance"] < 0:
+        ic = max(0, ic - 1)
+        alertes.append("fondamental et tendance se contredisent")
+    now = maintenant()
+    proche = [e for e in data.get("cal") or [] if e["impact"] == "High" and now <= e["date"] <= now + timedelta(hours=HORIZON_H)]
+    if proche:
+        ic = max(0, ic - 1)
+        alertes.append(f"{proche[0]['titre']} à {proche[0]['date'].hour:02d}:{proche[0]['date'].minute:02d} "
+                       f"peut tout changer")
+    conviction = niveaux_conv[ic] if sens else "faible"
+    direction = {1: "Haussière", -1: "Baissière", 0: "Neutre"}[sens]
+
+    prix = (s["prix"] + AJUST) if s else ((a["or"]["prix"] or 0) + AJUST)
+    pv = a.get("profil_vol")
+    sigma = pv["sigma"] if pv and pv.get("sigma") else (
+        (s["atr"] * math.sqrt(HORIZON_H / 23)) if s and s.get("atr") else None)
+    fourchette = (prix - sigma, prix + sigma) if sigma else None
+    dessus, dessous = niveaux_autour(a, prix)
+
+    def article(lib):
+        speciaux = {"Pivot": "le pivot", "VWAP du jour": "le VWAP du jour", "Chiffre rond": "le chiffre rond",
+                    "Ouverture du mois": "l'ouverture du mois", "Clôture de la veille": "la clôture de la veille",
+                    "POC de la veille": "le POC de la veille",
+                    "VAH de la veille": "le haut de la zone de valeur de la veille",
+                    "VAL de la veille": "le bas de la zone de valeur de la veille"}
+        if lib in speciaux:
+            return speciaux[lib]
+        if lib[:1] in "RS" and lib[1:].isdigit():
+            return ("la résistance " if lib[0] == "R" else "le support ") + lib
+        return "le " + lib[0].lower() + lib[1:]
+
+    def de(x):
+        return ("du " + x[3:]) if x.startswith("le ") else ("de " + x)
+
+    def lieu(n, prep=""):
+        txt = article(n[0])
+        if prep == "de":
+            txt = de(txt)
+        elif prep:
+            txt = prep + " " + txt
+        return f"{txt} ({nb(n[1], 1)})"
+
+    ecart_min = max((sigma or 0) * 0.3, (s["atr"] * 0.08) if s and s.get("atr") else 0.5)
+
+    def espaces(liste, depart):
+        """Niveaux successifs suffisamment écartés les uns des autres (et du prix)."""
+        out, ref = [], depart
+        for n in liste:
+            if abs(n[1] - ref) >= ecart_min:
+                out.append(n)
+                ref = n[1]
+        return out
+
+    haut_e, bas_e = espaces(dessus, prix), espaces(dessous, prix)
+    inv_bas = bas_e[0] if bas_e else None
+    inv_haut = haut_e[0] if haut_e else None
+    portee = (sigma or 1e9) * 1.4
+    if sens > 0:
+        cibles = [n for n in haut_e if n[1] - prix <= portee][:2] or haut_e[:1]
+        central = (f"Tant que le prix tient au-dessus {lieu(inv_bas, 'de')}, le scénario privilégié est une progression vers "
+                   + " puis vers ".join(lieu(n) for n in cibles) + ".") if inv_bas and cibles else \
+            "Scénario privilégié : poursuite de la hausse, sans niveau technique proche pour la freiner."
+        suivant = bas_e[1] if len(bas_e) > 1 else None
+        alternatif = (f"Sous {lieu(inv_bas)}, la lecture haussière ne tient plus : repli probable vers "
+                      + (lieu(suivant) if suivant else "le bas de la fourchette") + ".") if inv_bas else ""
+        invalidation = inv_bas
+    elif sens < 0:
+        cibles = [n for n in bas_e if prix - n[1] <= portee][:2] or bas_e[:1]
+        central = (f"Tant que le prix reste sous {lieu(inv_haut)}, le scénario privilégié est un repli vers "
+                   + " puis vers ".join(lieu(n) for n in cibles) + ".") if inv_haut and cibles else \
+            "Scénario privilégié : poursuite de la baisse, sans niveau technique proche pour la freiner."
+        suivant = haut_e[1] if len(haut_e) > 1 else None
+        alternatif = (f"Au-dessus {lieu(inv_haut, 'de')}, la lecture baissière ne tient plus : rebond probable vers "
+                      + (lieu(suivant) if suivant else "le haut de la fourchette") + ".") if inv_haut else ""
+        invalidation = inv_haut
+    else:
+        central = ("Pas de direction claire : range probable "
+                   + (f"entre {nb(fourchette[0], 0)} et {nb(fourchette[1], 0)}" if fourchette else "autour du prix actuel")
+                   + ". Les bornes sont des zones de réaction plutôt que de cassure.")
+        alternatif = (f"Une sortie franche au-dessus {lieu(inv_haut, 'de')} ou sous {lieu(inv_bas)} donnerait la direction."
+                      if inv_haut and inv_bas else "")
+        invalidation = None
+
+    pourquoi = []
+    f_txt = {"Haussier": "le fondamental pousse à la hausse", "Baissier": "le fondamental pèse à la baisse",
+             "Neutre": "le fondamental est neutre"}[b["verdict"]]
+    pourquoi.append(f"{f_txt} ({nb(b['total'], 0, True) if b['total'] else '0'} sur {b['n']} signaux)")
+    if mt:
+        hausse = [t["nom"] for t in mt if t["sens"] > 0]
+        baisse = [t["nom"] for t in mt if t["sens"] < 0]
+        morceaux = []
+        if hausse:
+            morceaux.append("tendance haussière en " + ", ".join(h.lower() for h in hausse))
+        if baisse:
+            morceaux.append("tendance baissière en " + ", ".join(h.lower() for h in baisse))
+        pourquoi.append(", ".join(morceaux) if morceaux else "pas de tendance sur les unités de temps suivies")
+    if s and s.get("vwap"):
+        pourquoi.append("prix " + ("au-dessus" if s["prix"] > s["vwap"] else "en dessous") + " du VWAP du jour")
+
+    catal = []
+    for e in data.get("cal") or []:
+        if e["date"] >= now and e["date"] <= now + timedelta(hours=36) and (
+                e["impact"] == "High" or e["date"] <= now + timedelta(hours=HORIZON_H)):
+            catal.append(f"{date_fr(e['date'], True)} : {e['titre']}")
+    fw = a.get("fedwatch")
+    if fw and fw["reunions"] and (fw["reunions"][0]["date"] - now.date()).days <= 7:
+        catal.append(f"Décision de la Fed le {date_fr(fw['reunions'][0]['date'])}")
+    for adj in (a.get("adjudic") or {}).get("avenir", [])[:6]:
+        if now.date() <= adj["date"].date() <= (now + timedelta(days=2)).date():
+            catal.append(f"{date_fr(adj['date'], True)} : adjudication {adj['terme']}")
+
+    return {"score": score, "composantes": comp, "direction": direction, "sens": sens, "conviction": conviction,
+            "alertes": alertes, "prix": prix, "sigma": sigma, "fourchette": fourchette, "central": central,
+            "alternatif": alternatif, "invalidation": invalidation, "pourquoi": pourquoi, "sentiment": sent_det,
+            "catalyseurs": catal[:6]}
+
+
+# ---------------------------------------------------------------------------
+# SUIVI DES PRÉVISIONS ET RÉACTIONS AUX ANNONCES (mémoire entre deux mises à jour)
+# ---------------------------------------------------------------------------
+
+FICHIER_HIST = "historique.json"
+
+
+def charger_historique():
+    f = DOSSIER_CACHE / FICHIER_HIST
+    if f.exists():
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    depot = os.environ.get("GITHUB_REPOSITORY", "")
+    if "/" in depot:  # secours : la copie publiée avec le site
+        proprio, nom = depot.split("/", 1)
+        try:
+            return json.loads(http_get(f"https://{proprio.lower()}.github.io/{nom}/{FICHIER_HIST}", timeout=15))
+        except Exception:
+            pass
+    return {"previsions": [], "annonces": []}
+
+
+def sauver_historique(hist, site_dir=None):
+    hist["previsions"] = hist.get("previsions", [])[-3000:]
+    hist["annonces"] = hist.get("annonces", [])[-400:]
+    txt = json.dumps(hist, ensure_ascii=False)
+    try:
+        DOSSIER_CACHE.mkdir(exist_ok=True)
+        (DOSSIER_CACHE / FICHIER_HIST).write_text(txt, encoding="utf-8")
+        if site_dir is not None:
+            (site_dir / FICHIER_HIST).write_text(txt, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def suivre_previsions(hist, a, data):
+    """Enregistre la vue du moment (au plus une par heure, marché ouvert) et évalue celles arrivées à échéance."""
+    intra = data.get("intraday")
+    vue = a.get("vue")
+    prev = hist.setdefault("previsions", [])
+    if not intra or intra.get("barres") is None or intra["barres"].empty or not vue:
+        return
+    b = intra["barres"]
+    now = maintenant()
+    dernier = b.index[-1]
+    ouvert = (now - dernier.to_pydatetime()).total_seconds() < 3 * 3600
+    if ouvert and vue.get("sigma"):
+        der_ts = datetime.fromisoformat(prev[-1]["ts"]) if prev else None
+        if der_ts is None or (dernier.to_pydatetime() - der_ts).total_seconds() >= 55 * 60:
+            prev.append({"ts": dernier.isoformat(), "prix": float(b["close"].iloc[-1]), "sens": vue["sens"],
+                         "conv": vue["conviction"], "score": round(vue["score"], 3), "sigma": round(vue["sigma"], 2)})
+    for p in prev:
+        if "res" in p:
+            continue
+        t0 = datetime.fromisoformat(p["ts"])
+        cible = t0 + timedelta(hours=HORIZON_H)
+        if cible > dernier.to_pydatetime():
+            continue
+        apres = b[b.index >= pd.Timestamp(cible)]
+        if apres.empty or (apres.index[0].to_pydatetime() - cible).total_seconds() > 2 * 3600:
+            p["res"] = "na"  # échéance tombée pendant une fermeture du marché
+            continue
+        mv = float(apres["close"].iloc[0]) - p["prix"]
+        p["mv"] = round(mv, 2)
+        p["dans"] = abs(mv) <= p["sigma"]
+        p["ok"] = (mv * p["sens"] > 0) if p["sens"] else (abs(mv) <= 0.5 * p["sigma"])
+        p["res"] = "ok" if p["ok"] else "ko"
+
+
+def stats_previsions(hist, jours=30):
+    lim = maintenant() - timedelta(days=jours)
+    ev = [p for p in hist.get("previsions", []) if p.get("res") in ("ok", "ko")
+          and datetime.fromisoformat(p["ts"]) >= lim]
+    dirs = [p for p in ev if p["sens"]]
+    res = {"n": len(ev), "n_dir": len(dirs), "taux_dir": (sum(p["ok"] for p in dirs) / len(dirs) * 100) if dirs else None,
+           "taux_fourchette": (sum(p["dans"] for p in ev) / len(ev) * 100) if ev else None, "par_conv": [],
+           "derniers": [p for p in hist.get("previsions", []) if "res" in p][-12:],
+           "en_attente": sum(1 for p in hist.get("previsions", []) if "res" not in p)}
+    for cv in ("forte", "moyenne", "faible"):
+        sub = [p for p in dirs if p["conv"] == cv]
+        if sub:
+            res["par_conv"].append((cv, len(sub), sum(p["ok"] for p in sub) / len(sub) * 100))
+    neutres = [p for p in ev if not p["sens"]]
+    res["n_neutre"] = len(neutres)
+    res["taux_neutre"] = (sum(p["ok"] for p in neutres) / len(neutres) * 100) if neutres else None
+    return res
+
+
+def type_annonce(titre):
+    for motif, nom in ((r"federal funds rate|fomc statement|rate decision", "Décision de la Fed"),
+                       (r"core pce|pce price", "Inflation PCE"), (r"\bcpi\b", "Inflation CPI"),
+                       (r"non-farm|nfp", "Créations d'emplois (NFP)"), (r"\bppi\b", "Prix à la production"),
+                       (r"ism manufacturing", "ISM manufacturier"), (r"ism services", "ISM services"),
+                       (r"retail sales", "Ventes au détail"), (r"unemployment claims", "Inscriptions au chômage"),
+                       (r"\bgdp\b", "PIB")):
+        if re.search(motif, titre, re.I):
+            return nom
+    return None
+
+
+def memoriser_annonces(hist, cal):
+    connues = {(x["t"], x["type"]) for x in hist.setdefault("annonces", [])}
+    now = maintenant()
+    for e in cal or []:
+        typ = type_annonce(e["titre"])
+        if typ and e["impact"] == "High" and e["date"] < now:
+            cle = (e["date"].isoformat(), typ)
+            if cle not in connues:
+                hist["annonces"].append({"t": e["date"].isoformat(), "type": typ, "reel": e["reel"],
+                                         "prev": e["prevision"]})
+                connues.add(cle)
+
+
+def reactions_annonces(intra, hist):
+    """Mouvement de l'or autour des annonces passées : 15 min et 1 h après, amplitude, retournements."""
+    if not intra:
+        return []
+    b, hb = intra.get("barres"), intra.get("heures")
+    tz, tzn = tz_local(), tz_ny()
+    evts = []
+    for d in FOMC_PASSES:
+        try:
+            t = datetime.combine(date.fromisoformat(d), datetime.min.time()).replace(hour=14, tzinfo=tzn)
+            evts.append(("Décision de la Fed", t.astimezone(tz) if tz else t))
+        except Exception:
+            pass
+    for x in hist.get("annonces", []):
+        try:
+            evts.append((x["type"], datetime.fromisoformat(x["t"])))
+        except Exception:
+            pass
+    lignes = {}
+    for typ, t in evts:
+        ts = pd.Timestamp(t)
+        mesure = None
+        if b is not None and len(b) and b.index[0] <= ts - pd.Timedelta(minutes=15) and b.index[-1] >= ts + pd.Timedelta(minutes=60):
+            av = b[b.index < ts]
+            ap = b[(b.index >= ts) & (b.index < ts + pd.Timedelta(minutes=60))]
+            if len(av) and len(ap) >= 3:
+                pre = float(av["close"].iloc[-1])
+                m15, m60 = float(ap["close"].iloc[0]) - pre, float(ap["close"].iloc[-1]) - pre
+                mesure = (m15, m60, float(ap["high"].max() - ap["low"].min()), "15 min")
+        elif hb is not None and len(hb) and hb.index[0] <= ts - pd.Timedelta(hours=1) and hb.index[-1] >= ts + pd.Timedelta(hours=1):
+            h0 = ts.floor("h")
+            av = hb[hb.index < h0]
+            ap = hb[(hb.index >= h0) & (hb.index < h0 + pd.Timedelta(hours=2))]
+            if len(av) and len(ap) >= 2:
+                pre = float(av["close"].iloc[-1])
+                mesure = (float(ap["close"].iloc[0]) - pre, float(ap["close"].iloc[-1]) - pre,
+                          float(ap["high"].max() - ap["low"].min()), "1 h")
+        if mesure:
+            lignes.setdefault(typ, []).append((t, *mesure))
+    out = []
+    for typ, l in lignes.items():
+        l.sort(key=lambda x: x[0])
+        m60 = [abs(x[2]) for x in l]
+        rng = [x[3] for x in l]
+        retour = [1 for x in l if x[1] * x[2] < 0 and abs(x[1]) > 1]
+        out.append({"type": typ, "n": len(l), "med_mv": float(np.median(m60)), "med_rng": float(np.median(rng)),
+                    "max_rng": float(max(rng)), "retour_pct": len(retour) / len(l) * 100,
+                    "hausse_pct": sum(1 for x in l if x[2] > 0) / len(l) * 100,
+                    "precision": "15 min" if all(x[4] == "15 min" for x in l) else "horaire",
+                    "dernier": l[-1]})
+    out.sort(key=lambda x: -x["n"])
+    return out
+
+
+def analyser_adjudications(adj):
+    if not adj:
+        return None
+    tz, tzn = tz_local(), tz_ny()
+
+    def quand(x):
+        try:
+            d = datetime.fromisoformat(str(x.get("auctionDate", ""))[:19])
+            m = re.match(r"(\d+):(\d+)\s*(AM|PM)", str(x.get("closingTimeCompetitive") or "01:00 PM"))
+            h, mi = (int(m.group(1)) % 12 + (12 if m.group(3) == "PM" else 0), int(m.group(2))) if m else (13, 0)
+            d = d.replace(hour=h, minute=mi, tzinfo=tzn)
+            return d.astimezone(tz) if tz else d
+        except Exception:
+            return None
+
+    garder = lambda x: x.get("securityType") in ("Note", "Bond") and x.get("securityTerm")
+    avenir = []
+    for x in adj.get("avenir") or []:
+        if garder(x) and quand(x):
+            mt = pd.to_numeric(x.get("offeringAmount"), errors="coerce")
+            avenir.append({"date": quand(x), "terme": f"{x['securityType'].replace('Note', 'obligation').replace('Bond', 'obligation')} "
+                                                     f"{x['securityTerm'].replace('-Year', ' ans').replace('-Month', ' mois')}",
+                           "montant": (float(mt) / 1e9) if mt == mt else None,
+                           "reouv": str(x.get("reopening", "")).lower() == "yes"})
+    avenir.sort(key=lambda x: x["date"])
+    passees = []
+    hist = [x for x in adj.get("passees") or [] if garder(x) and pd.notna(pd.to_numeric(x.get("bidToCoverRatio"), errors="coerce"))]
+    hist.sort(key=lambda x: str(x.get("auctionDate")))
+    for i, x in enumerate(hist):
+        d = quand(x)
+        if not d or d < maintenant() - timedelta(days=45):
+            continue
+        terme = x["securityTerm"]
+        prec = [pd.to_numeric(y.get("bidToCoverRatio"), errors="coerce") for y in hist[:i] if y["securityTerm"] == terme][-6:]
+        btc = float(pd.to_numeric(x.get("bidToCoverRatio"), errors="coerce"))
+        moy = float(np.nanmean(prec)) if prec else None
+        ind = pd.to_numeric(x.get("indirectBidderAccepted"), errors="coerce")
+        tot = pd.to_numeric(x.get("totalAccepted") or x.get("offeringAmount"), errors="coerce")
+        passees.append({"date": d, "terme": terme.replace("-Year", " ans").replace("-Month", " mois"),
+                        "rendement": pd.to_numeric(x.get("highYield"), errors="coerce"), "btc": btc, "btc_moy": moy,
+                        "indirect": float(ind / tot * 100) if ind == ind and tot and tot == tot else None,
+                        "qualite": (None if moy is None else ("faible" if btc < moy - 0.1 else
+                                                              ("solide" if btc > moy + 0.1 else "normale")))})
+    passees.sort(key=lambda x: x["date"], reverse=True)
+    return {"avenir": avenir[:8], "passees": passees[:8]}
+
+
+# ---------------------------------------------------------------------------
+# NOTES DE DESK : PLAN DE SÉANCE, BILAN, SEMAINE À VENIR
+# ---------------------------------------------------------------------------
+
+def _hm(d):
+    return f"{d.hour:02d}:{d.minute:02d}"
+
+
+def plan_du_jour(a, data):
+    now = maintenant()
+    v, s, pv = a.get("vue") or {}, a.get("seance"), a.get("profil_vol")
+    jour = now.date() if now.weekday() < 5 else (now + timedelta(days=7 - now.weekday())).date()
+    titre = "Plan de séance du jour" if jour == now.date() else f"Plan de séance pour {date_fr(jour)}"
+    contexte = (f"Vue {v.get('direction', 'n.d.').lower()} à {HORIZON_H} heures (conviction {v.get('conviction', 'n.d.')}), "
+                f"biais fondamental {a['biais']['verdict'].lower()}, régime : {a['regime']['nom'].lower()}.")
+    prix = v.get("prix") or 0
+    dessus, dessous = niveaux_autour(a, prix)
+    seances = []
+    for nom, h0, h1 in SEANCES:
+        act = "n.d."
+        if pv and pv.get("moy") is not None and pv.get("moy_jour"):
+            m = pv["moy"].iloc[int(h0 * 4):int(h1 * 4)].mean()
+            act = "calme" if m < 0.7 * pv["moy_jour"] else ("très active" if m > 1.3 * pv["moy_jour"] else "normale")
+        evts = [e for e in data.get("cal") or [] if e["date"].date() == jour and h0 <= e["date"].hour + e["date"].minute / 60 < h1]
+        seances.append({"nom": nom, "debut": h0, "fin": h1, "activite": act,
+                        "annonces": [(e["date"], e["titre"], e["impact"]) for e in evts]})
+    regles = []
+    if v.get("sens") and v.get("conviction") in ("moyenne", "forte"):
+        regles.append(f"Sens privilégié : {'achats' if v['sens'] > 0 else 'ventes'}. Un trade dans l'autre sens demande "
+                      f"un signal technique très propre et une cible courte.")
+    elif v.get("sens"):
+        regles.append(f"Léger avantage aux {'achats' if v['sens'] > 0 else 'ventes'} (conviction faible) : pas de quoi "
+                      f"forcer un sens, laisse ta structure technique décider.")
+    elif v:
+        regles.append("Pas de sens privilégié : travaille les extrémités du range avec des cibles courtes.")
+    for e in [e for e in data.get("cal") or [] if e["date"].date() == jour and e["impact"] == "High"]:
+        av, ap = max(FENETRE_NEWS[0], PROP["news_minutes"]), max(FENETRE_NEWS[1], PROP["news_minutes"])
+        regles.append(f"{e['titre']} à {_hm(e['date'])} : aucune position de {_hm(e['date'] - timedelta(minutes=av))} "
+                      f"à {_hm(e['date'] + timedelta(minutes=ap))}.")
+    if pv and pv.get("ratio") and pv["ratio"] > 1.3:
+        regles.append(f"Séance {nb(pv['ratio'], 1)} fois plus agitée que d'habitude : élargis les stops ou réduis la taille.")
+    if a.get("risque") and a["risque"]["etat"] == "Risk-off":
+        regles.append("Marché en mode risk-off : mouvements brusques possibles dans les deux sens.")
+    if s and (s.get("pct_atr") or 0) >= 80:
+        regles.append(f"{nb(s['pct_atr'], 0)} % de l'amplitude habituelle déjà faite : les extensions deviennent moins probables.")
+    regles.append(f"Règle prop firm : garde chaque position au moins {PROP['duree_min_minutes']} min.")
+    return {"titre": titre, "contexte": contexte, "dessus": dessus[:4], "dessous": dessous[:4], "seances": seances,
+            "regles": regles}
+
+
+def bilan_seance(a, data):
+    intra = data.get("intraday")
+    if not intra or intra.get("barres") is None or intra["barres"].empty:
+        return None
+    b = intra["barres"]
+    now = maintenant()
+    jours = sorted(set(b.index.date))
+    fini = now.weekday() >= 5 or now.hour >= 23 or jours[-1] < now.date()
+    j = jours[-1] if fini else (jours[-2] if len(jours) > 1 else jours[-1])
+    bj = b[b.index.date == j]
+    o, c, h, l = float(bj["open"].iloc[0]), float(bj["close"].iloc[-1]), float(bj["high"].max()), float(bj["low"].min())
+    atr = (a.get("seance") or {}).get("atr")
+    phr = [f"L'or a {'gagné' if c >= o else 'perdu'} {nb(abs(c / o - 1) * 100, 2)} % "
+           f"({nb(c - o, 1, True)} $), entre {nb(l + AJUST, 1)} et {nb(h + AJUST, 1)}"
+           + (f", soit {nb((h - l) / atr * 100, 0)} % de l'amplitude habituelle." if atr else ".")]
+    annonces = []
+    for e in data.get("cal") or []:
+        if e["date"].date() == j and e["reel"]:
+            ap = b[(b.index >= pd.Timestamp(e["date"])) & (b.index < pd.Timestamp(e["date"]) + pd.Timedelta(minutes=60))]
+            av = b[b.index < pd.Timestamp(e["date"])]
+            mv = (float(ap["close"].iloc[-1]) - float(av["close"].iloc[-1])) if len(ap) and len(av) else None
+            annonces.append({"titre": e["titre"], "reel": e["reel"], "prev": e["prevision"], "mv": mv,
+                             "heure": _hm(e["date"])})
+    prev = [p for p in (data.get("hist") or {}).get("previsions", [])
+            if p.get("res") in ("ok", "ko") and datetime.fromisoformat(p["ts"]).date() == j]
+    if prev:
+        phr.append(f"Prévisions du terminal ce jour-là : {sum(p['ok'] for p in prev)} justes sur {len(prev)}.")
+    return {"date": j, "phrases": phr, "annonces": annonces}
+
+
+def semaine_a_venir(a, data):
+    now = maintenant()
+    jours = {}
+    for e in data.get("cal") or []:
+        if e["impact"] == "High" and e["date"] >= now:
+            jours.setdefault(e["date"].date(), []).append((e["date"], e["titre"]))
+    fw = a.get("fedwatch")
+    if fw and fw["reunions"] and (fw["reunions"][0]["date"] - now.date()).days <= 14:
+        d = fw["reunions"][0]["date"]
+        jours.setdefault(d, []).append((datetime.combine(d, datetime.min.time()).replace(hour=20, tzinfo=tz_local()),
+                                        f"Décision de la Fed (hausse pricée à {nb(fw['reunions'][0]['p_hausse'] * 100, 0)} %)"))
+    for adj in (a.get("adjudic") or {}).get("avenir", []):
+        if adj["date"] <= now + timedelta(days=10):
+            jours.setdefault(adj["date"].date(), []).append((adj["date"], f"Adjudication {adj['terme']}"
+                                                                          + (f" ({nb(adj['montant'], 0)} Md$)" if adj['montant'] else "")))
+    s = a.get("seance") or {}
+    return {"jours": sorted(jours.items())[:10], "haut_sem": s.get("haut_sem"), "bas_sem": s.get("bas_sem")}
+
+
+def contexte_controle(a):
+    """Données transmises au contrôle Achat / Vente (calculé dans la page, avec le prix que tu saisis)."""
+    s, v, pv = a.get("seance") or {}, a.get("vue") or {}, a.get("profil_vol") or {}
+
+    def propre(x):
+        if isinstance(x, float):
+            return None if (math.isnan(x) or math.isinf(x)) else round(x, 3)
+        if isinstance(x, dict):
+            return {k: propre(val) for k, val in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [propre(val) for val in x]
+        return x
+
+    moy = pv.get("moy")
+    return propre({
+        "prix": v.get("prix"), "maj": s["maj"].isoformat() if s.get("maj") is not None else None,
+        "niveaux": [{"lib": n["lib"], "v": n["cfd"]} for n in s.get("niveaux", [])],
+        "atr": s.get("atr"), "pct_atr": s.get("pct_atr"), "vwap": (s["vwap"] + AJUST) if s.get("vwap") else None,
+        "biais": {"verdict": a["biais"]["verdict"], "total": a["biais"]["total"], "n": a["biais"]["n"]},
+        "vue": {"sens": v.get("sens", 0), "direction": v.get("direction"), "conv": v.get("conviction")},
+        "tend": {t["nom"]: t["sens"] for t in a.get("matrice") or []},
+        "slots": [float(x) if x == x else None for x in moy.tolist()] if moy is not None else None,
+        "moy_jour": pv.get("moy_jour"), "prop": PROP, "zone": list(FENETRE_NEWS),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1492,11 +2349,10 @@ def analyser(data):
     a["decomp"] = decomposition(y)
 
     global AJUST
-    base = None
     ref = derniere(data["intraday"]["barres"]["close"]) if data.get("intraday") else a["or"]["prix"]
-    spot = (data.get("spot") or {}).get("prix")
-    if ref and spot and abs(ref - spot) < ref * 0.03:
-        base = ref - spot
+    ecart = ecart_future_spot(ref, data.get("courbe"), derniere(f.get("sofr")))
+    a["ecart"] = ecart
+    base = ecart["base"] if ecart else None
     a["base"] = base
     AJUST = (-base if base is not None else 0.0) + DECALAGE_CFD
     a["seance"] = seance(data.get("intraday"))
@@ -1546,7 +2402,18 @@ def analyser(data):
     a["barometre"] = barometre(data.get("news"))
     a["surprise"] = surprise_macro(data.get("cal"))
     a["annonce"], a["zone_news"], a["minutes_annonce"] = prochaine_annonce(data.get("cal") or [])
+    a["matrice"] = matrice_tendance(data.get("intraday"))
+    a["risque"] = jauge_risque(a, f)
+    a["profil_vol"] = profil_volatilite(data.get("intraday"))
+    a["adjudic"] = analyser_adjudications(data.get("adjudic"))
+    hist = data.setdefault("hist", {"previsions": [], "annonces": []})
+    memoriser_annonces(hist, data.get("cal"))
+    a["reactions"] = reactions_annonces(data.get("intraday"), hist)
     expliquer(data, a)
+    a["vue"] = vue_marche(a, data)
+    a["plan"] = plan_du_jour(a, data)
+    a["bilan"] = bilan_seance(a, data)
+    a["semaine"] = semaine_a_venir(a, data)
     return a
 
 
@@ -1844,6 +2711,8 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var
 .fraicheur{display:flex;flex-direction:column;line-height:1.15}
 .fraicheur b{font:500 14px var(--cond)}
 .fraicheur.perime b{color:var(--amber)}
+.prochaine b{font-variant-numeric:tabular-nums;color:var(--brass)}
+body.zone-news .prochaine b{color:var(--amber)}
 .actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
 .alerte{display:none;padding:8px 14px;font:600 15px var(--cond);letter-spacing:.03em;text-align:center}
 .alerte.on{display:block}
@@ -1872,16 +2741,51 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var
 #p-graph{flex:1}
 .minis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;height:118px;flex:none}
 .minis .panel{overflow:hidden}
-#p-cmd{flex:1.35} #p-evt{flex:1}
-#p-niv{flex:1.15} #p-mot{flex:.85} #p-news{flex:1.1}
+#p-vue{flex:1.25} #p-ctl{flex:1}
+#p-evt{flex:.95} #p-niv{flex:1} #p-news{flex:1}
 .tv{position:relative;width:100%;height:100%}
 .tv::before{content:attr(data-lib);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   color:var(--mute);font:500 12.5px var(--cond);text-align:center;padding:8px}
 .tv iframe{position:relative;z-index:1}
+.tv.charge::before,.tv:has(iframe)::before{display:none}
 .flash{animation:flash 1.6s ease-out}
 @keyframes flash{0%{box-shadow:inset 0 0 0 2px var(--brass)}100%{box-shadow:inset 0 0 0 2px transparent}}
 
 .cmd-top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.vue-top{display:flex;align-items:center;gap:16px;margin-bottom:8px}
+.vue-score{flex:1}
+.tfs{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px}
+.tf{font:500 12.5px var(--cond);padding:2px 8px;border-radius:10px;background:var(--band);border:1px solid var(--line)}
+.fourch{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:6px 0;border-top:1px solid rgba(34,50,66,.7);
+  border-bottom:1px solid rgba(34,50,66,.7);margin-bottom:6px}
+.fourch b{font:600 18px var(--cond);font-variant-numeric:tabular-nums;color:var(--brass)}
+.fourch small{color:var(--mute);font-family:var(--cond)}
+.scen{margin:6px 0;font-size:13.5px}
+.scen b{font-family:var(--cond);font-weight:600}
+.scen.alt{color:var(--mute)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{font-size:12px;padding:2px 8px;border-radius:10px;background:var(--band);border:1px solid var(--line);color:var(--mute)}
+.chip.up{border-color:rgba(79,184,132,.5);color:var(--up)} .chip.down{border-color:rgba(224,96,90,.5);color:var(--down)}
+.ctl-boutons{display:flex;gap:8px;margin-bottom:8px}
+.ctl-boutons button{flex:1;font:600 16px var(--cond);padding:8px}
+.ctl-boutons .achat.on{background:var(--up);border-color:var(--up);color:#06110b}
+.ctl-boutons .vente.on{background:var(--down);border-color:var(--down);color:#1a0706}
+.ctl-champs{display:flex;gap:8px;margin-bottom:8px}
+.ctl-champs label{flex:1;display:flex;flex-direction:column;font:600 10.5px var(--cond);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--mute);gap:3px}
+.ctl-champs input{font:500 15px var(--cond);color:var(--ink);background:var(--band);border:1px solid var(--line);
+  border-radius:3px;padding:5px 8px;width:100%;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0}
+.ctl-champs input:focus{outline:2px solid var(--brass);outline-offset:0}
+.verdict-ctl{font:700 24px/1.1 var(--cond);letter-spacing:.03em;padding:6px 10px;border-radius:3px;display:block;margin-bottom:6px}
+.verdict-ctl small{font:500 14px var(--cond);letter-spacing:0;margin-left:6px;opacity:.85}
+.verdict-ctl.oui{background:rgba(79,184,132,.18);color:var(--up)}
+.verdict-ctl.att{background:rgba(240,169,75,.16);color:var(--amber)}
+.verdict-ctl.non{background:rgba(224,96,90,.18);color:var(--down)}
+.raisons{list-style:none;margin:0;padding:0;font-size:13px}
+.raisons li{display:grid;grid-template-columns:18px 1fr;gap:6px;padding:3px 0;border-bottom:1px solid rgba(34,50,66,.7)}
+.raisons .i-ok{color:var(--up)} .raisons .i-att{color:var(--amber)} .raisons .i-non{color:var(--down)} .raisons .i-info{color:var(--mute)}
+.taille{margin-top:6px;padding:6px 8px;background:var(--band);border-radius:3px;font-size:13px}
+.taille b{font:600 16px var(--cond);color:var(--brass)}
 .verdict-s{font:700 30px/1 var(--cond);letter-spacing:.02em}
 .balance-s{flex:1;position:relative;display:flex;height:20px;background:var(--band);border-radius:2px}
 .balance-s .moitie{flex:1;display:flex;gap:2px;padding:3px}
@@ -2065,6 +2969,8 @@ footer .ok::before{background:var(--up)} footer .ko::before{background:var(--dow
   .col-g,.col-c{height:auto;min-height:0}
   #p-graph{height:430px;flex:none} .minis{grid-template-columns:repeat(2,minmax(0,1fr));height:236px}
   .col-d{display:flex;height:auto} #p-news{height:420px;flex:none}
+  .col-c .panel,.col-d .panel{flex:none}
+  .prochaine{display:none}
   .pb{overflow:visible}
   .onglets{position:static}
   .horloges div:nth-child(n+3){display:none}
@@ -2160,7 +3066,8 @@ function rendreCarte(){
     '<div class="pp"><div><span>Prévision</span>' + esc(e.fcst || 'n.d.') + '</div><div><span>Précédent</span>' +
     esc(e.prev || 'n.d.') + '</div>' + (e.reel ? '<div><span>Réel</span><b>' + esc(e.reel) + '</b></div>' : '') + '</div>' +
     (e.haut ? '<div class="sc"><span class="num">▲</span><span>' + esc(e.haut) + '</span><span class="num">▼</span><span>' +
-      esc(e.bas) + '</span></div>' : '') + (e.nuance ? '<p class="nu">' + esc(e.nuance) + '</p>' : '');
+      esc(e.bas) + '</span></div>' : '') + (e.nuance ? '<p class="nu">' + esc(e.nuance) + '</p>' : '') +
+    (e.histo ? '<p class="pied">' + esc(e.histo) + '</p>' : '');
   c.setAttribute('data-cle', e.t + e.titre);
   if (s){
     var suite = EV.filter(function(x){ return x.ts > e.ts; }).slice(0, 4);
@@ -2177,8 +3084,11 @@ function tick(){
   var now = Date.now(), e = prochain(now), b = $('#alerte');
   var carte = $('#evt-carte');
   if (carte && (e ? e.t + e.titre : '') !== carte.getAttribute('data-cle')) rendreCarte();
-  if (!e){ if (b) b.className = 'alerte'; document.body.classList.remove('zone-news'); document.title = titreBase; return; }
+  var cb = $('#cpt-barre');
+  if (!e){ if (b) b.className = 'alerte'; if (cb) cb.textContent = 'aucune'; document.body.classList.remove('zone-news');
+           document.title = titreBase; return; }
   var d = e.ts - now, cpt = $('#cpt');
+  if (cb) cb.textContent = e.nom + ' · ' + (d > 0 ? (d > 86400000 ? Math.floor(d / 86400000) + ' j ' + hms(d % 86400000) : hms(d)) : 'publiée');
   if (cpt) cpt.textContent = d > 0 ? (d > 86400000 ? Math.floor(d / 86400000) + ' j ' + hms(d % 86400000) : hms(d))
                                    : 'publiée il y a ' + Math.floor(-d / 60000) + ' min';
   var etat = '', txt = '';
@@ -2252,14 +3162,14 @@ if (bNotif) bNotif.addEventListener('click', function(){
 });
 
 /* Onglets (touches 1 à 9) */
-var onglet = lire('onglet-or', 'lecture');
+var onglet = lire('onglet-or', 'plan');
 function activerOnglet(id){
   var trouve = false;
   document.querySelectorAll('.onglets [role=tab]').forEach(function(b){
     var on = b.getAttribute('data-tab') === id; if (on) trouve = true;
     b.setAttribute('aria-selected', on ? 'true' : 'false'); b.classList.toggle('actif', on);
   });
-  if (!trouve){ id = 'lecture'; if (arguments.length < 2) return activerOnglet(id, true); }
+  if (!trouve){ id = 'plan'; if (arguments.length < 2) return activerOnglet(id, true); }
   document.querySelectorAll('.tabpanel').forEach(function(p){ p.hidden = p.id !== 'tab-' + id; });
   onglet = id; ecrire('onglet-or', id);
 }
@@ -2268,7 +3178,7 @@ document.querySelectorAll('.onglets [role=tab]').forEach(function(b){
 });
 document.addEventListener('keydown', function(ev){
   var t = ev.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || ev.metaKey || ev.ctrlKey || ev.altKey) return;
-  var n = parseInt(ev.key, 10), tabs = document.querySelectorAll('.onglets [role=tab]');
+  var n = ev.key === '0' ? 10 : parseInt(ev.key, 10), tabs = document.querySelectorAll('.onglets [role=tab]');
   if (n >= 1 && n <= tabs.length){ activerOnglet(tabs[n - 1].getAttribute('data-tab'));
     document.getElementById('analyse').scrollIntoView({block:'start'}); }
 });
@@ -2305,13 +3215,110 @@ function rafraichir(){
         c.innerHTML = z.innerHTML; c.classList.remove('flash'); void c.offsetWidth; c.classList.add('flash');
       });
       cur.setAttribute('data-maj', nm.getAttribute('data-maj'));
-      titreBase = doc.title; chargerEv(); rendreCarte(); activerOnglet(onglet); tick();
+      titreBase = doc.title; chargerEv(); chargerCtx(); prixParDefaut(); rendreCarte(); activerOnglet(onglet); tick(); controler();
     })
     .catch(function(){});
 }
 if (CFG.site){ setInterval(rafraichir, CFG.refresh * 60000); }
 
-chargerEv(); activerOnglet(onglet); rendreCarte(); majBoutons(); tick(); setInterval(tick, 1000);
+/* Contrôle avant l'entrée : OUI / ATTENTION / NON selon le contexte et tes règles */
+var CTX = {};
+function chargerCtx(){ try { CTX = JSON.parse(document.getElementById('ctx').textContent) || {}; } catch(e){ CTX = {}; } }
+function nbFr(x, d){ return (x == null || isNaN(x)) ? 'n.d.' : Number(x).toLocaleString('fr-FR', {minimumFractionDigits:d, maximumFractionDigits:d}); }
+function lirePrix(id){ var v = ($(id) || {}).value; if (!v) return null; v = parseFloat(String(v).replace(/[ \u00a0\u202f]/g, '').replace(',', '.')); return isNaN(v) ? null : v; }
+var sensCtl = 0;
+function controler(){
+  var res = $('#ctl-res'); if (!res || !sensCtl) return;
+  var sens = sensCtl, prix = lirePrix('#ctl-prix') || CTX.prix, stop = lirePrix('#ctl-stop');
+  var R = [], P = CTX.prop || {}, mot = sens > 0 ? 'achat' : 'vente';
+  function ajout(niv, txt){ R.push([niv, txt]); }
+  if (!prix){ res.innerHTML = '<p class="pied">Prix indisponible : tape le prix de ta plateforme.</p>'; return; }
+  if (!ouvert()) ajout('non', 'Marché de l’or fermé.');
+  var now = Date.now(), e = prochain(now);
+  if (e){
+    var m = (e.ts - now) / 60000, av = Math.max(CTX.zone ? CTX.zone[0] : 15, P.news_minutes || 0), ap = Math.max(CTX.zone ? CTX.zone[1] : 10, P.news_minutes || 0);
+    if (m <= av && m >= -ap) ajout('non', 'Zone news : ' + e.nom + (m >= 0 ? ' dans ' + Math.ceil(m) + ' min.' : ' publiée il y a ' + Math.floor(-m) + ' min.'));
+    else if (m > 0 && m <= 60) ajout('att', e.nom + ' dans ' + Math.round(m) + ' min : ton trade doit être fini avant, sinon attends.');
+  }
+  var b = CTX.biais || {}, bs = b.verdict === 'Haussier' ? 1 : (b.verdict === 'Baissier' ? -1 : 0);
+  var bsc = (b.total > 0 ? '+' : '') + (b.total || 0) + ' sur ' + (b.n || 0);
+  if (bs === sens) ajout('ok', 'Aligné avec le biais fondamental (' + b.verdict.toLowerCase() + ', ' + bsc + ').');
+  else if (bs === -sens) ajout('att', 'Contre le biais fondamental (' + b.verdict.toLowerCase() + ', ' + bsc + ').');
+  else ajout('info', 'Biais fondamental neutre : pas de soutien de fond.');
+  var v = CTX.vue || {};
+  if (v.sens === sens) ajout('ok', 'Dans le sens de la vue de marché (' + (v.direction || '').toLowerCase() + ', conviction ' + v.conv + ').');
+  else if (v.sens === -sens) ajout(v.conv === 'faible' ? 'info' : 'att', 'Contre la vue de marché (' + (v.direction || '').toLowerCase() + ', conviction ' + v.conv + ').');
+  else ajout('info', 'Vue de marché neutre : range probable, vise des cibles courtes.');
+  var t = CTX.tend || {}, t1 = t['1 heure'] || 0, t4 = t['4 heures'] || 0;
+  if (t1 === sens && t4 === sens) ajout('ok', 'Tendance 1 h et 4 h dans ton sens.');
+  else if (t1 === -sens && t4 === -sens) ajout('att', 'Contre la tendance 1 h et 4 h.');
+  else ajout('info', 'Tendances 1 h et 4 h partagées.');
+  if (bs === -sens && v.sens === -sens && t4 === -sens) ajout('non', 'Tout est contre ce trade : fondamental, vue de marché et tendance 4 h.');
+  if (CTX.pct_atr != null){
+    if (CTX.pct_atr >= 100) ajout('att', 'Amplitude du jour déjà dépassée (' + nbFr(CTX.pct_atr, 0) + ' % de l’ATR) : extension moins probable.');
+    else if (CTX.pct_atr >= 80) ajout('info', nbFr(CTX.pct_atr, 0) + ' % de l’amplitude habituelle déjà faite.');
+  }
+  if (CTX.vwap){
+    if ((prix - CTX.vwap) * sens > 0) ajout('ok', 'Prix ' + (sens > 0 ? 'au-dessus' : 'sous') + ' du VWAP : le flux du jour va dans ton sens.');
+    else ajout('info', 'Prix ' + (sens > 0 ? 'sous' : 'au-dessus') + ' du VWAP : ' + mot + ' contre le flux du jour.');
+  }
+  var opp = null, prot = null;
+  (CTX.niveaux || []).forEach(function(n){
+    var d = (n.v - prix) * sens;
+    if (d > 0.05 && (!opp || d < opp.d)) opp = {lib:n.lib, v:n.v, d:d};
+    if (d < -0.05 && (!prot || -d < prot.d)) prot = {lib:n.lib, v:n.v, d:-d};
+  });
+  var atr = CTX.atr || null;
+  if (opp){
+    if (atr && opp.d < 0.25 * atr) ajout('att', opp.lib + ' à ' + nbFr(opp.d, 1) + ' $ seulement : peu de place avant une zone de réaction.');
+    else ajout('ok', nbFr(opp.d, 1) + ' $ de marge jusqu’à ' + opp.lib + ' (' + nbFr(opp.v, 1) + ').');
+  }
+  if (CTX.slots && CTX.moy_jour){
+    var hp = parties('Europe/Paris').h, sl = CTX.slots[Math.floor(hp * 4) % 96];
+    if (sl != null && sl < 0.6 * CTX.moy_jour) ajout('info', 'Créneau habituellement calme : faible amplitude à attendre.');
+  }
+  var taille = '';
+  if (stop){
+    var r = (prix - stop) * sens;
+    if (r <= 0) ajout('non', 'Stop du mauvais côté du prix.');
+    else {
+      if (atr && r < 0.15 * atr) ajout('att', 'Stop très serré (' + nbFr(r, 1) + ' $, moins de 15 % de l’ATR) : risque d’être sorti par le bruit.');
+      if (opp && opp.d / r < 1) ajout('att', 'Rapport gain / risque de ' + nbFr(opp.d / r, 2) + ' jusqu’au prochain niveau.');
+      else if (opp) ajout('ok', 'Rapport gain / risque de ' + nbFr(opp.d / r, 2) + ' jusqu’au prochain niveau.');
+      var risque = (P.capital || 0) * (P.risque_pct || 0) / 100, lots = risque / (r * (P.once_par_lot || 100));
+      var perteMax = (P.capital || 0) * (P.perte_max_jour_pct || 0) / 100;
+      taille = '<div class="taille">Taille pour risquer <b>' + nbFr(risque, 0) + ' $</b> (' + nbFr(P.risque_pct, 1) + ' % du compte) : <b>' +
+        nbFr(Math.floor(lots * 100) / 100, 2) + ' lot</b>. Perte max du jour autorisée : ' + nbFr(perteMax, 0) + ' $.</div>';
+    }
+  } else if (prot){
+    ajout('info', 'Niveau de protection le plus proche : ' + prot.lib + ' (' + nbFr(prot.v, 1) + ', à ' + nbFr(prot.d, 1) + ' $). Indique ton stop pour la taille.');
+  }
+  if (P.duree_min_minutes) ajout('info', 'Règle prop firm : garde la position au moins ' + P.duree_min_minutes + ' min.');
+  var nNon = R.filter(function(x){ return x[0] === 'non'; }).length, nAtt = R.filter(function(x){ return x[0] === 'att'; }).length;
+  var verdict = nNon ? ['non', 'NON'] : (nAtt ? ['att', 'ATTENTION'] : ['oui', 'OUI']);
+  var ordre = {non:0, att:1, ok:2, info:3}, ic = {ok:'✓', att:'!', non:'✕', info:'·'};
+  R.sort(function(x, y){ return ordre[x[0]] - ordre[y[0]]; });
+  var age = CTX.maj ? Math.round((Date.now() - new Date(CTX.maj).getTime()) / 60000) : null;
+  res.innerHTML = '<div class="verdict-ctl ' + verdict[0] + '">' + verdict[1] + ' <small>' + mot + ' à ' + nbFr(prix, 2) + '</small></div>' +
+    '<ul class="raisons">' + R.map(function(x){ return '<li><span class="i-' + x[0] + '">' + ic[x[0]] + '</span><span>' + esc(x[1]) + '</span></li>'; }).join('') + '</ul>' +
+    taille + '<p class="pied">Niveaux issus du relevé ' + (age != null ? 'd’il y a ' + age + ' min' : 'le plus récent') +
+    '. Outil de contrôle de tes règles : la décision reste la tienne.</p>';
+}
+document.querySelectorAll('.ctl-boutons button').forEach(function(bt){
+  bt.addEventListener('click', function(){
+    sensCtl = parseInt(bt.getAttribute('data-sens'), 10);
+    document.querySelectorAll('.ctl-boutons button').forEach(function(x){ x.classList.toggle('on', x === bt); });
+    controler();
+  });
+});
+['#ctl-prix', '#ctl-stop'].forEach(function(id){ var el = $(id); if (el) el.addEventListener('input', controler); });
+function prixParDefaut(){ var el = $('#ctl-prix'); if (el && CTX.prix) el.placeholder = nbFr(CTX.prix, 2) + ' (dernier relevé)'; }
+
+/* Masque le texte d'attente des flux en direct une fois chargés */
+function fluxCharges(){ document.querySelectorAll('.tv').forEach(function(el){ if (el.querySelector('iframe')) el.classList.add('charge'); }); }
+setInterval(fluxCharges, 1500);
+
+chargerEv(); chargerCtx(); prixParDefaut(); activerOnglet(onglet); rendreCarte(); majBoutons(); tick(); setInterval(tick, 1000);
 })();
 """
 
@@ -2425,7 +3432,7 @@ def bloc_seance(a):
     if not s:
         return ('<section id="seance"><h2>Séance du jour</h2><p class="vide">Données intraday indisponibles.</p>'
                 '</section>')
-    dec = (f" ; prix convertis en XAU/USD spot, écart future-spot de {nb(-AJUST + AJUST, 1)} $ retiré"
+    dec = (f" ; prix convertis en XAU/USD spot, écart future-spot de {nb(DECALAGE_CFD - AJUST, 1)} $ retiré"
            if AJUST != DECALAGE_CFD else " ; prix en future COMEX")
     ici_fait, lignes = False, ""
     for n in s["niveaux"]:
@@ -2800,10 +3807,41 @@ METHODE = [
         "prix moyen pondéré par les volumes du jour ; ATR 14 jours, l'amplitude quotidienne moyenne. Ces niveaux sont en "
         "future COMEX, puis convertis en XAU/USD spot grâce à l'écart future-spot mesuré à chaque mise à jour. "
         "DECALAGE_CFD permet d'ajouter le petit écart propre à ton broker."]),
+    ("La vue de marché (où va le marché)", [
+        "Un score de -1 à +1 combine quatre composantes : le biais fondamental (35 %), la tendance sur 15 min, 1 h, 4 h et "
+        "journalier (35 %), le momentum du jour, c'est-à-dire la position face au VWAP et la variation depuis l'ouverture "
+        "(15 %), et le sentiment : positionnement et flux des fonds, ETF, ton des titres, demande de fond (15 %).",
+        "Au-dessus de +0,2 la vue est haussière, sous -0,2 baissière, entre les deux neutre. La conviction baisse d'un cran "
+        "quand le fondamental et la tendance se contredisent, ou quand une annonce forte tombe dans l'horizon de 4 heures.",
+        "La fourchette probable vient de la volatilité réellement observée à ces heures-là sur 60 jours : le prix y reste "
+        "environ deux fois sur trois. Les scénarios s'appuient sur les niveaux de séance les plus proches."]),
+    ("Le contrôle avant l'entrée", [
+        "Il vérifie ton idée de trade contre le contexte : zone news et règle de ta prop firm (NON), trade contre tout "
+        "(NON), contre le biais, la vue ou la tendance (ATTENTION), amplitude du jour déjà faite, niveau opposé trop proche, "
+        "stop trop serré ou rapport gain / risque inférieur à 1 (ATTENTION). Avec un stop, il calcule la taille de position "
+        "à partir des règles PROP définies en haut du fichier terminal_or.py.",
+        "Ce n'est pas un signal d'entrée : il te dit si les conditions sont réunies, ta stratégie décide du reste."]),
+    ("La matrice de tendance", [
+        "Pour chaque unité de temps : +1 si le prix est au-dessus de la moyenne 20, elle-même au-dessus de la 50 et en "
+        "hausse ; +1 si les deux derniers sommets et creux montent. Le total va de -2 (baissière) à +2 (haussière)."]),
+    ("Les profils de volatilité et de volume", [
+        "Le profil de volatilité donne l'amplitude moyenne de chaque tranche de 15 minutes sur 60 jours : il montre quand "
+        "l'or bouge assez pour scalper. Le profil de volume répartit le volume de chaque bougie sur sa plage de prix pour "
+        "trouver le POC (prix le plus échangé) et la zone de valeur (70 % des échanges)."]),
+    ("L'écart future-spot", [
+        "Les données de marché gratuites viennent du future COMEX, qui cote au-dessus de l'or spot du coût de portage "
+        "jusqu'à son échéance. Le terminal estime cet écart avec la courbe des futures et le retire de tous les niveaux, "
+        "pour qu'ils correspondent à ton XAU/USD. DECALAGE_CFD corrige le petit écart restant propre à ton broker."]),
+    ("Le suivi des prévisions", [
+        "Chaque heure de marché, la vue est enregistrée ; 4 heures plus tard, le terminal vérifie la direction et si le prix "
+        "est resté dans la fourchette. L'historique est conservé entre deux mises à jour et publié avec le site "
+        "(historique.json). Une vue qui ne dépasse pas nettement 50 % après 50 prévisions ne doit pas guider tes trades."]),
     ("Les limites", [
-        "Yahoo a environ 10 min de décalage, la FRED un jour ouvré, le COT reflète le mardi précédent. Les achats des "
-        "banques centrales et la prime de Shanghai ne sont pas disponibles gratuitement. Ce terminal est un outil "
-        "d'aide à la lecture, pas un conseil en investissement."]),
+        "Les cotations TradingView sont en direct ; les analyses reposent sur Yahoo (environ 10 min de décalage) et sont "
+        "recalculées toutes les 15 min. La FRED et le Trésor ont un jour ouvré de décalage, le COT reflète le mardi "
+        "précédent. Les options sur l'or, le flux d'ordres du COMEX, les achats des banques centrales et la prime de "
+        "Shanghai ne sont pas disponibles gratuitement.",
+        "Ce terminal est un outil d'aide à la lecture et au contrôle de tes règles, pas un conseil en investissement."]),
 ]
 
 
@@ -2820,6 +3858,287 @@ def bloc_sources():
             f'Cotations, graphiques, actualités et calendrier en direct : '
             f'<a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a>. '
             f'Outil d\'aide à la lecture, pas un conseil en investissement.</footer>')
+
+
+# ---------------------------------------------------------------------------
+# PAGE HTML : BLOCS v4 (vue de marché, contrôle, plan, technique, suivi)
+# ---------------------------------------------------------------------------
+
+def barre_score(v):
+    """Barre centrée de -1 à +1."""
+    if v is None:
+        return '<div class="cbar"></div>'
+    larg = min(abs(v), 1) * 50
+    return (f'<div class="cbar"><b class="{"up" if v > 0 else "down"}" '
+            f'style="left:{50 - larg if v < 0 else 50:.1f}%;width:{larg:.1f}%"></b></div>')
+
+
+def ligne_fiabilite(a):
+    st = a.get("suivi")
+    if not st:
+        return ""
+    if st["n_dir"] < 20:
+        return (f'<p class="pied">Fiabilité : {st["n_dir"]} prévision(s) directionnelle(s) évaluée(s) sur 30 jours. '
+                f'Pas encore assez pour s\'y fier (il en faut au moins 20).</p>')
+    return (f'<p class="pied">Fiabilité mesurée sur 30 jours : <b>{nb(st["taux_dir"], 0)} %</b> de bonnes directions '
+            f'sur {st["n_dir"]} prévisions. <a href="#analyse" data-aller="suivi">Détail</a></p>')
+
+
+def bloc_vue_cockpit(a):
+    v = a.get("vue")
+    if not v:
+        return '<p class="vide">Vue de marché indisponible.</p>'
+    ton = {1: "up", -1: "down"}.get(v["sens"], "flat")
+    mt = "".join(f'<span class="tf {({1: "up", -1: "down"}).get(t["sens"], "flat")}" title="{esc(t["detail"])}">'
+                 f'{esc(t["nom"].replace(" heures", " h").replace("1 heure", "1 h").replace("Journalier", "Jour"))} '
+                 f'{({1: "▲", -1: "▼"}).get(t["sens"], "●")}</span>' for t in a.get("matrice") or [])
+    fourch = (f'<div class="fourch"><span class="k">Fourchette probable à {HORIZON_H} h (68 %)</span>'
+              f'<b>{nb(v["fourchette"][0], 0)} – {nb(v["fourchette"][1], 0)}</b><small>±{nb(v["sigma"], 0)} $</small></div>'
+              ) if v["fourchette"] else ""
+    alert = "".join(f'<p class="nu">Conviction réduite : {esc(x)}.</p>' for x in v["alertes"])
+    sent = "".join(f'<span class="chip {t}">{esc(l)} : {esc(d)}</span>' for l, d, t in v["sentiment"][:4])
+    return (f'<div class="vue-top"><div><div class="k">Direction à {HORIZON_H} heures</div>'
+            f'<div class="verdict-s {ton}">{v["direction"].upper()}</div>'
+            f'<div class="k">conviction {esc(v["conviction"])}</div></div>'
+            f'<div class="vue-score">{barre_score(v["score"])}<div class="pctleg"><span>Baissier</span>'
+            f'<span>score {nb(v["score"], 2, True)}</span><span>Haussier</span></div></div></div>'
+            f'<div class="tfs">{mt}</div>{fourch}'
+            f'<p class="scen"><b>Scénario central.</b> {esc(v["central"])}</p>'
+            + (f'<p class="scen alt"><b>Scénario alternatif.</b> {esc(v["alternatif"])}</p>' if v["alternatif"] else "")
+            + f'{alert}<div class="chips">{sent}</div>{ligne_fiabilite(a)}'
+            f'<p class="pied"><a href="#analyse" data-aller="plan">Plan de séance, sentiment et catalyseurs</a></p>')
+
+
+def bloc_controle():
+    return ('<div class="ctl"><div class="ctl-boutons"><button type="button" class="achat" data-sens="1">Achat</button>'
+            '<button type="button" class="vente" data-sens="-1">Vente</button></div>'
+            '<div class="ctl-champs"><label>Prix d\'entrée <input id="ctl-prix" inputmode="decimal" autocomplete="off"></label>'
+            '<label>Stop <input id="ctl-stop" inputmode="decimal" placeholder="optionnel" autocomplete="off"></label></div>'
+            '<div id="ctl-res"><p class="pied">Choisis Achat ou Vente. Tape le prix de ta plateforme pour des distances '
+            'exactes ; le stop sert à calculer la taille de position.</p></div></div>')
+
+
+def bloc_biais_detail(a):
+    b = a["biais"]
+    lignes = ""
+    for s in b["signaux"]:
+        ic = {1: '<span class="ic up">▲</span>', -1: '<span class="ic down">▼</span>'}.get(s["score"], '<span class="ic flat">●</span>')
+        lignes += f'<tr><td>{ic} {esc(s["nom"])}</td><td class="num">{esc(s["valeur"])}</td><td class="flat">{esc(s["lecture"])}</td></tr>'
+    div = f'<div class="note">{esc(a["divergence"])}</div>' if a.get("divergence") else ""
+    coul = {"Haussier": "up", "Baissier": "down"}.get(b["verdict"], "flat")
+    return (f'<section><h2>Biais fondamental : <span class="{coul}">{b["verdict"]}</span> '
+            f'<small class="flat">score {nb(b["total"], 0, True) if b["total"] else "0"} sur {b["n"]} signaux</small></h2>'
+            f'<div class="defile"><table class="cal">{lignes}</table></div>{div}</section>')
+
+
+def bloc_risque(a):
+    r = a.get("risque")
+    if not r:
+        return ""
+    comp = "".join(f'<span>{esc(l)}</span>{barre_score(v / 3)}<span class="v">{nb(v, 1, True)} σ</span>'
+                   for l, v in r["composantes"])
+    ton = {"Risk-on": "down", "Risk-off": "up"}.get(r["etat"], "flat")
+    return (f'<section><h2>Appétit pour le risque : <span class="{ton}">{r["etat"]}</span> '
+            f'<small class="flat">score {nb(r["score"], 0, True)} sur 100</small></h2>'
+            f'<p class="pourquoi">{esc(r["lecture"])} Chaque barre montre le mouvement sur 5 jours, orienté pour que '
+            f'la droite signifie « prise de risque ».</p><div class="decomp" style="max-width:640px">{comp}</div></section>')
+
+
+def graphique_profil_vol(pv, cal, w=1000, h=190):
+    if not pv or pv.get("moy") is None:
+        return '<p class="vide">Profil de volatilité indisponible.</p>'
+    moy, auj = pv["moy"], pv["auj"]
+    mx = max([x for x in list(moy.values) + list(auj.values) if x == x] or [1])
+    pl, pr, pt, pb = 8, 8, 12, 24
+    W, H = w - pl - pr, h - pt - pb
+    bw = W / 96
+    out = []
+    for i in range(96):
+        x = pl + i * bw
+        m = moy.iloc[i]
+        if m == m:
+            hh = m / mx * H
+            out.append(f'<rect x="{x + 0.5:.1f}" y="{pt + H - hh:.1f}" width="{bw - 1:.1f}" height="{hh:.1f}" fill="var(--band2)"/>')
+        t = auj.iloc[i]
+        if t == t:
+            hh = t / mx * H
+            out.append(f'<rect x="{x + bw * 0.25:.1f}" y="{pt + H - hh:.1f}" width="{bw * 0.5:.1f}" height="{hh:.1f}" fill="var(--brass)"/>')
+        if i % 8 == 0:
+            out.append(f'<text x="{x:.1f}" y="{h - 6}" class="ax">{i // 4} h</text>')
+    now = maintenant()
+    for e in cal or []:
+        if e["impact"] == "High" and e["date"].date() == now.date():
+            i = e["date"].hour * 4 + e["date"].minute // 15
+            out.append(f'<line x1="{pl + (i + 0.5) * bw:.1f}" x2="{pl + (i + 0.5) * bw:.1f}" y1="{pt}" y2="{pt + H}" '
+                       f'stroke="var(--down)" stroke-dasharray="3 3"/>')
+    xs = pl + (pv["slot"] + 0.5) * bw
+    out.append(f'<line x1="{xs:.1f}" x2="{xs:.1f}" y1="{pt}" y2="{pt + H}" stroke="var(--ink)" stroke-width="1.5"/>')
+    return (f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="Amplitude moyenne par tranche de 15 minutes">'
+            + "".join(out) + '</svg>')
+
+
+def bloc_technique(a, data):
+    mt = a.get("matrice") or []
+    lignes = "".join(f'<tr><td>{esc(t["nom"])}</td><td class="{({1: "up", -1: "down"}).get(t["sens"], "flat")}">'
+                     f'<b>{esc(t["label"])}</b></td><td class="num">{nb(t["ema20"] + AJUST, 1)}</td>'
+                     f'<td class="num">{nb(t["ema50"] + AJUST, 1)}</td><td class="flat">{esc(t["detail"])}</td></tr>' for t in mt)
+    mat = (f'<section><h2>Matrice de tendance</h2><p class="pourquoi">Tendance de l\'or sur quatre unités de temps : '
+           f'position face aux moyennes mobiles exponentielles 20 et 50, et structure des derniers sommets et creux. '
+           f'Un scalp dans le sens des unités 1 h et 4 h a le vent dans le dos.</p><div class="defile"><table class="cal">'
+           f'<tr><th>Unité</th><th>Tendance</th><th>EMA 20</th><th>EMA 50</th><th>Détail</th></tr>{lignes}</table></div>'
+           f'</section>') if mt else ""
+    pv = a.get("profil_vol")
+    pv_txt = ""
+    if pv:
+        pv_txt = (f'<p class="sous">Sur {pv["jours"]} séances : amplitude moyenne de {nb(pv["moy_jour"], 1)} $ par tranche de '
+                  f'15 min. ' + (f'Aujourd\'hui, l\'or bouge <b>{nb(pv["ratio"], 2)} fois</b> la normale à ces heures-là. '
+                                 if pv.get("ratio") else "")
+                  + (f'Volatilité attendue sur les {HORIZON_H} prochaines heures : ±{nb(pv["sigma"], 0)} $ (un écart-type).'
+                     if pv.get("sigma") else "") + '</p>')
+    vol = (f'<section><h2>Profil de volatilité par heure (Paris)</h2><p class="pourquoi">Barres grises : amplitude moyenne '
+           f'de chaque tranche de 15 minutes. Barres dorées : aujourd\'hui. Trait blanc : maintenant. Pointillés rouges : '
+           f'annonces fortes du jour. Scalpe quand le marché bouge, pas quand il dort.</p>'
+           f'{graphique_profil_vol(pv, data.get("cal"))}{pv_txt}</section>')
+    s = a.get("seance") or {}
+    pvs = []
+    for lib, p in (("Veille", s.get("profil_veille")), ("Semaine en cours", s.get("profil_semaine"))):
+        if p:
+            pvs.append(f'<span>{lib}</span><span>POC {nb(p["poc"] + AJUST, 1)} · zone de valeur {nb(p["val"] + AJUST, 1)} – '
+                       f'{nb(p["vah"] + AJUST, 1)}</span>')
+    prof = (f'<section><h2>Profil de volume</h2><p class="pourquoi">Le POC est le prix où il s\'est le plus échangé ; la zone '
+            f'de valeur contient 70 % des échanges. Le prix a tendance à revenir vers le POC, et les bornes de la zone de '
+            f'valeur servent souvent de support ou de résistance. Calcul approché à partir des bougies 15 min du future.</p>'
+            f'<div class="kv" style="max-width:640px">{"".join(pvs)}</div></section>') if pvs else ""
+    return mat + vol + prof + bloc_seance(a)
+
+
+def bloc_reactions(a):
+    r = a.get("reactions") or []
+    if not r:
+        return ('<section><h2>Réactions passées de l\'or aux annonces</h2><p class="vide">Pas encore assez de données : '
+                'la base se remplit à chaque annonce publiée.</p></section>')
+    lignes = "".join(f'<tr><td>{esc(x["type"])}</td><td class="num">{x["n"]}</td><td class="num">{nb(x["med_rng"], 0)} $</td>'
+                     f'<td class="num">{nb(x["max_rng"], 0)} $</td><td class="num">{nb(x["med_mv"], 0)} $</td>'
+                     f'<td class="num">{nb(x["retour_pct"], 0)} %</td><td class="num">{nb(x["hausse_pct"], 0)} %</td>'
+                     f'<td class="flat">{esc(x["precision"])}</td></tr>' for x in r)
+    return (f'<section><h2>Réactions passées de l\'or aux annonces</h2><p class="pourquoi">Ce que l\'or a fait dans '
+            f'l\'heure qui a suivi chaque type d\'annonce. Amplitude = écart entre le plus haut et le plus bas ; retournement = '
+            f'le mouvement à 1 h va dans le sens inverse des 15 premières minutes. Sert à placer tes stops et à décider si tu '
+            f'trades après l\'annonce ou si tu attends.</p><div class="defile"><table class="cal"><tr><th>Annonce</th>'
+            f'<th>Nombre</th><th>Amplitude médiane</th><th>Amplitude max</th><th>Mouvement médian à 1 h</th>'
+            f'<th>Retournements</th><th>Hausse</th><th>Précision</th></tr>{lignes}</table></div></section>')
+
+
+def bloc_adjudications(a):
+    ad = a.get("adjudic")
+    if not ad:
+        return ""
+    av = "".join(f'<tr><td class="num">{date_fr(x["date"], True)}</td><td>{esc(x["terme"])}{" (réouverture)" if x["reouv"] else ""}</td>'
+                 f'<td class="num">{nb(x["montant"], 0) + " Md$" if x["montant"] else "n.d."}</td></tr>' for x in ad["avenir"])
+    ps = "".join(f'<tr><td class="num">{date_fr(x["date"])}</td><td>{esc(x["terme"])}</td>'
+                 f'<td class="num">{nb(x["rendement"], 3)} %</td><td class="num">{nb(x["btc"], 2)}</td>'
+                 f'<td class="num">{nb(x["btc_moy"], 2)}</td><td class="num">{nb(x["indirect"], 0)} %</td>'
+                 f'<td class="{({"faible": "down", "solide": "up"}).get(x["qualite"], "flat")}">{esc(x["qualite"] or "n.d.")}</td></tr>'
+                 for x in ad["passees"])
+    return (f'<section><h2>Adjudications du Trésor américain</h2><p class="pourquoi">Quand la demande pour la dette américaine '
+            f'faiblit (ratio de couverture sous sa moyenne, peu d\'acheteurs étrangers), les taux longs montent : pression '
+            f'sur l\'or à court terme, mais soutien au thème de défiance envers les actifs US. Résultats publiés vers 19 h '
+            f'(heure de Paris).</p><div class="grille2"><div><h3 style="margin-top:0">À venir</h3><table class="cal">'
+            f'<tr><th>Date</th><th>Titre</th><th>Montant</th></tr>{av or "<tr><td>Aucune</td></tr>"}</table></div>'
+            f'<div><h3 style="margin-top:0">Résultats récents</h3><div class="defile"><table class="cal"><tr><th>Date</th>'
+            f'<th>Titre</th><th>Rendement</th><th>Couverture</th><th>Moyenne</th><th>Étrangers</th><th>Demande</th></tr>'
+            f'{ps or "<tr><td>Aucun</td></tr>"}</table></div></div></div></section>')
+
+
+def bloc_plan(a):
+    v, p, bi, se = a.get("vue"), a.get("plan"), a.get("bilan"), a.get("semaine")
+    out = ""
+    if v:
+        comp = "".join(f'<span>{lib}</span>{barre_score(v["composantes"][k])}<span class="v">{nb(v["composantes"][k], 2, True)}</span>'
+                       for k, lib in (("fondamental", "Fondamental"), ("tendance", "Tendance"), ("momentum", "Momentum du jour"),
+                                      ("sentiment", "Sentiment")))
+        sent = "".join(f'<tr><td>{esc(l)}</td><td class="{t}">{esc(d)}</td></tr>' for l, d, t in v["sentiment"])
+        cat = "".join(f"<li>{esc(c)}</li>" for c in v["catalyseurs"]) or '<li class="vide">Aucun catalyseur majeur identifié.</li>'
+        out += (f'<section><h2>Où va le marché : <span class="{({1: "up", -1: "down"}).get(v["sens"], "flat")}">'
+                f'{v["direction"]}</span> <small class="flat">conviction {esc(v["conviction"])}, horizon {HORIZON_H} h</small></h2>'
+                f'<div class="grille2"><div><p class="scen"><b>Scénario central.</b> {esc(v["central"])}</p>'
+                + (f'<p class="scen alt"><b>Scénario alternatif.</b> {esc(v["alternatif"])}</p>' if v["alternatif"] else "")
+                + (f'<p class="sous">Fourchette probable à {HORIZON_H} h : <b>{nb(v["fourchette"][0], 0)} – {nb(v["fourchette"][1], 0)}</b> '
+                   f'(deux chances sur trois), à partir du dernier relevé à {nb(v["prix"], 1)}.</p>' if v["fourchette"] else "")
+                + f'<h3>Pourquoi</h3><p class="bloc-txt">{esc("Parce que " + " ; ".join(v["pourquoi"]) + ".")}</p>'
+                + "".join(f'<p class="nu">Conviction réduite : {esc(x)}.</p>' for x in v["alertes"])
+                + f'</div><div><h3 style="margin-top:0">Composantes du score</h3><div class="decomp">{comp}</div>'
+                f'<h3>Sentiment</h3><table class="cal">{sent or "<tr><td>n.d.</td></tr>"}</table>'
+                f'<h3>Catalyseurs à venir</h3><ul class="suite">{cat}</ul></div></div>'
+                f'<p class="legende" style="margin-top:12px">Score = {nb(POIDS_VUE["fondamental"] * 100, 0)} % fondamental, '
+                f'{nb(POIDS_VUE["tendance"] * 100, 0)} % tendance multi-unités, {nb(POIDS_VUE["momentum"] * 100, 0)} % momentum '
+                f'du jour, {nb(POIDS_VUE["sentiment"] * 100, 0)} % sentiment. C\'est une lecture probabiliste, pas une '
+                f'certitude : l\'onglet Suivi mesure son taux de réussite réel.</p>{ligne_fiabilite(a)}</section>')
+    if p:
+        ses, aucune = "", '<li class="vide">Pas d’annonce</li>'
+        for x in p["seances"]:
+            ann = "".join(f'<li><span class="num">{_hm(d)}</span> {esc(t)}{" (fort impact)" if imp == "High" else ""}</li>'
+                          for d, t, imp in x["annonces"])
+            ses += (f'<div class="fiche"><div class="t">{esc(x["nom"])} <small class="flat">{int(x["debut"]):02d}:'
+                    f'{int(x["debut"] % 1 * 60):02d} – {int(x["fin"]):02d}:{int(x["fin"] % 1 * 60):02d}</small></div>'
+                    f'<p>Activité habituelle : <b>{esc(x["activite"])}</b></p><ul class="suite">'
+                    f'{ann or aucune}</ul></div>')
+        niv_h = "".join(f'<li><span class="num">{nb(v_, 1)}</span> {esc(l)}</li>' for l, v_ in p["dessus"])
+        niv_b = "".join(f'<li><span class="num">{nb(v_, 1)}</span> {esc(l)}</li>' for l, v_ in p["dessous"])
+        regles = "".join(f"<li>{esc(r)}</li>" for r in p["regles"])
+        out += (f'<section><h2>{esc(p["titre"])}</h2><p class="bloc-txt">{esc(p["contexte"])}</p>'
+                f'<div class="grille3"><div><h3 style="margin-top:0">Au-dessus</h3><ul class="suite">{niv_h}</ul>'
+                f'<h3>En dessous</h3><ul class="suite">{niv_b}</ul></div>'
+                f'<div style="grid-column:span 2"><h3 style="margin-top:0">Règles du jour</h3><ol class="routine">{regles}</ol></div></div>'
+                f'<h3>Agenda par séance</h3><div class="fiches">{ses}</div></section>')
+    if bi:
+        ann = "".join(f'<tr><td class="num">{esc(x["heure"])}</td><td>{esc(x["titre"])}</td><td class="num">{esc(x["reel"])}</td>'
+                      f'<td class="num">{esc(x["prev"])}</td><td class="num {classe_effet(x["mv"], 1)}">'
+                      f'{nb(x["mv"], 1, True) + " $" if x["mv"] is not None else "n.d."}</td></tr>' for x in bi["annonces"])
+        out += (f'<section><h2>Bilan de la séance du {date_fr(bi["date"])}</h2>'
+                + "".join(f'<p class="bloc-txt">{esc(t)}</p>' for t in bi["phrases"])
+                + (f'<table class="cal"><tr><th>Heure</th><th>Annonce</th><th>Réel</th><th>Prévu</th><th>Or sur 1 h</th></tr>'
+                   f'{ann}</table>' if ann else "") + '</section>')
+    if se:
+        jours = ""
+        for d, evs in se["jours"]:
+            li = "".join(f'<li><span class="num">{_hm(t)}</span> {esc(x)}</li>' for t, x in sorted(evs, key=lambda z: z[0]))
+            jours += f'<div class="fiche"><div class="t">{date_fr(d)}</div><ul class="suite">{li}</ul></div>'
+        out += (f'<section><h2>Les jours à venir</h2><p class="pourquoi">Annonces à fort impact, décision de la Fed et '
+                f'adjudications du Trésor. Plus haut et plus bas de la semaine : {nb((se["haut_sem"] or 0) + AJUST, 1) if se["haut_sem"] else "n.d."} '
+                f'et {nb((se["bas_sem"] or 0) + AJUST, 1) if se["bas_sem"] else "n.d."}.</p>'
+                f'<div class="fiches">{jours or "<p class=vide>Rien de majeur au calendrier.</p>"}</div></section>')
+    return out
+
+
+def bloc_suivi(a):
+    st = a.get("suivi")
+    if not st:
+        return ""
+    conv = "".join(f'<span>Conviction {esc(c)}</span><span>{nb(t, 0)} % sur {n}</span>' for c, n, t in st["par_conv"])
+    lignes = ""
+    for p in reversed(st["derniers"]):
+        if p.get("res") not in ("ok", "ko"):
+            continue
+        d = datetime.fromisoformat(p["ts"])
+        lignes += (f'<tr><td class="num">{date_fr(d, True)}</td><td>{({1: "Haussière", -1: "Baissière"}).get(p["sens"], "Neutre")} '
+                   f'<span class="flat">({esc(p["conv"])})</span></td><td class="num">{nb(p["prix"] + AJUST, 1)}</td>'
+                   f'<td class="num {classe_effet(p.get("mv"), 1)}">{nb(p.get("mv"), 1, True)} $</td>'
+                   f'<td class="{"up" if p["ok"] else "down"}">{"juste" if p["ok"] else "fausse"}</td></tr>')
+    taux = (f'<b>{nb(st["taux_dir"], 0)} %</b> de bonnes directions sur {st["n_dir"]} prévisions haussières ou baissières'
+            if st["taux_dir"] is not None else "pas encore de prévision directionnelle évaluée")
+    return (f'<section><h2>Suivi des prévisions du terminal (30 jours)</h2><p class="pourquoi">Chaque heure de marché, le '
+            f'terminal enregistre sa vue ; {HORIZON_H} heures plus tard, il vérifie si le prix est allé dans le sens annoncé. '
+            f'Au-dessus de 55 % sur un échantillon d\'au moins 50 prévisions, la vue apporte une information utile ; autour de '
+            f'50 %, elle ne vaut pas mieux que le hasard.</p>'
+            f'<div class="grille2"><div><p class="bloc-txt">{taux}.</p><div class="kv">{conv}'
+            f'<span>Vues neutres justes (marché resté calme)</span><span>{nb(st["taux_neutre"], 0) + " %" if st["taux_neutre"] is not None else "n.d."} '
+            f'sur {st["n_neutre"]}</span><span>Prix resté dans la fourchette annoncée</span>'
+            f'<span>{nb(st["taux_fourchette"], 0) + " %" if st["taux_fourchette"] is not None else "n.d."} (68 % attendu)</span>'
+            f'<span>Prévisions en attente d\'évaluation</span><span>{st["en_attente"]}</span></div></div>'
+            f'<div><h3 style="margin-top:0">Dernières prévisions évaluées</h3><table class="cal"><tr><th>Émise</th><th>Vue</th>'
+            f'<th>Prix</th><th>Après {HORIZON_H} h</th><th>Résultat</th></tr>{lignes or "<tr><td>Aucune</td></tr>"}</table></div>'
+            f'</div></section>')
 
 
 def tv(script, config, lib, style=""):
@@ -2841,6 +4160,7 @@ def bloc_barre(a):
             f'<span id="txt-marche">...</span></b></div>'
             f'<div class="fraicheur"><span class="k">Analyses</span><b id="maj" data-maj="{maj.isoformat()}">'
             f'{date_fr(maj, True)}</b></div>'
+            f'<div class="fraicheur prochaine"><span class="k">Prochaine annonce forte</span><b id="cpt-barre">...</b></div>'
             f'<div class="actions"><button type="button" id="btn-son">Son : coupé</button>'
             f'<button type="button" id="btn-notif" class="opt">Activer les alertes bureau</button>'
             f'<button type="button" id="copier" class="or">Copier le brief</button></div></div>'
@@ -2858,6 +4178,13 @@ def bloc_strip(a, y, f):
     b = a["biais"]
     it.append(("Biais", f'<span class="{ {"Haussier": "up", "Baissier": "down"}.get(b["verdict"], "flat") }">'
                         f'{b["verdict"]}</span>', f'score {nb(b["total"], 0, True) if b["total"] else "0"} / {b["n"]}'))
+    v = a.get("vue")
+    if v:
+        it.append((f"Vue {HORIZON_H} h", f'<span class="{ {1: "up", -1: "down"}.get(v["sens"], "flat") }">{v["direction"]}</span>',
+                   f'conviction {v["conviction"]}'))
+    r = a.get("risque")
+    if r:
+        it.append(("Appétit risque", r["etat"], f'score {nb(r["score"], 0, True)}'))
     it.append(("Régime", esc(a["regime"]["nom"]), esc(a["regime"]["resume"][:48] + ("…" if len(a["regime"]["resume"]) > 48 else ""))))
     for lib, s in (("Taux réel 10 a", f.get("reel10")), ("US 2 ans", f.get("us2"))):
         d = variation(s, 5, "pb")
@@ -2961,7 +4288,7 @@ def evenements_json(data, a):
         fi = fiche_annonce(e, a)
         out.append({"t": e["date"].isoformat(), "titre": e["titre"], "nom": fi["nom"], "prev": e["precedent"],
                     "fcst": e["prevision"], "reel": e["reel"], "haut": fi["haut"], "bas": fi["bas"],
-                    "nuance": fi["nuances"][0] if fi["nuances"] else ""})
+                    "nuance": fi["nuances"][0] if fi["nuances"] else "", "histo": fi.get("histo", "")})
     return json.dumps(out[:16], ensure_ascii=False).replace("</", "<\\/")
 
 
@@ -2981,42 +4308,48 @@ def bloc_cockpit(a, y, f):
             f'<div class="col col-g"><div class="panel" id="p-graph"><div class="ph"><span class="k">XAU/USD en direct</span>'
             f'<small>{esc(TV_OR)} · TradingView</small></div><div class="pb nopad">{chart}</div></div>'
             f'<div class="minis">{minis}</div></div>'
-            f'<div class="col col-c"><div class="panel" id="p-cmd"><div class="ph"><span class="k">Poste de commandement</span>'
-            f'<small><a href="#analyse" data-aller="lecture">analyse complète</a></small></div>'
-            f'<div class="pb" data-zone="cmd">{bloc_commande(a)}</div></div>'
-            f'<div class="panel" id="p-evt"><div class="ph"><span class="k">Prochaine annonce à fort impact</span>'
+            f'<div class="col col-c"><div class="panel" id="p-vue"><div class="ph"><span class="k">Où va le marché</span>'
+            f'<small><a href="#analyse" data-aller="plan">plan complet</a></small></div>'
+            f'<div class="pb" data-zone="vue">{bloc_vue_cockpit(a)}</div></div>'
+            f'<div class="panel" id="p-ctl"><div class="ph"><span class="k">Contrôle avant l\'entrée</span>'
+            f'<small>selon tes règles</small></div><div class="pb">{bloc_controle()}</div></div></div>'
+            f'<div class="col col-d"><div class="panel" id="p-evt"><div class="ph"><span class="k">Prochaine annonce à fort impact</span>'
             f'<small><a href="#analyse" data-aller="annonces">scénarios</a></small></div>'
             f'<div class="pb"><div id="evt-carte" data-cle="x"><p class="vide">Chargement...</p></div>'
-            f'<div class="k" style="margin-top:10px">Ensuite</div><ul class="suite" id="evt-suite"></ul></div></div></div>'
-            f'<div class="col col-d"><div class="panel" id="p-niv"><div class="ph"><span class="k">Niveaux de séance</span>'
-            f'<small>{"XAU/USD spot" if a.get("base") is not None else "future COMEX"}, écart au prix</small></div>'
+            f'<div class="k" style="margin-top:10px">Ensuite</div><ul class="suite" id="evt-suite"></ul></div></div>'
+            f'<div class="panel" id="p-niv"><div class="ph"><span class="k">Niveaux de séance</span>'
+            f'<small>{"XAU/USD spot estimé" if a.get("base") is not None else "future COMEX"}, écart au prix</small></div>'
             f'<div class="pb" data-zone="niv">{bloc_niveaux_compact(a)}</div></div>'
-            f'<div class="panel" id="p-mot"><div class="ph"><span class="k">Ce qui bouge l\'or</span><small>séance précédente</small></div>'
-            f'<div class="pb" data-zone="mot">{bloc_moteurs_compact(a)}</div></div>'
             f'<div class="panel" id="p-news"><div class="ph"><span class="k">Fil d\'actualité en direct</span>'
             f'<small>TradingView</small></div><div class="pb nopad">{news}</div></div></div></main>')
 
 
-ONGLETS = [("lecture", "Lecture"), ("moteurs", "Moteurs"), ("seance", "Séance"), ("fed", "Fed et taux"),
-           ("marches", "Marchés"), ("flux", "Flux"), ("annonces", "Annonces"), ("actus", "Actualités"),
-           ("methode", "Méthode")]
+ONGLETS = [("plan", "Plan"), ("lecture", "Lecture"), ("moteurs", "Moteurs"), ("technique", "Technique"),
+           ("fed", "Fed et taux"), ("marches", "Marchés"), ("flux", "Flux"), ("annonces", "Annonces"),
+           ("actus", "Actualités"), ("suivi", "Suivi et méthode")]
 
 
 def bloc_onglets(data, a, ia):
     y, f = data["yahoo"], data["fred"]
     contenus = {
-        "lecture": bloc_lecture(a) + bloc_ia(ia) + f'<section class="grille2">{bloc_correlations(a)}{bloc_routine()}</section>',
-        "moteurs": bloc_moteurs(a),
-        "seance": bloc_seance(a),
+        "plan": bloc_plan(a),
+        "lecture": bloc_lecture(a) + bloc_biais_detail(a) + bloc_ia(ia) +
+                   f'<section class="grille2">{bloc_correlations(a)}{bloc_routine()}</section>',
+        "moteurs": bloc_moteurs(a) + bloc_risque(a),
+        "technique": bloc_technique(a, data),
         "fed": bloc_fed(y, f, a),
         "marches": bloc_marches(y, f, a),
         "flux": bloc_flux(a) + bloc_graphiques(y, f, data["cot"], a),
-        "annonces": bloc_calendrier(data["cal"], a),
+        "annonces": bloc_calendrier(data["cal"], a) + bloc_reactions(a) + bloc_adjudications(a),
         "actus": bloc_actus(data.get("news"), data.get("fed_off"), a),
-        "methode": bloc_methode(),
+        "suivi": bloc_suivi(a) + bloc_methode(),
     }
-    nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false">{esc(t)}<kbd>{k + 1}</kbd></button>'
+    nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false">{esc(t)}<kbd>{(k + 1) % 10}</kbd></button>'
                   for k, (i, t) in enumerate(ONGLETS))
+    ta_tv = tv("embed-widget-technical-analysis.js", {"interval": "15m", "width": "100%", "height": "100%",
+                                                        "isTransparent": True, "symbol": TV_OR, "showIntervalTabs": True,
+                                                        "displayMode": "multiple", "locale": "fr", "colorTheme": "dark"},
+               "Consensus technique en direct (TradingView)")
     cal_tv = tv("embed-widget-events.js", {"colorTheme": "dark", "isTransparent": True, "width": "100%", "height": "100%",
                                            "locale": "fr", "importanceFilter": "0,1", "countryFilter": "us"},
                 "Calendrier économique en direct (TradingView)")
@@ -3026,6 +4359,10 @@ def bloc_onglets(data, a, ia):
         if i == "annonces":
             extra = (f'<section><h2>Calendrier en direct</h2><p class="pourquoi">Les chiffres réels s\'affichent ici dès '
                      f'leur publication (TradingView).</p><div class="tv-cal">{cal_tv}</div></section>')
+        if i == "technique":
+            extra = (f'<section><h2>Consensus technique en direct</h2><p class="pourquoi">Synthèse des moyennes mobiles et '
+                     f'oscillateurs sur plusieurs unités de temps (TradingView). À utiliser comme confluence, pas comme '
+                     f'signal d\'entrée.</p><div class="tv-cal" style="height:460px">{ta_tv}</div></section>')
         panneaux += (f'<div class="tabpanel" id="tab-{i}" role="tabpanel" aria-label="{esc(t)}">'
                      f'<div data-zone="t-{i}">{contenus[i]}</div>{extra}</div>')
     return (f'<nav class="onglets" id="analyse" role="tablist" aria-label="Analyse approfondie">{nav}</nav>'
@@ -3037,9 +4374,11 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
     refresh = f'<meta http-equiv="refresh" content="{int(watch_min * 60) + 60}">' if (watch_min and not site) else ""
     cfg = json.dumps({"alertes": ALERTES_MIN, "zone": FENETRE_NEWS[0], "refresh": RAFRAICHISSEMENT_MIN,
                       "site": bool(site), "seances": [[n, d, fn] for n, d, fn in SEANCES]})
+    ctx_json = json.dumps(contexte_controle(a), ensure_ascii=False).replace("</", "<\\/")
     corps = (f'{bloc_barre(a)}{bloc_bandeau_tv()}{bloc_strip(a, y, f)}{bloc_cockpit(a, y, f)}'
              f'{bloc_onglets(data, a, ia)}'
              f'<script type="application/json" id="evts" data-zone="evts">{evenements_json(data, a)}</script>'
+             f'<script type="application/json" id="ctx" data-zone="ctx">{ctx_json}</script>'
              f'<div data-zone="brief" hidden><textarea id="brief" style="display:none" aria-hidden="true">'
              f'{esc(brief)}</textarea></div>')
     return (f'<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">'
@@ -3064,6 +4403,19 @@ def construire_brief(data, a):
     L.append(f"Or : {nb(o['prix'], 1)} $ (1 j {nb(o['d1'], 2, True)} %, 5 j {nb(o['d5'], 2, True)} %, "
              f"20 j {nb(o['d20'], 2, True)} %). Amplitude attendue du jour : ±{nb(a['range_jour'], 0)} $.")
     L.append(f"Régime : {a['regime']['nom']} ({a['regime']['resume']})")
+    v = a.get("vue")
+    if v:
+        L.append(f"Vue de marché à {HORIZON_H} h : {v['direction']} (conviction {v['conviction']}, score {nb(v['score'], 2, True)}). "
+                 f"{v['central']} {v['alternatif']}")
+        if v["fourchette"]:
+            L.append(f"Fourchette probable à {HORIZON_H} h (68 %) : {nb(v['fourchette'][0], 0)} - {nb(v['fourchette'][1], 0)}")
+    if a.get("matrice"):
+        L.append("Tendance : " + " ; ".join(f"{t['nom']} {t['label'].lower()}" for t in a["matrice"]))
+    if a.get("risque"):
+        L.append(f"Appétit pour le risque : {a['risque']['etat']} (score {nb(a['risque']['score'], 0, True)})")
+    st = a.get("suivi")
+    if st and st["taux_dir"] is not None:
+        L.append(f"Fiabilité mesurée de la vue : {nb(st['taux_dir'], 0)} % sur {st['n_dir']} prévisions (30 jours)")
     L.append(f"Biais fondamental : {b['verdict']} (score {nb(b['total'], 0, True)} sur {b['n']})")
     for s in b["signaux"]:
         L.append(f"  - {s['nom']} : {s['valeur']} -> {s['lecture']}")
@@ -3146,7 +4498,8 @@ def construire_brief(data, a):
         L.append(f"  [Discours Fed] {it['titre']}")
     L.append("")
     L.append("Question : analyse le régime actuel de l'or à partir de ces données, dis-moi quel moteur domine, "
-             "ce qui pourrait inverser le biais, et les scénarios pour les prochaines annonces.")
+             "si tu es d'accord avec la vue de marché du terminal, ce qui pourrait l'inverser, "
+             "et les scénarios pour les prochaines annonces.")
     return "\n".join(L)
 
 
@@ -3209,9 +4562,9 @@ def donnees_demo():
     f = {"reel5": taux(1.7, 0.035, 0.001), "reel10": taux(1.9, 0.035, 0.001), "reel30": taux(2.2, 0.03, 0.001),
          "be5": taux(2.3, 0.02, 0.0006), "be10": taux(2.3, 0.02, 0.0008), "fwd5y5y": taux(2.25, 0.02, 0.0006),
          "us2": taux(3.9, 0.04, 0.0009), "pente2s10s": taux(0.4, 0.03), "pente3m10a": taux(0.3, 0.03),
-         "effr": pd.Series([3.58] * 420 + [3.83] * 80, index=idx), "sofr": pd.Series([3.60] * 420 + [3.86] * 80, index=idx),
-         "cible_bas": pd.Series([3.5] * 420 + [3.75] * 80, index=idx),
-         "cible_haut": pd.Series([3.75] * 420 + [4.0] * 80, index=idx),
+         "effr": pd.Series([3.58] * (len(idx) - 80) + [3.83] * 80, index=idx), "sofr": pd.Series([3.60] * (len(idx) - 80) + [3.86] * 80, index=idx),
+         "cible_bas": pd.Series([3.5] * (len(idx) - 80) + [3.75] * 80, index=idx),
+         "cible_haut": pd.Series([3.75] * (len(idx) - 80) + [4.0] * 80, index=idx),
          "hy": taux(3.0, 0.03), "ig": taux(0.9, 0.01), "dollar_large": marche(125, 0.003)}
     semaines = pd.date_range(end=fin, periods=200, freq="W-WED")
     f["bilan_fed"] = pd.Series([6_700_000 - 3000 * i for i in range(len(semaines))], index=semaines)
@@ -3243,31 +4596,44 @@ def donnees_demo():
 
     tz = tz_local()
     now = maintenant()
-    debut = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    debut = (now - timedelta(days=61)).replace(hour=0, minute=0, second=0, microsecond=0)
     ib_idx = pd.date_range(debut, now, freq="15min", tz=tz)
-    ib_idx = ib_idx[(ib_idx.hour < 23)]
-    px, lignes = float(y["or"].iloc[-1]) * 0.995, []
-    for _ in ib_idx:
+    ib_idx = ib_idx[(ib_idx.hour < 23) & (ib_idx.dayofweek < 5)]
+    profil = [0.5 if h < 8 else (1.2 if 9 <= h < 11 else (1.8 if 14 <= h < 17 else 0.9)) for h in range(24)]
+    px, lignes = float(y["or"].iloc[-1]) * 0.94, []
+    for t in ib_idx:
         o = px
-        c = o * (1 + random.gauss(0.00005, 0.0012))
-        h, l = max(o, c) * (1 + abs(random.gauss(0, 0.0006))), min(o, c) * (1 - abs(random.gauss(0, 0.0006)))
-        lignes.append((o, h, l, c, random.randint(800, 5000)))
+        c = o * (1 + random.gauss(0.00004, 0.0010 * profil[t.hour]))
+        h, l = max(o, c) * (1 + abs(random.gauss(0, 0.0005 * profil[t.hour]))), min(o, c) * (1 - abs(random.gauss(0, 0.0005 * profil[t.hour])))
+        lignes.append((o, h, l, c, random.randint(800, 5000) * profil[t.hour]))
         px = c
     barres = pd.DataFrame(lignes, index=ib_idx, columns=["open", "high", "low", "close", "volume"])
-    jidx = y["or"].index[-120:]
-    cl = y["or"].iloc[-120:].values
+    heures = barres.resample("1h").agg({"open": "first", "high": "max", "low": "min", "close": "last",
+                                        "volume": "sum"}).dropna()
+    jidx = y["or"].index[-250:]
+    cl = y["or"].iloc[-250:].values
     jours = pd.DataFrame({"open": cl * 0.998, "high": cl * 1.009, "low": cl * 0.991, "close": cl}, index=jidx)
-    intraday = {"barres": barres, "jours": jours}
+    intraday = {"barres": barres, "jours": jours, "heures": heures}
 
     zq = {}
     for i in range(16):
         m = (now.month - 1 + i) % 12 + 1
         a = now.year + (now.month - 1 + i) // 12
         zq[(a, m)] = 3.83 + min(i, 4) * 0.07
-    courbe = [{"libelle": l, "prix": p, "echeance": e} for l, p, e in (
-        ("déc. 2026", 4930.0, date(2026, 12, 27)), ("févr. 2027", 4958.0, date(2027, 2, 27)),
-        ("avr. 2027", 4985.0, date(2027, 4, 27)), ("juin 2027", 5011.0, date(2027, 6, 27)))]
-
+    fut = float(barres["close"].iloc[-1])
+    courbe = [{"libelle": l, "prix": fut + dp, "echeance": e, "proche": pr} for l, dp, e, pr in (
+        ("oct. 2026", -8.0, date(2026, 10, 27), True), ("déc. 2026", 0.0, date(2026, 12, 27), False),
+        ("févr. 2027", 26.0, date(2027, 2, 27), False), ("avr. 2027", 52.0, date(2027, 4, 27), False),
+        ("juin 2027", 77.0, date(2027, 6, 27), False))]
+    adjudic = {"avenir": [{"securityType": "Note", "securityTerm": t, "auctionDate": (now + timedelta(days=d)).strftime("%Y-%m-%dT00:00:00"),
+                           "closingTimeCompetitive": "01:00 PM", "offeringAmount": str(m * 1e9), "reopening": "No"}
+                          for t, d, m in (("2-Year", 1, 69), ("5-Year", 2, 70), ("7-Year", 3, 44))],
+               "passees": [{"securityType": "Note", "securityTerm": t, "auctionDate": (now - timedelta(days=d)).strftime("%Y-%m-%dT00:00:00"),
+                            "closingTimeCompetitive": "01:00 PM", "highYield": str(y_), "bidToCoverRatio": str(b_),
+                            "indirectBidderAccepted": str(ind * 1e9), "totalAccepted": str(42e9)}
+                           for t, d, y_, b_, ind in (("10-Year", 40, 5.02, 2.55, 29), ("10-Year", 70, 4.91, 2.61, 30),
+                                                    ("10-Year", 12, 5.11, 2.31, 24), ("30-Year", 11, 5.40, 2.28, 26),
+                                                    ("30-Year", 41, 5.22, 2.45, 28))]}
     cal = [{"date": now + timedelta(hours=h), "titre": t, "impact": imp, "prevision": pv, "precedent": pr, "reel": re_}
            for h, t, imp, pv, pr, re_ in (
                (-70, "Unemployment Claims", "High", "221K", "218K", "209K"),
@@ -3288,12 +4654,24 @@ def donnees_demo():
                              "date": now - timedelta(days=1)}]}
     for nom in ("Yahoo Finance", "Yahoo intraday", "FRED (Fed de St. Louis)", "CFTC (COT)", "SPDR Gold Shares (GLD)",
                 "ForexFactory (calendrier)", "Google News", "Futures fed funds", "Courbe des futures or",
-                "Réserve fédérale (RSS)"):
+                "Réserve fédérale (RSS)", "Trésor américain (courbes)", "Fed de New York (EFFR, SOFR)",
+                "TreasuryDirect (adjudications)"):
         noter(nom, True, "données de démonstration")
-    noter("Stooq (or spot)", True, "données de démonstration")
     return {"yahoo": y, "fred": f, "cot": cot, "gld": gld, "cal": cal, "news": news, "zq": zq,
-            "intraday": intraday, "courbe": courbe, "fed_off": fed_off,
-            "spot": {"prix": float(barres["close"].iloc[-1]) - 31.6}}
+            "intraday": intraday, "courbe": courbe, "fed_off": fed_off, "tresor": {}, "nyfed": {}, "adjudic": adjudic}
+
+
+def previsions_demo(data):
+    """Historique fictif de prévisions pour tester l'affichage du suivi."""
+    import random
+    random.seed(3)
+    b = data["intraday"]["barres"]
+    out = []
+    for t in b.index[-900:-20:16]:
+        sens = random.choice([1, 1, -1, 0])
+        out.append({"ts": t.isoformat(), "prix": float(b.loc[t, "close"]), "sens": sens,
+                    "conv": random.choice(["faible", "moyenne", "forte"]), "score": 0.3 * sens, "sigma": 14.0})
+    return out
 
 
 IA_DEMO = """### Lecture du marché
@@ -3322,7 +4700,12 @@ def generer(demo=False, watch_min=None, site_dir=None):
         for nom, st in STATUT.items():
             print(f"  {nom} : {'ok' if st['ok'] else 'EN PANNE'} {st['message']}")
         sys.exit(1)
+    data["hist"] = {"previsions": [], "annonces": []} if demo else charger_historique()
     a = analyser(data)
+    if demo:
+        data["hist"]["previsions"] = previsions_demo(data)
+    suivre_previsions(data["hist"], a, data)
+    a["suivi"] = stats_previsions(data["hist"])
     brief = construire_brief(data, a)
     ia = ({"texte": IA_DEMO, "modele": "démonstration", "heure": maintenant().isoformat()} if demo
           else analyste_ia(brief))
@@ -3331,6 +4714,8 @@ def generer(demo=False, watch_min=None, site_dir=None):
         site_dir.mkdir(parents=True, exist_ok=True)
         (site_dir / "index.html").write_text(page, encoding="utf-8")
         (site_dir / "brief_claude.txt").write_text(brief, encoding="utf-8")
+    if not demo:
+        sauver_historique(data["hist"], site_dir)
     else:
         FICHIER_HTML.write_text(page, encoding="utf-8")
         FICHIER_BRIEF.write_text(brief, encoding="utf-8")
