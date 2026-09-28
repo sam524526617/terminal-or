@@ -62,7 +62,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "4.0"
+VERSION = "4.2"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -162,6 +162,7 @@ PROP = {
     "duree_min_minutes": 2,      # durée minimale d'une position (certaines prop firms bloquent le scalping trop court)
     "news_minutes": 5,           # interdiction de trader X minutes avant et après une annonce forte
     "once_par_lot": 100,         # XAU/USD : 1 lot = 100 onces, donc 1 $ de mouvement = 100 $ par lot
+    "spread": 0.30,              # écart achat-vente moyen de ton broker sur XAU/USD, en $ (compté dans le risque)
 }
 
 # Vue de marché : poids des composantes (fondamental, tendance multi-unités, momentum du jour, sentiment)
@@ -208,8 +209,13 @@ THEMES_NEWS = [
     ("Flux et banques centrales", "central bank gold OR gold ETF"),
 ]
 
-# Analyste IA (optionnel, API Claude). Sans clé ANTHROPIC_API_KEY, rien n'est appelé.
+# Analyste IA (optionnel). Deux fournisseurs possibles, choisis selon la clé présente dans les secrets GitHub :
+#   GEMINI_API_KEY    -> Gemini de Google, offre gratuite (quelques dizaines d'analyses par jour)
+#   ANTHROPIC_API_KEY -> Claude, payant à l'usage (quelques dollars par mois)
+# Si les deux sont présentes, Claude est utilisé. Sans clé, rien n'est appelé.
 IA_MODELE = "claude-sonnet-5"
+GEMINI_MODELE = "auto"           # "auto" = le meilleur modèle Flash disponible sur ton compte, sinon Flash-Lite
+IA_MAX_JOUR = 15                 # plafond d'analyses par jour, pour rester dans le quota gratuit de Gemini
 IA_INTERVALLE_MIN = 120          # une nouvelle analyse au plus toutes les 2 heures
 IA_HEURES = (7, 23)              # seulement entre 7 h et 23 h (Paris), du lundi au vendredi
 
@@ -2300,7 +2306,10 @@ def contexte_controle(a):
         "vue": {"sens": v.get("sens", 0), "direction": v.get("direction"), "conv": v.get("conviction")},
         "tend": {t["nom"]: t["sens"] for t in a.get("matrice") or []},
         "slots": [float(x) if x == x else None for x in moy.tolist()] if moy is not None else None,
-        "moy_jour": pv.get("moy_jour"), "prop": PROP, "zone": list(FENETRE_NEWS),
+        "moy_jour": pv.get("moy_jour"), "prop": PROP, "zone": list(FENETRE_NEWS), "sigma": v.get("sigma"),
+        "horizon": HORIZON_H,
+        "ia": ({"achat": (a.get("ia") or {}).get("json", {}).get("achat"), "vente": (a.get("ia") or {}).get("json", {}).get("vente"),
+                "quand": ia_quand(a["ia"])} if (a.get("ia") or {}).get("json") else None),
     })
 
 
@@ -2422,28 +2431,128 @@ def analyser(data):
 # ---------------------------------------------------------------------------
 
 CONSIGNE_IA = """Tu es l'analyste macro principal d'un desk de trading spécialisé sur l'or (XAU/USD).
-Ton lecteur est un trader intraday qui veut comprendre le contexte fondamental avant sa séance.
-Tu reçois un relevé chiffré complet, produit automatiquement. Rédige en français une analyse précise et chiffrée.
-N'invente aucune donnée absente du relevé ; utilise les titres d'actualité uniquement comme contexte.
+Ton lecteur est un trader intraday (scalping, compte de prop firm) qui prépare sa séance. Tu reçois le relevé complet
+de son terminal : prix, biais fondamental, vue de marché, tendance, niveaux de séance, Fed, flux, annonces, actualités.
 
-Structure exacte, avec ces titres précédés de ### :
-### Lecture du marché
-3 à 4 phrases : ce qui se passe sur l'or et pourquoi, en reliant les chiffres entre eux.
-### Les forces en présence
-Puces (lignes commençant par "- ") : ce qui soutient l'or, ce qui le pénalise, avec les chiffres.
-### Scénarios pour les prochaines annonces
-Pour chaque annonce majeure à venir : réaction probable si le chiffre sort au-dessus ou en dessous de la prévision.
-### Ce qui invaliderait cette lecture
-2 à 3 puces.
-### Points de vigilance pour la séance
-2 à 3 puces concrètes (niveaux, horaires, volatilité attendue).
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte autour et sans balises de code, avec exactement ces clés :
+{
+  "titre": "une phrase qui résume la situation de l'or maintenant",
+  "lecture": "3 à 5 phrases : ce qui se passe et pourquoi, en reliant les chiffres entre eux",
+  "direction": "haussière, baissière ou neutre (ta propre lecture à quelques heures)",
+  "accord": "d'accord, nuancé ou en désaccord (avec la vue de marché du terminal)",
+  "accord_explication": "1 à 2 phrases : pourquoi",
+  "forces": ["3 à 5 éléments chiffrés, chacun commençant par « Soutien : » ou « Pression : »"],
+  "annonces": ["pour chaque annonce majeure à venir : réaction probable de l'or si le chiffre sort au-dessus ou en dessous de la prévision"],
+  "invalidation": ["2 à 3 éléments qui invalideraient ta lecture"],
+  "achat": "2 à 3 phrases : dans quelles conditions un achat serait cohérent aujourd'hui (niveaux, timing, ce qu'il faut voir sur le prix), ou pourquoi l'éviter",
+  "vente": "même chose pour une vente",
+  "vigilance": ["2 à 3 points concrets pour la séance : niveaux, horaires, volatilité attendue"]
+}
 
-Contraintes : 350 mots au maximum. Aucun ordre d'achat ou de vente, aucun conseil en investissement.
-Quand les signaux se contredisent, dis-le clairement plutôt que de trancher artificiellement."""
+Règles : écris en français. Utilise les niveaux du relevé tels quels (ils sont exprimés en XAU/USD spot). N'invente
+aucun chiffre absent du relevé ; les titres d'actualité servent seulement de contexte. Quand les signaux se contredisent,
+dis-le au lieu de trancher artificiellement. Pas de conseil en investissement ni d'ordre ferme : décris des conditions,
+pas des injonctions. 450 mots au maximum au total."""
+
+CLES_IA = ("titre", "lecture", "direction", "accord", "accord_explication", "forces", "annonces", "invalidation",
+           "achat", "vente", "vigilance")
 
 
-def analyste_ia(brief):
-    cle = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+def lire_json_ia(texte):
+    """Extrait l'objet JSON de la réponse (tolère des balises de code ou du texte autour)."""
+    if not texte:
+        return None
+    t = texte.strip()
+    i, j = t.find("{"), t.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        d = json.loads(t[i:j + 1])
+    except Exception:
+        return None
+    if not isinstance(d, dict) or not d.get("lecture"):
+        return None
+    for k in ("forces", "annonces", "invalidation", "vigilance"):
+        v = d.get(k)
+        d[k] = [str(x) for x in v] if isinstance(v, list) else ([str(v)] if v else [])
+    for k in ("titre", "lecture", "direction", "accord", "accord_explication", "achat", "vente"):
+        d[k] = str(d.get(k) or "")
+    return d
+
+
+def cle_ia():
+    """Retourne (fournisseur, clé). Une clé Google (AIza...) rangée par erreur sous l'autre nom est aussi reconnue."""
+    ant = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    gem = os.environ.get("GEMINI_API_KEY", "").strip()
+    if ant.startswith("AIza") and not gem:
+        gem, ant = ant, ""
+    if ant:
+        return "claude", ant
+    if gem:
+        return "gemini", gem
+    return None, None
+
+
+def appeler_claude(cle, brief):
+    r = requests.post("https://api.anthropic.com/v1/messages", timeout=120, headers={
+        "x-api-key": cle, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+        json={"model": IA_MODELE, "max_tokens": 2000, "system": CONSIGNE_IA,
+              "messages": [{"role": "user", "content": "Relevé du terminal :\n\n" + brief}]})
+    r.raise_for_status()
+    texte = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text").strip()
+    return texte, IA_MODELE
+
+
+def modeles_gemini(cle):
+    """Modèles Gemini à essayer, du meilleur au plus économe : Flash le plus récent, puis Flash-Lite."""
+    if GEMINI_MODELE != "auto":
+        return [GEMINI_MODELE]
+    try:
+        r = requests.get("https://generativelanguage.googleapis.com/v1beta/models", timeout=30,
+                         headers={"x-goog-api-key": cle}, params={"pageSize": 200})
+        r.raise_for_status()
+        noms = [m.get("name", "").split("/", 1)[-1] for m in r.json().get("models", [])
+                if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    except Exception:
+        noms = []
+    exclus = ("image", "tts", "audio", "live", "embedding", "exp", "robotics", "computer", "native", "thinking")
+
+    def version(n):
+        m = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
+        return float(m.group(1)) if m else 0.0
+
+    tri = lambda l: sorted(l, key=lambda n: (version(n), "preview" not in n, -len(n)), reverse=True)
+    flash = tri([n for n in noms if "flash" in n and "lite" not in n and not any(e in n for e in exclus)])
+    lite = tri([n for n in noms if "flash-lite" in n and not any(e in n for e in exclus)])
+    choix = flash[:2] + lite[:1]
+    return choix or ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
+
+def appeler_gemini(cle, brief):
+    derniere = None
+    for modele in modeles_gemini(cle):
+        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{modele}:generateContent", timeout=120,
+                          headers={"x-goog-api-key": cle, "content-type": "application/json"},
+                          json={"systemInstruction": {"parts": [{"text": CONSIGNE_IA}]},
+                                "contents": [{"role": "user", "parts": [{"text": "Relevé du terminal :\n\n" + brief}]}],
+                                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4,
+                                                     "maxOutputTokens": 8192}})
+        if r.status_code in (404, 429, 503):  # modèle absent, quota du jour atteint ou surcharge : on essaie le suivant
+            derniere = RuntimeError(f"{modele} : HTTP {r.status_code}")
+            continue
+        r.raise_for_status()
+        cand = (r.json().get("candidates") or [{}])[0]
+        texte = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []) if not p.get("thought")).strip()
+        if texte:
+            return texte, modele
+        derniere = RuntimeError(f"{modele} : réponse vide ({cand.get('finishReason', 'n.d.')})")
+    raise derniere or RuntimeError("aucun modèle Gemini disponible")
+
+
+def analyste_ia(brief, a=None, data=None):
+    """Analyse rédigée par Claude. Régénérée toutes les IA_INTERVALLE_MIN minutes en séance, et aussitôt après une
+    annonce forte ou un changement de direction de la vue de marché. Sans clé ANTHROPIC_API_KEY : rien n'est appelé."""
+    fournisseur, cle = cle_ia()
     if not cle:
         return None
     fichier = DOSSIER_CACHE / "analyse_ia.json"
@@ -2454,26 +2563,41 @@ def analyste_ia(brief):
         except Exception:
             cache = None
     now = maintenant()
-    frais = cache and (time.time() - cache.get("ts", 0)) < IA_INTERVALLE_MIN * 60
     dans_fenetre = now.weekday() < 5 and IA_HEURES[0] <= now.hour < IA_HEURES[1]
-    if frais or (cache and not dans_fenetre):
+    direction = ((a or {}).get("vue") or {}).get("direction")
+    raison = None
+    if cache is None:
+        raison = "première analyse"
+    elif dans_fenetre:
+        age_min = (now.timestamp() - cache.get("ts", 0)) / 60
+        dernier = datetime.fromtimestamp(cache.get("ts", 0), tz=now.tzinfo)
+        publiees = [e for e in (data or {}).get("cal") or [] if e["impact"] == "High"
+                    and dernier < e["date"] <= now - timedelta(minutes=5)]
+        if age_min >= IA_INTERVALLE_MIN:
+            raison = "mise à jour programmée"
+        elif publiees:
+            raison = f"après {publiees[-1]['titre']}"
+        elif direction and cache.get("vue") and direction != cache.get("vue"):
+            raison = "changement de la vue de marché"
+    compteur = (cache or {}).get("compteur") or {}
+    if raison and cache is not None and compteur.get("date") == now.date().isoformat() and compteur.get("n", 0) >= IA_MAX_JOUR:
+        raison = None  # plafond du jour atteint : on garde la dernière analyse
+    if raison is None:
         noter("Analyste IA", True, "analyse en cache")
         return cache
     try:
-        r = requests.post("https://api.anthropic.com/v1/messages", timeout=120, headers={
-            "x-api-key": cle, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": IA_MODELE, "max_tokens": 1400, "system": CONSIGNE_IA,
-                  "messages": [{"role": "user", "content": "Relevé du terminal :\n\n" + brief}]})
-        r.raise_for_status()
-        texte = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text").strip()
+        texte, modele = (appeler_claude if fournisseur == "claude" else appeler_gemini)(cle, brief)
         if not texte:
             raise RuntimeError("réponse vide")
-        cache = {"ts": time.time(), "texte": texte, "modele": IA_MODELE, "heure": now.isoformat()}
+        n = compteur.get("n", 0) + 1 if compteur.get("date") == now.date().isoformat() else 1
+        cache = {"ts": now.timestamp(), "texte": texte, "json": lire_json_ia(texte), "modele": modele,
+                 "fournisseur": "Claude" if fournisseur == "claude" else "Gemini", "heure": now.isoformat(),
+                 "vue": direction, "raison": raison, "compteur": {"date": now.date().isoformat(), "n": n}}
         DOSSIER_CACHE.mkdir(exist_ok=True)
         fichier.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-        noter("Analyste IA", True, f"nouvelle analyse ({IA_MODELE})")
+        noter("Analyste IA", True, f"nouvelle analyse {cache['fournisseur']} ({raison}), {n} aujourd'hui")
     except Exception as e:
-        noter("Analyste IA", False, str(e)[:160])
+        noter("Analyste IA", False, (str(e) or type(e).__name__)[:160])
     return cache
 
 
@@ -2785,6 +2909,23 @@ body.zone-news .prochaine b{color:var(--amber)}
 .raisons li{display:grid;grid-template-columns:18px 1fr;gap:6px;padding:3px 0;border-bottom:1px solid rgba(34,50,66,.7)}
 .raisons .i-ok{color:var(--up)} .raisons .i-att{color:var(--amber)} .raisons .i-non{color:var(--down)} .raisons .i-info{color:var(--mute)}
 .taille{margin-top:6px;padding:6px 8px;background:var(--band);border-radius:3px;font-size:13px}
+.ctl-boutons kbd{font:500 10.5px var(--cond);border:1px solid currentColor;border-radius:3px;padding:0 4px;margin-left:6px;opacity:.6}
+.plan-trade{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:6px 0}
+.pt{background:var(--band);border-radius:3px;padding:6px 8px;display:flex;flex-direction:column;min-width:0}
+.pt span{font:600 10.5px var(--cond);letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.pt b{font:600 17px var(--cond);font-variant-numeric:tabular-nums}
+.pt small{color:var(--mute);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proba{font-size:12.5px;color:var(--mute);margin:6px 0;padding:6px 8px;border-left:2px solid var(--steel);background:rgba(134,169,200,.06)}
+.proba b{color:var(--ink);font-weight:600}
+.groupe{margin-top:6px}
+.ctl-actions{margin-top:8px}
+.ctl-compte{margin:0 0 8px;font-size:12.5px;color:var(--mute)}
+.ctl-compte summary{cursor:pointer;font:600 11px var(--cond);letter-spacing:.08em;text-transform:uppercase}
+.ctl-compte label{display:flex;flex-direction:column;gap:3px;margin-top:6px}
+.ctl-compte input{font:500 15px var(--cond);color:var(--ink);background:var(--band);border:1px solid var(--line);border-radius:3px;padding:5px 8px;max-width:180px}
+.avis-ia{margin-top:8px;padding:8px 10px;background:rgba(207,165,75,.07);border-left:2px solid var(--brass);border-radius:2px}
+.avis-ia p{margin:4px 0 0;font-size:13px}
+.ia-titre{font:600 18px/1.35 var(--cond);color:var(--ink)}
 .taille b{font:600 16px var(--cond);color:var(--brass)}
 .verdict-s{font:700 30px/1 var(--cond);letter-spacing:.02em}
 .balance-s{flex:1;position:relative;display:flex;height:20px;background:var(--band);border-radius:2px}
@@ -2862,7 +3003,8 @@ section h3{font:500 14.5px var(--text);color:var(--mute);margin:18px 0 8px}
 .decomp{display:grid;grid-template-columns:130px 1fr 76px;gap:6px 10px;align-items:center;font-size:14px;margin-top:14px}
 .decomp .v{font-family:var(--cond);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .decomp .total{font-weight:600}
-.ia{max-width:92ch}
+.ia{max-width:none}
+.ia > p{max-width:92ch}
 .ia h4{font:600 16px var(--cond);color:var(--brass);margin:16px 0 6px}
 .ia p,.ia li{font-size:15.5px;line-height:1.55}
 .ia ul{margin:0;padding-left:20px}
@@ -3221,25 +3363,63 @@ function rafraichir(){
 }
 if (CFG.site){ setInterval(rafraichir, CFG.refresh * 60000); }
 
-/* Contrôle avant l'entrée : OUI / ATTENTION / NON selon le contexte et tes règles */
+/* Contrôle avant l'entrée : OUI / ATTENTION / NON, plan de trade, taille et probabilités */
 var CTX = {};
 function chargerCtx(){ try { CTX = JSON.parse(document.getElementById('ctx').textContent) || {}; } catch(e){ CTX = {}; } }
 function nbFr(x, d){ return (x == null || isNaN(x)) ? 'n.d.' : Number(x).toLocaleString('fr-FR', {minimumFractionDigits:d, maximumFractionDigits:d}); }
 function lirePrix(id){ var v = ($(id) || {}).value; if (!v) return null; v = parseFloat(String(v).replace(/[ \u00a0\u202f]/g, '').replace(',', '.')); return isNaN(v) ? null : v; }
-var sensCtl = 0;
+function Phi(x){
+  var t = 1 / (1 + 0.2316419 * Math.abs(x)), d = 0.3989423 * Math.exp(-x * x / 2);
+  var p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+}
+function pToucher(dist, sigma){ return (!sigma || !(dist > 0)) ? null : Math.min(1, 2 * (1 - Phi(dist / sigma))); }
+function cleJour(){ var d = new Date(); return 'pnl-or-' + d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
+var sensCtl = 0, dernierPlan = '';
 function controler(){
   var res = $('#ctl-res'); if (!res || !sensCtl) return;
-  var sens = sensCtl, prix = lirePrix('#ctl-prix') || CTX.prix, stop = lirePrix('#ctl-stop');
-  var R = [], P = CTX.prop || {}, mot = sens > 0 ? 'achat' : 'vente';
-  function ajout(niv, txt){ R.push([niv, txt]); }
+  var sens = sensCtl, mot = sens > 0 ? 'achat' : 'vente', P = CTX.prop || {}, sp = P.spread || 0;
+  var prix = lirePrix('#ctl-prix') || CTX.prix, stopU = lirePrix('#ctl-stop'), cibleU = lirePrix('#ctl-cible');
+  var pnl = lirePrix('#ctl-pnl');
   if (!prix){ res.innerHTML = '<p class="pied">Prix indisponible : tape le prix de ta plateforme.</p>'; return; }
+  var R = [], atr = CTX.atr || null, sigma = CTX.sigma || null;
+  function ajout(niv, txt){ R.push([niv, txt]); }
+
+  /* Niveaux utiles : ceux dans le sens du trade (objectifs) et derrière (protection) */
+  var favor = [], prot = [];
+  (CTX.niveaux || []).forEach(function(n){
+    var d = (n.v - prix) * sens;
+    if (d > 0.05) favor.push({lib:n.lib, v:n.v, d:d}); else if (d < -0.05) prot.push({lib:n.lib, v:n.v, d:-d});
+  });
+  favor.sort(function(x, y){ return x.d - y.d; }); prot.sort(function(x, y){ return x.d - y.d; });
+  var minD = atr ? 0.15 * atr : 1;
+
+  /* Stop : le tien, sinon un niveau de référence derrière la protection la plus proche */
+  var stop, stopLib, stopPropose = false;
+  if (stopU){ stop = stopU; stopLib = 'ton stop'; }
+  else {
+    var pr = prot.filter(function(n){ return n.d >= minD && (!atr || n.d <= 1.2 * atr); })[0];
+    if (pr){ stop = pr.v - sens * ((atr ? 0.05 * atr : 0.5) + sp); stopLib = (sens > 0 ? 'sous ' : 'au-dessus de ') + pr.lib; }
+    else if (atr){ stop = prix - sens * 0.35 * atr; stopLib = 'stop de volatilité (0,35 ATR)'; }
+    stopPropose = true;
+  }
+  /* Objectif : le tien, sinon le prochain niveau dans le sens du trade */
+  var cible, cibleLib, ciblePropose = false, cibles = [], ref = prix;
+  favor.forEach(function(n){ if (n.d >= minD && Math.abs(n.v - ref) >= minD && cibles.length < 2){ cibles.push(n); ref = n.v; } });
+  if (cibleU){ cible = cibleU; cibleLib = 'ton objectif'; }
+  else if (cibles.length){ cible = cibles[0].v; cibleLib = cibles[0].lib; ciblePropose = true; }
+  else if (sigma){ cible = prix + sens * sigma; cibleLib = 'haut de la fourchette probable'; ciblePropose = true; }
+
+  /* Contexte de marché et calendrier */
   if (!ouvert()) ajout('non', 'Marché de l’or fermé.');
   var now = Date.now(), e = prochain(now);
   if (e){
     var m = (e.ts - now) / 60000, av = Math.max(CTX.zone ? CTX.zone[0] : 15, P.news_minutes || 0), ap = Math.max(CTX.zone ? CTX.zone[1] : 10, P.news_minutes || 0);
     if (m <= av && m >= -ap) ajout('non', 'Zone news : ' + e.nom + (m >= 0 ? ' dans ' + Math.ceil(m) + ' min.' : ' publiée il y a ' + Math.floor(-m) + ' min.'));
-    else if (m > 0 && m <= 60) ajout('att', e.nom + ' dans ' + Math.round(m) + ' min : ton trade doit être fini avant, sinon attends.');
+    else if (m > 0 && m <= 60) ajout('att', e.nom + ' dans ' + Math.round(m) + ' min : ton trade doit être clôturé avant, sinon attends.');
   }
+  var age = CTX.maj ? Math.round((Date.now() - new Date(CTX.maj).getTime()) / 60000) : null;
+  if (age != null && age > 45 && ouvert()) ajout('att', 'Analyses vieilles de ' + age + ' min : niveaux et tendance peut-être dépassés.');
   var b = CTX.biais || {}, bs = b.verdict === 'Haussier' ? 1 : (b.verdict === 'Baissier' ? -1 : 0);
   var bsc = (b.total > 0 ? '+' : '') + (b.total || 0) + ' sur ' + (b.n || 0);
   if (bs === sens) ajout('ok', 'Aligné avec le biais fondamental (' + b.verdict.toLowerCase() + ', ' + bsc + ').');
@@ -3249,60 +3429,86 @@ function controler(){
   if (v.sens === sens) ajout('ok', 'Dans le sens de la vue de marché (' + (v.direction || '').toLowerCase() + ', conviction ' + v.conv + ').');
   else if (v.sens === -sens) ajout(v.conv === 'faible' ? 'info' : 'att', 'Contre la vue de marché (' + (v.direction || '').toLowerCase() + ', conviction ' + v.conv + ').');
   else ajout('info', 'Vue de marché neutre : range probable, vise des cibles courtes.');
-  var t = CTX.tend || {}, t1 = t['1 heure'] || 0, t4 = t['4 heures'] || 0;
-  if (t1 === sens && t4 === sens) ajout('ok', 'Tendance 1 h et 4 h dans ton sens.');
-  else if (t1 === -sens && t4 === -sens) ajout('att', 'Contre la tendance 1 h et 4 h.');
+  var t = CTX.tend || {}, t15 = t['15 min'] || 0, t1 = t['1 heure'] || 0, t4 = t['4 heures'] || 0;
+  if (t1 === sens && t4 === sens) ajout('ok', 'Tendance 1 h et 4 h dans ton sens' + (t15 === -sens ? ' (repli en 15 min : entrée sur retracement).' : '.'));
+  else if (t1 === -sens && t4 === -sens) ajout('att', 'Contre la tendance 1 h et 4 h : trade de retournement, cible courte.');
   else ajout('info', 'Tendances 1 h et 4 h partagées.');
   if (bs === -sens && v.sens === -sens && t4 === -sens) ajout('non', 'Tout est contre ce trade : fondamental, vue de marché et tendance 4 h.');
-  if (CTX.pct_atr != null){
-    if (CTX.pct_atr >= 100) ajout('att', 'Amplitude du jour déjà dépassée (' + nbFr(CTX.pct_atr, 0) + ' % de l’ATR) : extension moins probable.');
-    else if (CTX.pct_atr >= 80) ajout('info', nbFr(CTX.pct_atr, 0) + ' % de l’amplitude habituelle déjà faite.');
-  }
   if (CTX.vwap){
     if ((prix - CTX.vwap) * sens > 0) ajout('ok', 'Prix ' + (sens > 0 ? 'au-dessus' : 'sous') + ' du VWAP : le flux du jour va dans ton sens.');
     else ajout('info', 'Prix ' + (sens > 0 ? 'sous' : 'au-dessus') + ' du VWAP : ' + mot + ' contre le flux du jour.');
   }
-  var opp = null, prot = null;
-  (CTX.niveaux || []).forEach(function(n){
-    var d = (n.v - prix) * sens;
-    if (d > 0.05 && (!opp || d < opp.d)) opp = {lib:n.lib, v:n.v, d:d};
-    if (d < -0.05 && (!prot || -d < prot.d)) prot = {lib:n.lib, v:n.v, d:-d};
-  });
-  var atr = CTX.atr || null;
-  if (opp){
-    if (atr && opp.d < 0.25 * atr) ajout('att', opp.lib + ' à ' + nbFr(opp.d, 1) + ' $ seulement : peu de place avant une zone de réaction.');
-    else ajout('ok', nbFr(opp.d, 1) + ' $ de marge jusqu’à ' + opp.lib + ' (' + nbFr(opp.v, 1) + ').');
+  if (CTX.pct_atr != null){
+    if (CTX.pct_atr >= 100) ajout('att', 'Amplitude du jour déjà dépassée (' + nbFr(CTX.pct_atr, 0) + ' % de l’ATR) : extension moins probable.');
+    else if (CTX.pct_atr >= 80) ajout('info', nbFr(CTX.pct_atr, 0) + ' % de l’amplitude habituelle déjà faite.');
   }
   if (CTX.slots && CTX.moy_jour){
     var hp = parties('Europe/Paris').h, sl = CTX.slots[Math.floor(hp * 4) % 96];
-    if (sl != null && sl < 0.6 * CTX.moy_jour) ajout('info', 'Créneau habituellement calme : faible amplitude à attendre.');
+    if (sl != null && sl < 0.6 * CTX.moy_jour) ajout('info', 'Créneau habituellement calme : mouvement lent à attendre.');
+    else if (sl != null && sl > 1.5 * CTX.moy_jour) ajout('info', 'Créneau habituellement très agité : stops à distance du bruit.');
   }
-  var taille = '';
-  if (stop){
-    var r = (prix - stop) * sens;
-    if (r <= 0) ajout('non', 'Stop du mauvais côté du prix.');
-    else {
-      if (atr && r < 0.15 * atr) ajout('att', 'Stop très serré (' + nbFr(r, 1) + ' $, moins de 15 % de l’ATR) : risque d’être sorti par le bruit.');
-      if (opp && opp.d / r < 1) ajout('att', 'Rapport gain / risque de ' + nbFr(opp.d / r, 2) + ' jusqu’au prochain niveau.');
-      else if (opp) ajout('ok', 'Rapport gain / risque de ' + nbFr(opp.d / r, 2) + ' jusqu’au prochain niveau.');
-      var risque = (P.capital || 0) * (P.risque_pct || 0) / 100, lots = risque / (r * (P.once_par_lot || 100));
-      var perteMax = (P.capital || 0) * (P.perte_max_jour_pct || 0) / 100;
-      taille = '<div class="taille">Taille pour risquer <b>' + nbFr(risque, 0) + ' $</b> (' + nbFr(P.risque_pct, 1) + ' % du compte) : <b>' +
-        nbFr(Math.floor(lots * 100) / 100, 2) + ' lot</b>. Perte max du jour autorisée : ' + nbFr(perteMax, 0) + ' $.</div>';
+  if (favor.length && atr && favor[0].d < 0.25 * atr)
+    ajout('att', favor[0].lib + ' à ' + nbFr(favor[0].d, 1) + ' $ seulement : zone de réaction juste devant toi.');
+
+  /* Plan de trade : risque, gain, taille, probabilités */
+  var rDist = stop != null ? (prix - stop) * sens : null, gDist = cible != null ? (cible - prix) * sens : null;
+  var plan = '', proba = '', taille = null, rr = null;
+  if (rDist != null && rDist <= 0) ajout('non', 'Stop du mauvais côté du prix.');
+  else if (gDist != null && gDist <= 0) ajout('non', 'Objectif du mauvais côté du prix.');
+  else if (rDist != null){
+    var rEff = rDist + sp, gEff = gDist != null ? gDist - sp : null;
+    if (atr && rDist < 0.15 * atr) ajout('att', 'Stop très serré (' + nbFr(rDist, 1) + ' $, moins de 15 % de l’ATR) : risque d’être sorti par le bruit.');
+    if (sigma && rDist > 1.5 * sigma) ajout('info', 'Stop large face à la volatilité attendue sur ' + (CTX.horizon || 4) + ' h (±' + nbFr(sigma, 0) + ' $).');
+    var risque = (P.capital || 0) * (P.risque_pct || 0) / 100;
+    taille = Math.floor(risque / (rEff * (P.once_par_lot || 100)) * 100) / 100;
+    if (taille < 0.01) ajout('att', 'Stop trop large pour ton risque par trade : même 0,01 lot dépasse ' + nbFr(risque, 0) + ' $.');
+    var perteMax = (P.capital || 0) * (P.perte_max_jour_pct || 0) / 100, reste = perteMax + Math.min(pnl || 0, 0);
+    var risqueReel = Math.max(taille, 0.01) * rEff * (P.once_par_lot || 100);
+    if (pnl != null){
+      if (reste <= 0) ajout('non', 'Perte maximale du jour atteinte : stop pour aujourd’hui.');
+      else if (risqueReel > reste) ajout('non', 'Ce trade peut dépasser ta perte maximale du jour (reste ' + nbFr(reste, 0) + ' $).');
+      else if (risqueReel > 0.5 * reste) ajout('att', 'Ce trade engage plus de la moitié de ta marge de perte restante (' + nbFr(reste, 0) + ' $).');
     }
-  } else if (prot){
-    ajout('info', 'Niveau de protection le plus proche : ' + prot.lib + ' (' + nbFr(prot.v, 1) + ', à ' + nbFr(prot.d, 1) + ' $). Indique ton stop pour la taille.');
+    if (gEff != null){
+      rr = gEff / rEff;
+      if (rr < 1) ajout('att', 'Gain / risque de ' + nbFr(rr, 2) + ' (spread compris) : il faut gagner plus d’une fois sur deux.');
+      else ajout('ok', 'Gain / risque de ' + nbFr(rr, 2) + ' (spread compris).');
+      var pAvant = rEff / (rEff + gEff), pT = pToucher(gDist, sigma);
+      proba = '<p class="proba"><b>Repère statistique</b> (marche au hasard, volatilité des 60 derniers jours) : sans avantage, l’objectif serait atteint avant le stop '
+        + nbFr(pAvant * 100, 0) + ' % du temps' + (pT != null ? ', et touché dans les ' + (CTX.horizon || 4) + ' h ' + nbFr(pT * 100, 0) + ' % du temps' : '')
+        + '. Ton setup doit donc gagner <b>plus de ' + nbFr(pAvant * 100, 0) + ' %</b> de ses trades à ce ratio pour être rentable.</p>';
+    }
+    plan = '<div class="plan-trade">' +
+      '<div class="pt"><span>Stop' + (stopPropose ? ' proposé' : '') + '</span><b>' + nbFr(stop, 1) + '</b><small>' + esc(stopLib) + ' · ' + nbFr(rDist, 1) + ' $</small></div>' +
+      '<div class="pt"><span>Objectif' + (ciblePropose ? ' proposé' : '') + '</span><b>' + (cible != null ? nbFr(cible, 1) : 'n.d.') + '</b><small>' + esc(cibleLib || '') + (gDist != null ? ' · ' + nbFr(gDist, 1) + ' $' : '') + '</small></div>' +
+      '<div class="pt"><span>Gain / risque</span><b>' + (rr != null ? nbFr(rr, 2) : 'n.d.') + '</b><small>spread de ' + nbFr(sp, 2) + ' $ inclus</small></div>' +
+      '<div class="pt"><span>Taille</span><b>' + nbFr(Math.max(taille, 0), 2) + ' lot</b><small>risque ' + nbFr(risque, 0) + ' $ (' + nbFr(P.risque_pct, 1) + ' %)</small></div>' +
+      '</div>' + (cibles.length > 1 && !cibleU ? '<p class="pied">Objectif suivant : ' + esc(cibles[1].lib) + ' (' + nbFr(cibles[1].v, 1) + ').</p>' : '') +
+      ((stopPropose || ciblePropose) ? '<p class="pied">Stop et objectif proposés = niveaux de référence du terminal ; ta structure technique décide.</p>' : '');
   }
   if (P.duree_min_minutes) ajout('info', 'Règle prop firm : garde la position au moins ' + P.duree_min_minutes + ' min.');
-  var nNon = R.filter(function(x){ return x[0] === 'non'; }).length, nAtt = R.filter(function(x){ return x[0] === 'att'; }).length;
-  var verdict = nNon ? ['non', 'NON'] : (nAtt ? ['att', 'ATTENTION'] : ['oui', 'OUI']);
-  var ordre = {non:0, att:1, ok:2, info:3}, ic = {ok:'✓', att:'!', non:'✕', info:'·'};
-  R.sort(function(x, y){ return ordre[x[0]] - ordre[y[0]]; });
-  var age = CTX.maj ? Math.round((Date.now() - new Date(CTX.maj).getTime()) / 60000) : null;
-  res.innerHTML = '<div class="verdict-ctl ' + verdict[0] + '">' + verdict[1] + ' <small>' + mot + ' à ' + nbFr(prix, 2) + '</small></div>' +
-    '<ul class="raisons">' + R.map(function(x){ return '<li><span class="i-' + x[0] + '">' + ic[x[0]] + '</span><span>' + esc(x[1]) + '</span></li>'; }).join('') + '</ul>' +
-    taille + '<p class="pied">Niveaux issus du relevé ' + (age != null ? 'd’il y a ' + age + ' min' : 'le plus récent') +
-    '. Outil de contrôle de tes règles : la décision reste la tienne.</p>';
+
+  /* Verdict et note du setup */
+  var n = {non:0, att:0, ok:0, info:0}; R.forEach(function(x){ n[x[0]]++; });
+  var verdict = n.non ? ['non', 'NON'] : (n.att ? ['att', 'ATTENTION'] : ['oui', 'OUI']);
+  var score = 60 + 8 * n.ok - 12 * n.att + (rr != null ? (rr >= 1.5 ? 10 : (rr < 1 ? -10 : 0)) : 0);
+  var note = n.non ? 'D' : (score >= 80 ? 'A' : (score >= 60 ? 'B' : 'C'));
+  var groupes = [['non', 'Bloquant', '✕'], ['att', 'Vigilance', '!'], ['ok', 'Favorable', '✓'], ['info', 'À savoir', '·']];
+  var liste = groupes.map(function(g){
+    var l = R.filter(function(x){ return x[0] === g[0]; }); if (!l.length) return '';
+    return '<div class="groupe"><div class="k">' + g[1] + ' (' + l.length + ')</div><ul class="raisons">' +
+      l.map(function(x){ return '<li><span class="i-' + x[0] + '">' + g[2] + '</span><span>' + esc(x[1]) + '</span></li>'; }).join('') + '</ul></div>';
+  }).join('');
+  var ia = CTX.ia && CTX.ia[mot] ? '<div class="avis-ia"><div class="k">L’analyste IA pour une ' + mot + ' · ' + esc(CTX.ia.quand || '') + '</div><p>' + esc(CTX.ia[mot]) + '</p></div>' : '';
+  res.innerHTML = '<div class="verdict-ctl ' + verdict[0] + '">' + verdict[1] + ' <small>' + mot + ' à ' + nbFr(prix, 2) + ' · note ' + note + '</small></div>' +
+    '<p class="pied">' + n.non + ' bloquant, ' + n.att + ' vigilance, ' + n.ok + ' favorable.' + (age != null ? ' Niveaux du relevé d’il y a ' + age + ' min.' : '') + '</p>' +
+    plan + proba + liste + ia +
+    '<div class="ctl-actions"><button type="button" id="copier-plan">Copier le plan</button></div>' +
+    '<p class="pied">Contrôle de tes règles, pas un conseil : la décision reste la tienne.</p>';
+  dernierPlan = [mot.toUpperCase() + ' XAU/USD · contrôle ' + verdict[1] + ' (note ' + note + ') · ' + new Date().toLocaleString('fr-FR'),
+    'Entrée ' + nbFr(prix, 2) + (stop != null ? ' · stop ' + nbFr(stop, 1) + ' (' + stopLib + ')' : '') + (cible != null ? ' · objectif ' + nbFr(cible, 1) + ' (' + cibleLib + ')' : ''),
+    (rr != null ? 'Gain / risque ' + nbFr(rr, 2) : '') + (taille != null ? ' · taille ' + nbFr(Math.max(taille, 0), 2) + ' lot' : '')]
+    .concat(R.map(function(x){ return '- ' + x[1]; })).join('\\n');
 }
 document.querySelectorAll('.ctl-boutons button').forEach(function(bt){
   bt.addEventListener('click', function(){
@@ -3311,8 +3517,25 @@ document.querySelectorAll('.ctl-boutons button').forEach(function(bt){
     controler();
   });
 });
-['#ctl-prix', '#ctl-stop'].forEach(function(id){ var el = $(id); if (el) el.addEventListener('input', controler); });
-function prixParDefaut(){ var el = $('#ctl-prix'); if (el && CTX.prix) el.placeholder = nbFr(CTX.prix, 2) + ' (dernier relevé)'; }
+['#ctl-prix', '#ctl-stop', '#ctl-cible'].forEach(function(id){ var el = $(id); if (el) el.addEventListener('input', controler); });
+var champPnl = $('#ctl-pnl');
+if (champPnl){
+  champPnl.value = lire(cleJour(), '');
+  champPnl.addEventListener('input', function(){ ecrire(cleJour(), champPnl.value); controler(); });
+}
+document.addEventListener('click', function(ev){
+  if (!ev.target || ev.target.id !== 'copier-plan') return;
+  var bt = ev.target;
+  function fait(){ bt.textContent = 'Plan copié'; setTimeout(function(){ bt.textContent = 'Copier le plan'; }, 2000); }
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(dernierPlan).then(fait, function(){});
+});
+document.addEventListener('keydown', function(ev){
+  var tg = ev.target.tagName; if (tg === 'INPUT' || tg === 'TEXTAREA' || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  var k = (ev.key || '').toLowerCase();
+  if (k === 'a' || k === 'v'){ var bt = $('.ctl-boutons .' + (k === 'a' ? 'achat' : 'vente')); if (bt) bt.click(); }
+});
+setInterval(function(){ if (sensCtl) controler(); }, 20000);
+function prixParDefaut(){ var el = $('#ctl-prix'); if (el && CTX.prix){ el.placeholder = nbFr(CTX.prix, 2); el.title = 'Dernier relevé du terminal : remplace-le par le prix de ta plateforme'; } }
 
 /* Masque le texte d'attente des flux en direct une fois chargés */
 function fluxCharges(){ document.querySelectorAll('.tv').forEach(function(el){ if (el.querySelector('iframe')) el.classList.add('charge'); }); }
@@ -3385,17 +3608,35 @@ def bloc_lecture(a):
             f'<div class="lecture">{paras}</div>{reg}</div></section>')
 
 
+def ia_quand(ia):
+    try:
+        return date_fr(datetime.fromisoformat(ia["heure"]), True)
+    except Exception:
+        return ""
+
+
 def bloc_ia(ia):
     if not ia or not ia.get("texte"):
-        return ""
-    try:
-        heure = datetime.fromisoformat(ia["heure"])
-        quand = date_fr(heure, True)
-    except Exception:
-        quand = ""
-    return (f'<section id="analyste"><h2>Analyse du jour</h2><p class="legende">Rédigée par un analyste IA '
-            f'({esc(ia.get("modele", ""))}) à partir des données de cette page, le {quand}. '
-            f'Relis-la avec ton propre jugement.</p><div class="ia">{mini_markdown(ia["texte"])}</div></section>')
+        return ('<section id="analyste"><h2>Analyste IA</h2><p class="vide">Inactif : ajoute une clé Gemini gratuite '
+                '(secret GitHub GEMINI_API_KEY) ou une clé Claude (ANTHROPIC_API_KEY) pour recevoir une analyse rédigée '
+                'toutes les 2 heures.</p></section>')
+    j = ia.get("json")
+    tete = (f'<p class="legende">Rédigée par {esc(ia.get("fournisseur", "Claude"))} ({esc(ia.get("modele", ""))}) le {ia_quand(ia)}'
+            f'{", " + esc(ia["raison"]) if ia.get("raison") else ""}, à partir des données de cette page. '
+            f'Relis-la avec ton propre jugement.</p>')
+    if not j:
+        return f'<section id="analyste"><h2>Analyse du jour (IA)</h2>{tete}<div class="ia">{mini_markdown(ia["texte"])}</div></section>'
+    ton = {"d'accord": "up", "en désaccord": "down"}.get(j["accord"].lower(), "flat")
+    liste = lambda xs: "".join(f"<li>{esc(x)}</li>" for x in xs)
+    return (f'<section id="analyste"><h2>Analyse du jour (IA)</h2>{tete}<div class="ia">'
+            f'<p class="ia-titre">{esc(j["titre"])}</p><p>{esc(j["lecture"])}</p>'
+            f'<p><span class="chip {ton}">Avis sur la vue du terminal : {esc(j["accord"])}</span> '
+            f'<span class="chip">Sa lecture : {esc(j["direction"])}</span> {esc(j["accord_explication"])}</p>'
+            f'<div class="grille2"><div><h4>Les forces en présence</h4><ul>{liste(j["forces"])}</ul>'
+            f'<h4>Scénarios sur les annonces</h4><ul>{liste(j["annonces"])}</ul></div>'
+            f'<div><h4>Pour un achat</h4><p>{esc(j["achat"])}</p><h4>Pour une vente</h4><p>{esc(j["vente"])}</p>'
+            f'<h4>Ce qui invaliderait la lecture</h4><ul>{liste(j["invalidation"])}</ul>'
+            f'<h4>Vigilance pour la séance</h4><ul>{liste(j["vigilance"])}</ul></div></div></div></section>')
 
 
 def couleur_z(z, effet):
@@ -3820,7 +4061,24 @@ METHODE = [
         "(NON), contre le biais, la vue ou la tendance (ATTENTION), amplitude du jour déjà faite, niveau opposé trop proche, "
         "stop trop serré ou rapport gain / risque inférieur à 1 (ATTENTION). Avec un stop, il calcule la taille de position "
         "à partir des règles PROP définies en haut du fichier terminal_or.py.",
+        "Sans stop ni objectif saisis, il propose des niveaux de référence : stop derrière le niveau de protection le plus "
+        "proche (au moins 0,15 ATR, marge de 0,05 ATR plus le spread), objectif sur le prochain niveau dans le sens du trade. "
+        "Le spread de ton broker est compté dans le risque et retiré du gain.",
+        "Le repère statistique suppose un marché sans avantage (marche au hasard) : l'objectif est alors atteint avant le "
+        "stop dans une proportion égale à risque / (risque + gain). C'est le taux de réussite minimum que ton setup doit "
+        "dépasser pour être rentable à ce ratio. La probabilité de toucher l'objectif dans les 4 heures vient de la "
+        "volatilité observée à ces heures-là.",
+        "La note (A, B, C, D) résume le contrôle : D dès qu'un point est bloquant, puis selon le nombre de points favorables "
+        "et de vigilances, et le rapport gain / risque.",
         "Ce n'est pas un signal d'entrée : il te dit si les conditions sont réunies, ta stratégie décide du reste."]),
+    ("L'analyste IA", [
+        "Si une clé est configurée (Gemini gratuit ou Claude payant), l'IA reçoit le relevé complet du terminal et "
+        "rédige une analyse : "
+        "lecture du marché, avis sur la vue du terminal, forces en présence, scénarios sur les annonces, conditions pour un "
+        "achat et pour une vente, points de vigilance. Nouvelle analyse toutes les 2 heures de 7 h à 23 h en semaine, et "
+        "aussitôt après une annonce forte ou un changement de direction de la vue. Ses conditions d'achat ou de vente "
+        "s'affichent dans le contrôle avant l'entrée. Au plus IA_MAX_JOUR analyses par jour, pour rester dans le "
+        "quota gratuit de Gemini."]),
     ("La matrice de tendance", [
         "Pour chaque unité de temps : +1 si le prix est au-dessus de la moyenne 20, elle-même au-dessus de la 50 et en "
         "hausse ; +1 si les deux derniers sommets et creux montent. Le total va de -2 (baissière) à +2 (haussière)."]),
@@ -3884,6 +4142,16 @@ def ligne_fiabilite(a):
             f'sur {st["n_dir"]} prévisions. <a href="#analyse" data-aller="suivi">Détail</a></p>')
 
 
+def avis_ia(ia):
+    j = (ia or {}).get("json")
+    if not j:
+        return ""
+    ton = {"d'accord": "up", "en désaccord": "down"}.get(j["accord"].lower(), "flat")
+    return (f'<div class="avis-ia"><div class="k">Analyste IA ({esc(ia.get("fournisseur", "Claude"))}) · {ia_quand(ia)}</div>'
+            f'<p><span class="chip {ton}">{esc(j["accord"])}</span> {esc(j["titre"])} '
+            f'<a href="#analyse" data-aller="lecture">Lire</a></p></div>')
+
+
 def bloc_vue_cockpit(a):
     v = a.get("vue")
     if not v:
@@ -3905,17 +4173,22 @@ def bloc_vue_cockpit(a):
             f'<div class="tfs">{mt}</div>{fourch}'
             f'<p class="scen"><b>Scénario central.</b> {esc(v["central"])}</p>'
             + (f'<p class="scen alt"><b>Scénario alternatif.</b> {esc(v["alternatif"])}</p>' if v["alternatif"] else "")
-            + f'{alert}<div class="chips">{sent}</div>{ligne_fiabilite(a)}'
+            + f'{alert}<div class="chips">{sent}</div>{avis_ia(a.get("ia"))}{ligne_fiabilite(a)}'
             f'<p class="pied"><a href="#analyse" data-aller="plan">Plan de séance, sentiment et catalyseurs</a></p>')
 
 
 def bloc_controle():
-    return ('<div class="ctl"><div class="ctl-boutons"><button type="button" class="achat" data-sens="1">Achat</button>'
-            '<button type="button" class="vente" data-sens="-1">Vente</button></div>'
+    return ('<div class="ctl"><div class="ctl-boutons"><button type="button" class="achat" data-sens="1">Achat <kbd>A</kbd></button>'
+            '<button type="button" class="vente" data-sens="-1">Vente <kbd>V</kbd></button></div>'
             '<div class="ctl-champs"><label>Prix d\'entrée <input id="ctl-prix" inputmode="decimal" autocomplete="off"></label>'
-            '<label>Stop <input id="ctl-stop" inputmode="decimal" placeholder="optionnel" autocomplete="off"></label></div>'
-            '<div id="ctl-res"><p class="pied">Choisis Achat ou Vente. Tape le prix de ta plateforme pour des distances '
-            'exactes ; le stop sert à calculer la taille de position.</p></div></div>')
+            '<label>Stop <input id="ctl-stop" inputmode="decimal" placeholder="proposé" autocomplete="off"></label>'
+            '<label>Objectif <input id="ctl-cible" inputmode="decimal" placeholder="proposé" autocomplete="off"></label></div>'
+            '<details class="ctl-compte"><summary>Mon résultat du jour</summary><label>Gain ou perte déjà réalisé aujourd\'hui ($) '
+            '<input id="ctl-pnl" inputmode="decimal" placeholder="ex. -120" autocomplete="off"></label>'
+            f'<p class="pied">Sert à vérifier ta perte maximale du jour ({nb(PROP["perte_max_jour_pct"], 1)} % de '
+            f'{nb(PROP["capital"], 0)} $). Mémorisé pour la journée dans ce navigateur.</p></details>'
+            '<div id="ctl-res"><p class="pied">Choisis Achat ou Vente (touches A et V). Tape le prix de ta plateforme pour des '
+            'distances exactes. Sans stop ni objectif, le terminal propose ses niveaux de référence et calcule la taille.</p></div></div>')
 
 
 def bloc_biais_detail(a):
@@ -4475,6 +4748,12 @@ def construire_brief(data, a):
         L.append(f"Séance : prix {nb(s['prix'], 1)}, jour {nb(s['bas'], 1)}-{nb(s['haut'], 1)}, ATR14 {nb(s['atr'], 1)} $ "
                  f"({nb(s['pct_atr'], 0)} % consommé), VWAP {nb(s.get('vwap'), 1)}, veille haut {nb(s.get('pdh'), 1)} / "
                  f"bas {nb(s.get('pdl'), 1)}, pivot {nb(s.get('pivot'), 1)}")
+    v = a.get("vue")
+    if v and a.get("seance"):
+        dessus, dessous = niveaux_autour(a, v["prix"])
+        L.append(f"Niveaux clés en XAU/USD spot (dernier relevé {nb(v['prix'], 1)}) : au-dessus "
+                 + ", ".join(f"{l} {nb(x, 1)}" for l, x in dessus[:5]) + " ; en dessous "
+                 + ", ".join(f"{l} {nb(x, 1)}" for l, x in dessous[:5]))
     if a["macro"]:
         L.append("Macro US : " + " ; ".join(f"{m['nom']} {m['val']} (préc. {m['prec']})" for m in a["macro"]))
     su = a.get("surprise")
@@ -4674,17 +4953,22 @@ def previsions_demo(data):
     return out
 
 
-IA_DEMO = """### Lecture du marché
-L'or recule de **1,2 %** sur la semaine, pénalisé par la remontée des taux réels et un dollar ferme.
-### Les forces en présence
-- Taux réel 10 ans en hausse de 12 pb : pression directe.
-- Achats physiques toujours solides : plancher sous les prix.
-### Scénarios pour les prochaines annonces
-- PCE au-dessus de 0,3 % : pression supplémentaire sur l'or.
-### Ce qui invaliderait cette lecture
-- Un accord qui rouvre le détroit d'Ormuz.
-### Points de vigilance pour la séance
-- Zone news à 14 h 30."""
+IA_DEMO = json.dumps({
+    "titre": "L'or hésite sous 4 912 : la hausse des taux réels freine, les achats physiques amortissent.",
+    "lecture": "Les taux réels 10 ans ont pris 11 pb en cinq séances, ce qui renchérit la détention d'or. Le dollar recule "
+               "pourtant, et les fonds achètent les replis : la pression n'est pas unilatérale. Le marché price 56 % de "
+               "chances de hausse de la Fed le 28 octobre, ce qui laisse de la place à une surprise souple.",
+    "direction": "neutre", "accord": "nuancé",
+    "accord_explication": "La tendance courte est baissière comme le dit le terminal, mais la demande de fond limite la baisse.",
+    "forces": ["Pression : taux réels +11 pb sur 5 jours", "Soutien : dollar -0,4 % sur 5 jours",
+               "Soutien : fonds acheteurs sur repli (COT)"],
+    "annonces": ["PCE core au-dessus de 0,3 % : pression sur l'or ; en dessous : rebond probable vers 4 928"],
+    "invalidation": ["Clôture horaire au-dessus de 4 928", "Taux réels qui repassent sous 2,55 %"],
+    "achat": "Un achat n'a de sens qu'après un rejet net du support S1 (4 875) ou une reprise du VWAP, avec une cible "
+             "courte vers 4 912 ; pas avant la publication du PCE.",
+    "vente": "Une vente est cohérente sous 4 912 tant que les taux réels montent, avec 4 875 en ligne de mire ; "
+             "éviter de vendre directement sur le support.",
+    "vigilance": ["Zone news autour du PCE", "Amplitude normale ±61 $ : stops à adapter"]}, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -4707,8 +4991,9 @@ def generer(demo=False, watch_min=None, site_dir=None):
     suivre_previsions(data["hist"], a, data)
     a["suivi"] = stats_previsions(data["hist"])
     brief = construire_brief(data, a)
-    ia = ({"texte": IA_DEMO, "modele": "démonstration", "heure": maintenant().isoformat()} if demo
-          else analyste_ia(brief))
+    ia = ({"texte": IA_DEMO, "json": lire_json_ia(IA_DEMO), "modele": "démonstration",
+           "heure": maintenant().isoformat(), "raison": "démonstration"} if demo else analyste_ia(brief, a, data))
+    a["ia"] = ia
     page = rendre_html(data, a, brief, ia, watch_min, site=site_dir is not None)
     if site_dir is not None:
         site_dir.mkdir(parents=True, exist_ok=True)
