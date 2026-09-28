@@ -62,7 +62,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "4.2"
+VERSION = "4.3"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -610,15 +610,26 @@ def charger_cot():
 
 def charger_gld():
     """Avoirs en tonnes du plus gros ETF or (SPDR GLD)."""
-    txt = http_get("https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv", ttl_min=120,
-                   agents=(UA_NAVIGATEUR, UA_SCRIPT), valider=lambda t: "Tonnes" in t[:5000])
+    url = "https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv"
+    try:
+        txt = http_get(url, ttl_min=120, agents=(UA_NAVIGATEUR, UA_SCRIPT), valider=lambda t: "tonne" in t[:8000].lower())
+    except Exception:
+        # pour le diagnostic : que renvoie le site exactement ?
+        try:
+            brut = SESSION.get(url, timeout=20, headers={"User-Agent": UA_NAVIGATEUR})
+            debut_txt = re.sub(r"\s+", " ", brut.text[:70])
+            raise RuntimeError(f"fichier GLD indisponible (HTTP {brut.status_code}, début : « {debut_txt} »)")
+        except RuntimeError:
+            raise
+        except Exception as e2:
+            raise RuntimeError(f"fichier GLD indisponible ({type(e2).__name__})")
     lignes = txt.splitlines()
-    debut = next((i for i, l in enumerate(lignes) if "Tonnes" in l), None)
+    debut = next((i for i, l in enumerate(lignes) if "tonne" in l.lower()), None)
     if debut is None:
         raise RuntimeError("fichier GLD : colonne des tonnes introuvable")
     lecteur = csv.reader(lignes[debut:])
     entete = next(lecteur)
-    col = next(i for i, h in enumerate(entete) if "Tonnes" in h)
+    col = next(i for i, h in enumerate(entete) if "tonne" in h.lower())
     dates, vals = [], []
     for r in lecteur:
         if len(r) > col:
@@ -2138,6 +2149,15 @@ def reactions_annonces(intra, hist):
     return out
 
 
+def terme_lisible(terme):
+    """'9-Year 10-Month' (réouverture) devient '10 ans (réouverture)'."""
+    m = re.match(r"(\d+)-Year(?:\s+(\d+)-Month)?", terme or "")
+    if not m:
+        return (terme or "").replace("-Month", " mois")
+    ans, mois = int(m.group(1)), int(m.group(2) or 0)
+    return f"{ans + 1} ans (réouverture)" if mois >= 9 else f"{ans} ans"
+
+
 def analyser_adjudications(adj):
     if not adj:
         return None
@@ -2158,8 +2178,7 @@ def analyser_adjudications(adj):
     for x in adj.get("avenir") or []:
         if garder(x) and quand(x):
             mt = pd.to_numeric(x.get("offeringAmount"), errors="coerce")
-            avenir.append({"date": quand(x), "terme": f"{x['securityType'].replace('Note', 'obligation').replace('Bond', 'obligation')} "
-                                                     f"{x['securityTerm'].replace('-Year', ' ans').replace('-Month', ' mois')}",
+            avenir.append({"date": quand(x), "terme": f"obligation {terme_lisible(x['securityTerm'])}",
                            "montant": (float(mt) / 1e9) if mt == mt else None,
                            "reouv": str(x.get("reopening", "")).lower() == "yes"})
     avenir.sort(key=lambda x: x["date"])
@@ -2176,7 +2195,7 @@ def analyser_adjudications(adj):
         moy = float(np.nanmean(prec)) if prec else None
         ind = pd.to_numeric(x.get("indirectBidderAccepted"), errors="coerce")
         tot = pd.to_numeric(x.get("totalAccepted") or x.get("offeringAmount"), errors="coerce")
-        passees.append({"date": d, "terme": terme.replace("-Year", " ans").replace("-Month", " mois"),
+        passees.append({"date": d, "terme": terme_lisible(terme),
                         "rendement": pd.to_numeric(x.get("highYield"), errors="coerce"), "btc": btc, "btc_moy": moy,
                         "indirect": float(ind / tot * 100) if ind == ind and tot and tot == tot else None,
                         "qualite": (None if moy is None else ("faible" if btc < moy - 0.1 else
@@ -2206,8 +2225,8 @@ def plan_du_jour(a, data):
     for nom, h0, h1 in SEANCES:
         act = "n.d."
         if pv and pv.get("moy") is not None and pv.get("moy_jour"):
-            m = pv["moy"].iloc[int(h0 * 4):int(h1 * 4)].mean()
-            act = "calme" if m < 0.7 * pv["moy_jour"] else ("très active" if m > 1.3 * pv["moy_jour"] else "normale")
+            m = pv["moy"].iloc[int(h0 * 4):int(h1 * 4)].mean() / pv["moy_jour"]
+            act = ("calme" if m < 0.85 else ("active" if m > 1.15 else "moyenne")) + f" ({nb(m, 1)} × la moyenne)"
         evts = [e for e in data.get("cal") or [] if e["date"].date() == jour and h0 <= e["date"].hour + e["date"].minute / 60 < h1]
         seances.append({"nom": nom, "debut": h0, "fin": h1, "activite": act,
                         "annonces": [(e["date"], e["titre"], e["impact"]) for e in evts]})
@@ -2524,29 +2543,45 @@ def modeles_gemini(cle):
     tri = lambda l: sorted(l, key=lambda n: (version(n), "preview" not in n, -len(n)), reverse=True)
     flash = tri([n for n in noms if "flash" in n and "lite" not in n and not any(e in n for e in exclus)])
     lite = tri([n for n in noms if "flash-lite" in n and not any(e in n for e in exclus)])
-    choix = flash[:2] + lite[:1]
+    choix = flash[:2] + lite[:2]
+    for secours in ("gemini-2.5-flash", "gemini-2.5-flash-lite"):  # modèles stables en dernier recours
+        if secours in noms and secours not in choix:
+            choix.append(secours)
     return choix or ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 
 def appeler_gemini(cle, brief):
-    derniere = None
+    """Essaie les modèles un par un. Serveur surchargé (500, 503) : jusqu'à deux nouvelles tentatives espacées.
+    Quota du jour atteint (429) ou modèle absent (404) : modèle suivant."""
+    corps = {"systemInstruction": {"parts": [{"text": CONSIGNE_IA}]},
+             "contents": [{"role": "user", "parts": [{"text": "Relevé du terminal :\n\n" + brief}]}],
+             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4, "maxOutputTokens": 8192}}
+    echecs = []
     for modele in modeles_gemini(cle):
-        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{modele}:generateContent", timeout=120,
-                          headers={"x-goog-api-key": cle, "content-type": "application/json"},
-                          json={"systemInstruction": {"parts": [{"text": CONSIGNE_IA}]},
-                                "contents": [{"role": "user", "parts": [{"text": "Relevé du terminal :\n\n" + brief}]}],
-                                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4,
-                                                     "maxOutputTokens": 8192}})
-        if r.status_code in (404, 429, 503):  # modèle absent, quota du jour atteint ou surcharge : on essaie le suivant
-            derniere = RuntimeError(f"{modele} : HTTP {r.status_code}")
+        for essai in range(3):
+            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{modele}:generateContent",
+                              timeout=120, headers={"x-goog-api-key": cle, "content-type": "application/json"}, json=corps)
+            if r.status_code in (500, 503) and essai < 2:
+                time.sleep(8 * (essai + 1))
+                continue
+            break
+        if r.status_code >= 400:
+            try:
+                msg = str((r.json().get("error") or {}).get("message", ""))[:60]
+            except Exception:
+                msg = ""
+            motif = {404: "absent", 429: "quota atteint", 500: "erreur serveur", 503: "surchargé",
+                     401: "clé refusée", 403: "accès refusé"}.get(r.status_code, f"HTTP {r.status_code}")
+            echecs.append(f"{modele} {motif}" + (f" ({msg})" if r.status_code in (400, 401, 403) and msg else ""))
+            if r.status_code in (401, 403):
+                break  # clé invalide : inutile d'essayer d'autres modèles
             continue
-        r.raise_for_status()
         cand = (r.json().get("candidates") or [{}])[0]
         texte = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []) if not p.get("thought")).strip()
         if texte:
             return texte, modele
-        derniere = RuntimeError(f"{modele} : réponse vide ({cand.get('finishReason', 'n.d.')})")
-    raise derniere or RuntimeError("aucun modèle Gemini disponible")
+        echecs.append(f"{modele} réponse vide ({cand.get('finishReason', 'n.d.')})")
+    raise RuntimeError(" ; ".join(echecs) or "aucun modèle Gemini disponible")
 
 
 def analyste_ia(brief, a=None, data=None):
@@ -2597,7 +2632,9 @@ def analyste_ia(brief, a=None, data=None):
         fichier.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
         noter("Analyste IA", True, f"nouvelle analyse {cache['fournisseur']} ({raison}), {n} aujourd'hui")
     except Exception as e:
-        noter("Analyste IA", False, (str(e) or type(e).__name__)[:160])
+        noter("Analyste IA", False, ((str(e) or type(e).__name__)[:230]
+                                     + (" ; nouvel essai au prochain passage du robot" if cache is None else
+                                        " ; dernière analyse conservée")))
     return cache
 
 
