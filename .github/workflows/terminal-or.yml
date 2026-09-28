@@ -54,8 +54,9 @@ jobs:
       - name: Générer le tableau de bord
         run: python terminal_or.py --site site
         env:
-          # Analyste IA (optionnel) : sans ce secret, la page fonctionne normalement.
+          # Analyste IA (optionnel) : Gemini gratuit ou Claude payant. Sans secret, la page fonctionne normalement.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - uses: actions/upload-pages-artifact@v5
         with:
