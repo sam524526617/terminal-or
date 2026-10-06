@@ -1,16 +1,12 @@
 # Robot du Terminal or : génère le tableau de bord et le publie sur GitHub Pages.
-# Emplacement dans le dépôt : .github/workflows/terminal-or.yml
+# Lancé toutes les 15 minutes par cron-job.org, ou à la main avec « Run workflow ».
 name: Terminal or
 
 on:
-  schedule:
-    - cron: "*/15 * * * 1-5"   # toutes les 15 min du lundi au vendredi (heures UTC)
-    - cron: "7 */3 * * 0,6"    # toutes les 3 h le week-end
-    - cron: "17 6 1 * *"       # le 1er du mois : maintien en vie du dépôt
-  workflow_dispatch:           # bouton "Run workflow" pour lancer à la main
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -21,20 +17,9 @@ concurrency:
 jobs:
   construire:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-
-      # GitHub désactive les tâches planifiées d'un dépôt public sans activité depuis 60 jours.
-      # Ce petit commit mensuel l'en empêche.
-      - name: Maintien en vie (1er du mois)
-        if: github.event.schedule == '17 6 1 * *'
-        run: |
-          date -u > .keepalive
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .keepalive
-          git commit -m "Maintien en vie du terminal" || true
-          git push || true
 
       - uses: actions/setup-python@v7
         with:
@@ -54,7 +39,6 @@ jobs:
       - name: Générer le tableau de bord
         run: python terminal_or.py --site site
         env:
-          # Analyste IA (optionnel) : Gemini gratuit ou Claude payant. Sans secret, la page fonctionne normalement.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
@@ -65,6 +49,7 @@ jobs:
   publier:
     needs: construire
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deploiement.outputs.page_url }}
