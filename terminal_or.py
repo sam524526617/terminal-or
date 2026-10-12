@@ -226,6 +226,26 @@ MOIS_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "
 JOURS_FR = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
 ONCES_PAR_TONNE = 32150.7466
 AJUST = 0.0  # conversion future COMEX -> prix affiché (spot + DECALAGE_CFD), calculée à chaque analyse
+# Unités d'affichage. Pour l'or : prix et distances en dollars. Une autre page (EUR/USD) les remplace sans toucher
+# aux calculs : ses prix sont suivis en interne en pips (prix x 10 000) et seulement convertis à l'affichage.
+ECH_PRIX = 1          # diviseur d'affichage des prix internes
+DEC_PRIX = None       # décimales des prix affichés quand ECH_PRIX vaut autre chose que 1
+UNITE = "$"           # unité des distances et amplitudes
+ACTIF = {"nom": "l'or", "Nom": "L'or", "sym": "XAU/USD", "de": "de l'or", "cfg_js": {},
+         "titre": "TERMINAL OR", "court": "Or", "page": "Terminal or", "marche": "Marché de l'or",
+         "spot": "XAU/USD spot", "future": "future COMEX", "tv_pays": "us", "mini": "or", "rs": "Gold Relative Strength",
+          "semaine": "Annonces à fort impact, décision de la Fed et adjudications du Trésor.",
+         "reg_spread": "Spread moyen de ton broker sur XAU/USD ($)",
+         # Sélecteur entre les pages : (libellé, lien relatif, page courante)
+         "pages": [("Or", "./", True), ("EUR/USD", "eurusd/", False)]}
+
+
+def nav_pages():
+    if len(ACTIF.get("pages") or []) < 2:
+        return ""
+    return ('<nav class="pages" aria-label="Actif">' + "".join(
+        f'<a href="{esc(lien)}"{" class=ici aria-current=page" if ici else ""}>{esc(lib)}</a>'
+        for lib, lien, ici in ACTIF["pages"]) + '</nav>')
 
 # ---------------------------------------------------------------------------
 # OUTILS
@@ -318,6 +338,13 @@ def nb(x, d=2, signe=False, unite=""):
     elif signe and x > 0:
         s = "+" + s
     return s + (("\u00a0" + unite) if unite else "")
+
+
+def fp(v, d=1):
+    """Prix affiché (l'or : nb(v, d) ; une paire de devises : prix réel à DEC_PRIX décimales)."""
+    if ECH_PRIX == 1:
+        return nb(v, d)
+    return nb(None if v is None else v / ECH_PRIX, DEC_PRIX)
 
 
 def date_fr(d, heure=False):
@@ -1710,7 +1737,7 @@ def fiche_annonce(e, a):
     ta = type_annonce(titre)
     r = next((x for x in a.get("reactions") or [] if x["type"] == ta), None)
     if r:
-        histo = (f"Historique ({r['n']} publications) : amplitude médiane de {nb(r['med_rng'], 0)} $ dans l'heure, "
+        histo = (f"Historique ({r['n']} publications) : amplitude médiane de {nb(r['med_rng'], 0)} {UNITE} dans l'heure, "
                  f"premier mouvement retourné dans {nb(r['retour_pct'], 0)} % des cas.")
     return {"titre": titre, "nom": nom, "type": typ, "pourquoi": pourquoi, "haut": haut, "bas": bas,
             "nuances": nuances, "date": e["date"], "prevision": e["prevision"], "precedent": e["precedent"],
@@ -2054,7 +2081,7 @@ def vue_marche(a, data):
             txt = de(txt)
         elif prep:
             txt = prep + " " + txt
-        return f"{txt} ({nb(n[1], 1)})"
+        return f"{txt} ({fp(n[1], 1)})"
 
     ecart_min = max((sigma or 0) * 0.3, (s["atr"] * 0.08) if s and s.get("atr") else 0.5)
 
@@ -2091,7 +2118,7 @@ def vue_marche(a, data):
         invalidation = inv_haut
     else:
         central = ("Pas de direction claire : range probable "
-                   + (f"entre {nb(fourchette[0], 0)} et {nb(fourchette[1], 0)}" if fourchette else "autour du prix actuel")
+                   + (f"entre {fp(fourchette[0], 0)} et {fp(fourchette[1], 0)}" if fourchette else "autour du prix actuel")
                    + ". Les bornes sont des zones de réaction plutôt que de cassure.")
         alternatif = (f"Une sortie franche au-dessus {lieu(inv_haut, 'de')} ou sous {lieu(inv_bas)} donnerait la direction."
                       if inv_haut and inv_bas else "")
@@ -3114,7 +3141,7 @@ def playbook(a, data):
     st = {x["nom"]: x for x in t["structure"]}
     s1 = st.get("1 heure")
     etapes, zones_entree, invalid, cibles = [], [], None, []
-    fmt_z = lambda z: f"{nb(z['bas'], 1)}–{nb(z['haut'], 1)} ({', '.join(z['elements'][:3])})"
+    fmt_z = lambda z: f"{fp(z['bas'], 1)}–{fp(z['haut'], 1)} ({', '.join(z['elements'][:3])})"
     pdz = ((t.get("avances") or {}).get("pd") or {})
     if sens > 0:
         zones_entree = dessous[:2]
@@ -3124,7 +3151,7 @@ def playbook(a, data):
                   "Déclencheur : rejet de la zone (mèche, puis clôture 5 ou 15 min qui repart dans le sens de la tendance), "
                   "idéalement après un balayage de liquidité sous la zone.",
                   "Objectifs : " + (", puis ".join(fmt_z(z) for z in cibles) if cibles else "le dernier sommet 1 h") + ".",
-                  "Invalidation : clôture 1 h sous le dernier creux 1 h" + (f" ({nb(invalid, 1)})" if invalid else "") + "."]
+                  "Invalidation : clôture 1 h sous le dernier creux 1 h" + (f" ({fp(invalid, 1)})" if invalid else "") + "."]
         if pdz.get("zone") == "premium":
             etapes.insert(1, f"Le prix est en premium ({nb(pdz['pos'], 0)} % du range 1 h) : attendre son retour sous le "
                              f"milieu du range avant d'acheter.")
@@ -3136,7 +3163,7 @@ def playbook(a, data):
                   "Déclencheur : rejet de la zone (mèche, puis clôture 5 ou 15 min qui repart dans le sens de la tendance), "
                   "idéalement après un balayage de liquidité au-dessus de la zone.",
                   "Objectifs : " + (", puis ".join(fmt_z(z) for z in cibles) if cibles else "le dernier creux 1 h") + ".",
-                  "Invalidation : clôture 1 h au-dessus du dernier sommet 1 h" + (f" ({nb(invalid, 1)})" if invalid else "") + "."]
+                  "Invalidation : clôture 1 h au-dessus du dernier sommet 1 h" + (f" ({fp(invalid, 1)})" if invalid else "") + "."]
         if pdz.get("zone") == "discount":
             etapes.insert(1, f"Le prix est en discount ({nb(pdz['pos'], 0)} % du range 1 h) : attendre son retour au-dessus "
                              f"du milieu du range avant de vendre.")
@@ -3149,7 +3176,7 @@ def playbook(a, data):
     elif cas in ("divergence_haussiere", "divergence_baissiere"):
         niv = s1["sommet"] if (s1 and cas == "divergence_haussiere") else (s1["creux"] if s1 else None)
         etapes = [("Niveau clé : une clôture 1 h au-" + ("dessus" if cas == "divergence_haussiere" else "dessous") +
-                   f" de {nb(niv + AJUST, 1)} (dernier {'sommet' if cas == 'divergence_haussiere' else 'creux'} 1 h) "
+                   f" de {fp(niv + AJUST, 1)} (dernier {'sommet' if cas == 'divergence_haussiere' else 'creux'} 1 h) "
                    f"réaligne la technique sur le fondamental.") if niv is not None else "Attendre un changement de structure 1 h.",
                   "Avant cela : seulement des scalps courts dans le sens de la technique, sur zones de confluence.",
                   "Après le changement de structure : trades dans le sens du fondamental, sur le premier repli."]
@@ -3516,8 +3543,8 @@ def bilan_seance(a, data):
     bj = b[b.index.date == j]
     o, c, h, l = float(bj["open"].iloc[0]), float(bj["close"].iloc[-1]), float(bj["high"].max()), float(bj["low"].min())
     atr = (a.get("seance") or {}).get("atr")
-    phr = [f"L'or a {'gagné' if c >= o else 'perdu'} {nb(abs(c / o - 1) * 100, 2)} % "
-           f"({nb(c - o, 1, True)} $), entre {nb(l + AJUST, 1)} et {nb(h + AJUST, 1)}"
+    phr = [f"{ACTIF['Nom']} a {'gagné' if c >= o else 'perdu'} {nb(abs(c / o - 1) * 100, 2)} % "
+           f"({nb(c - o, 1, True)} {UNITE}), entre {fp(l + AJUST, 1)} et {fp(h + AJUST, 1)}"
            + (f", soit {nb((h - l) / atr * 100, 0)} % de l'amplitude habituelle." if atr else ".")]
     annonces = []
     for e in data.get("cal") or []:
@@ -4121,10 +4148,10 @@ def graphique_structure(df, swings, titre, w=640, h=300):
         out.append(f'<text x="{pl + (k + 0.5) * cw:.1f}" y="{h - 6}" text-anchor="middle" class="ax">'
                    f'{t.day}/{t.month} {t.hour:02d}h</text>')
     for v in (hi - marge, lo + marge):
-        out.append(f'<text x="{pl + W + 6}" y="{y(v) + 4:.1f}" class="ax">{nb(v + AJUST, 0)}</text>')
+        out.append(f'<text x="{pl + W + 6}" y="{y(v) + 4:.1f}" class="ax">{fp(v + AJUST, 0)}</text>')
     px = float(df["close"].iloc[-1])
     out.append(f'<line x1="{pl}" x2="{pl + W}" y1="{y(px):.1f}" y2="{y(px):.1f}" class="prix-l"/>'
-               f'<text x="{pl + W + 6}" y="{y(px) + 4:.1f}" class="ax c1">{nb(px + AJUST, 1)}</text>')
+               f'<text x="{pl + W + 6}" y="{y(px) + 4:.1f}" class="ax c1">{fp(px + AJUST, 1)}</text>')
     out.append(_etiquettes_svg(swings, x_of, y, lo, hi))
     return f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="{esc(titre)}">' + "".join(out) + '</svg>'
 
@@ -4179,7 +4206,7 @@ def graphique_bougies(s, w=1000, h=340, zones=None, fvg=None):
             continue
         out.append(f'<line x1="{pl}" x2="{pl + W}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="niv"/>'
                    f'<text x="{pl + W + 6}" y="{y(v) + 4:.1f}" class="ax niv-l">{esc(COURTS.get(lib, lib))} '
-                   f'{nb(v + AJUST, 1)}</text>')
+                   f'{fp(v + AJUST, 1)}</text>')
     for z in zones or []:
         zb, zh = z["bas"] - AJUST, z["haut"] - AJUST
         if zh < lo or zb > hi:
@@ -4201,7 +4228,7 @@ def graphique_bougies(s, w=1000, h=340, zones=None, fvg=None):
     px = s["prix"]
     out.append(f'<line x1="{pl}" x2="{pl + W}" y1="{y(px):.1f}" y2="{y(px):.1f}" class="prix-l"/>'
                f'<rect x="{pl + W + 2}" y="{y(px) - 9:.1f}" width="{pr - 6}" height="18" rx="2" fill="var(--brass)"/>'
-               f'<text x="{pl + W + 8}" y="{y(px) + 4:.1f}" class="prix-t">{nb(px + AJUST, 1)}</text>')
+               f'<text x="{pl + W + 8}" y="{y(px) + 4:.1f}" class="prix-t">{fp(px + AJUST, 1)}</text>')
     return (f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="Bougies 15 minutes avec niveaux clés">'
             + "".join(out) + '</svg>')
 
@@ -4365,6 +4392,10 @@ dialog#reglages h2{font:600 19px var(--cond);margin:0 0 6px}
 .fr.differe::before{background:var(--amber)}
 /* Prix en direct dans la barre */
 .prix-live{display:flex;flex-direction:column;line-height:1.1}
+.pages{display:flex;gap:2px;background:var(--band);border:1px solid var(--line);border-radius:4px;padding:2px}
+.pages a{font:600 13px var(--cond);letter-spacing:.04em;color:var(--mute);text-decoration:none;padding:4px 10px;border-radius:3px}
+.pages a:hover{color:var(--ink)}
+.pages a.ici{background:var(--brass);color:#14100a}
 .prix-live b{font:700 21px var(--cond);color:var(--brass);font-variant-numeric:tabular-nums}
 .prix-live small{font:500 11px var(--cond);color:var(--mute)}
 .mode-btn{border-color:var(--brass);color:var(--brass)}
@@ -4399,7 +4430,8 @@ body.mode-trader .analyst{display:none!important}
   .tr-l1,.tr-l2{grid-template-columns:1fr}
   .tr-l3{grid-template-columns:repeat(3,minmax(0,1fr))}
   .regimes{grid-template-columns:120px 1fr 36px}
-  .regimes span:nth-child(5n+4),.regimes span:nth-child(5n){display:none}
+  .regimes:not(.compact) span:nth-child(5n+4),.regimes:not(.compact) span:nth-child(5n){display:none}
+  .regimes.compact{grid-template-columns:120px minmax(0,1fr) 36px}
 }
 .avis-ia{margin-top:8px;padding:8px 10px;background:rgba(207,165,75,.07);border-left:2px solid var(--brass);border-radius:2px}
 .avis-ia p{margin:4px 0 0;font-size:13px}
@@ -4603,7 +4635,9 @@ footer .ok::before{background:var(--up)} footer .ko::before{background:var(--dow
   .grille3,.grille4{grid-template-columns:1fr 1fr}
 }
 @media (max-width:720px){
-  .grille3,.grille2,.grille4,.grille-cal,.grille-lec{grid-template-columns:1fr}
+  .grille3,.grille2,.grille4,.grille-cal,.grille-lec{grid-template-columns:minmax(0,1fr)}
+  .grille2>*,.grille3>*,.grille4>*,.grille-cal>*,.grille-lec>*{min-width:0}
+  .regimes.compact{grid-template-columns:110px minmax(0,1fr) 36px}
   .contenu{padding:0 14px 32px}
   .m td.s{display:none}
   .lecture p{font-size:16.5px}.lecture p:first-child{font-size:18px}
@@ -4617,6 +4651,9 @@ footer .ok::before{background:var(--up)} footer .ko::before{background:var(--dow
 JS = """
 (function(){
 var CFG = __CFG__;
+/* Unités : l'or en dollars ; une paire de devises suivie en interne en pips (ECH = 10 000) */
+var ECH = CFG.ech || 1, PXD = CFG.pxd, UD = CFG.u || '$';
+function fpx(x, d){ return ECH === 1 ? nbFr(x, d) : nbFr(x == null ? x : x / ECH, PXD); }
 function $(s){ return document.querySelector(s); }
 function pad(n){ return (n < 10 ? '0' : '') + n; }
 function esc(t){ return String(t == null ? '' : t).replace(/[&<>"]/g, function(c){
@@ -4640,6 +4677,7 @@ function parties(tz){
 function ouvert(){
   var n = parties('America/New_York');
   if (n.j === 'Sat') return false;
+  if (CFG.fx){ if (n.j === 'Sun') return n.h >= 17; if (n.j === 'Fri') return n.h < 17; return true; }
   if (n.j === 'Sun') return n.h >= 18;
   if (n.j === 'Fri') return n.h < 17;
   return !(n.h >= 17 && n.h < 18);
@@ -4752,7 +4790,7 @@ function bip(n, f){
 function alerter(e, m){
   bip(m === 0 ? 3 : (m <= 1 ? 2 : 1), m <= 1 ? 1175 : 880);
   if ('Notification' in window && Notification.permission === 'granted'){
-    try { new Notification('Terminal or', {body: m ? e.nom + ' dans ' + m + ' min : pas de nouvelle position'
+    try { new Notification(CFG.titre || 'Terminal or', {body: m ? e.nom + ' dans ' + m + ' min : pas de nouvelle position'
                                                   : e.nom + ' publiée : attends la stabilisation', tag: e.t + m}); } catch(x){}
   }
 }
@@ -4851,7 +4889,7 @@ if (CFG.site){ setInterval(rafraichir, CFG.refresh * 60000); }
 var CTX = {};
 function chargerCtx(){ try { CTX = JSON.parse(document.getElementById('ctx').textContent) || {}; } catch(e){ CTX = {}; } }
 function nbFr(x, d){ return (x == null || isNaN(x)) ? 'n.d.' : Number(x).toLocaleString('fr-FR', {minimumFractionDigits:d, maximumFractionDigits:d}); }
-function lirePrix(id){ var v = ($(id) || {}).value; if (!v) return null; v = parseFloat(String(v).replace(/[ \u00a0\u202f]/g, '').replace(',', '.')); return isNaN(v) ? null : v; }
+function lirePrix(id){ var v = ($(id) || {}).value; if (!v) return null; v = parseFloat(String(v).replace(/[ \u00a0\u202f]/g, '').replace(',', '.')); if (isNaN(v)) return null; return (ECH !== 1 && v < 1000) ? v * ECH : v; }
 function Phi(x){
   var t = 1 / (1 + 0.2316419 * Math.abs(x)), d = 0.3989423 * Math.exp(-x * x / 2);
   var p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
@@ -4859,7 +4897,7 @@ function Phi(x){
 }
 function pToucher(dist, sigma){ return (!sigma || !(dist > 0)) ? null : Math.min(1, 2 * (1 - Phi(dist / sigma))); }
 var sensCtl = 0, dernierPlan = '';
-function reglagesPerso(){ try { return JSON.parse(lire('reglages-or', '{}')) || {}; } catch(e){ return {}; } }
+function reglagesPerso(){ try { return JSON.parse(lire(CFG.cleReglages || 'reglages-or', '{}')) || {}; } catch(e){ return {}; } }
 function regles(){ var P = {}, d = CTX.compte || {}, u = reglagesPerso(); Object.keys(d).forEach(function(k){ P[k] = d[k]; });
   Object.keys(u).forEach(function(k){ if (u[k] !== '' && u[k] != null && !isNaN(u[k])) P[k] = Number(u[k]); }); return P; }
 function majRappel(){}
@@ -4873,7 +4911,7 @@ if (dlg && bReg){
   $('#reg-ok').addEventListener('click', function(){
     var u = {};
     dlg.querySelectorAll('input[data-cle]').forEach(function(i){ var v = String(i.value).replace(',', '.'); if (v !== '' && !isNaN(v)) u[i.getAttribute('data-cle')] = Number(v); });
-    ecrire('reglages-or', JSON.stringify(u)); majRappel(); controler(); if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
+    ecrire(CFG.cleReglages || 'reglages-or', JSON.stringify(u)); majRappel(); controler(); if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
   });
   $('#reg-defaut').addEventListener('click', function(){ dlg.querySelectorAll('input[data-cle]').forEach(function(i){ i.value = ''; }); });
 }
@@ -4914,7 +4952,7 @@ function controler(){
     (CTX.poches || []).forEach(function(pch){
       var dPoche = (prix - pch.v) * sens, dStop = stop != null ? (prix - stop) * sens : null;
       if (dStop != null && atr && dPoche > dStop && dPoche - dStop < 0.3 * atr){
-        stop = pch.v - sens * (0.1 * atr + sp); stopLib = 'au-delà de la poche de stops (' + nbFr(pch.v, 1) + ')';
+        stop = pch.v - sens * (0.1 * atr + sp); stopLib = 'au-delà de la poche de stops (' + fpx(pch.v, 1) + ')';
       }
     });
   }
@@ -4926,7 +4964,7 @@ function controler(){
   else if (sigma){ cible = prix + sens * sigma; cibleLib = 'haut de la fourchette probable'; ciblePropose = true; }
 
   /* Contexte de marché et calendrier */
-  if (!ouvert()) ajout('non', 'Marché de l’or fermé.');
+  if (!ouvert()) ajout('non', CFG.ferme || 'Marché de l’or fermé.');
   var now = Date.now(), e = prochain(now);
   if (e){
     var m = (e.ts - now) / 60000, av = CTX.zone ? CTX.zone[0] : 15, ap = CTX.zone ? CTX.zone[1] : 10;
@@ -4980,7 +5018,7 @@ function controler(){
   if (zDans){
     ajout(zDans.score >= 5 ? 'ok' : 'info', 'Entrée sur une zone de confluence (score ' + nbFr(zDans.score, 1) + ' : ' + zDans.elements.join(', ') + ') : attends la réaction du prix sur la zone.');
   } else if (zProche && atr && zProche.d > 0.25 * atr){
-    ajout('att', 'Entrée loin de toute zone de confluence (la plus proche à ' + nbFr(zProche.d, 1) + ' $, ' + nbFr(zProche.z.bas, 1) + '–' + nbFr(zProche.z.haut, 1) + ') : risque d’entrer au milieu du mouvement.');
+    ajout('att', 'Entrée loin de toute zone de confluence (la plus proche à ' + nbFr(zProche.d, 1) + ' ' + UD + ', ' + fpx(zProche.z.bas, 1) + '–' + fpx(zProche.z.haut, 1) + ') : risque d’entrer au milieu du mouvement.');
   }
   /* Position par rapport au VWAP et à ses bandes (une seule lecture, selon le contexte) */
   if (CTX.vwap){
@@ -5000,7 +5038,7 @@ function controler(){
   (CTX.inter || []).forEach(function(l){
     if (l.signal === 'neutre') return;
     var pour = (l.signal === 'force') === (sens > 0);
-    ajout(pour ? 'ok' : 'att', l.lib + ' : ' + (l.signal === 'force' ? 'force' : 'faiblesse') + ' relative de l’or face au dollar et aux taux (' +
+    ajout(pour ? 'ok' : 'att', l.lib + ' : ' + (l.signal === 'force' ? 'force' : 'faiblesse') + ' relative ' + (CFG.rel || 'de l’or face au dollar et aux taux') + ' (' +
       (l.residu > 0 ? '+' : '') + nbFr(l.residu, 2) + ' %)' + (pour ? ', dans ton sens.' : ', contre ton trade.'));
   });
   if (CTX.pct_atr != null){
@@ -5013,7 +5051,7 @@ function controler(){
     else if (sl != null && sl > 1.5 * CTX.moy_jour) ajout('info', 'Créneau habituellement très agité : stops à distance du bruit.');
   }
   if (favor.length && atr && favor[0].d < 0.25 * atr)
-    ajout('att', favor[0].lib + ' à ' + nbFr(favor[0].d, 1) + ' $ seulement : zone de réaction juste devant toi.');
+    ajout('att', favor[0].lib + ' à ' + nbFr(favor[0].d, 1) + ' ' + UD + ' seulement : zone de réaction juste devant toi.');
 
   /* Concepts avancés : premium / discount, balayages, déclencheur, divergences, kill zones */
   var AV = CTX.avances;
@@ -5024,7 +5062,7 @@ function controler(){
       else if (AV.pd.zone === mauvaise) ajout('att', (sens > 0 ? 'Achat en premium' : 'Vente en discount') + ' (' + nbFr(AV.pd.pos, 0) + ' % du range 1 h) : les pros ' + (sens > 0 ? 'achètent en discount' : 'vendent en premium') + '.');
     }
     (AV.balayages || []).slice(0, 2).forEach(function(bl){
-      var txt = 'Balayage ' + (bl.sens > 0 ? 'sous ' : 'au-dessus de ') + bl.lib.toLowerCase() + ' (' + nbFr(bl.niveau, 1) + ') il y a ' + (bl.age + 1) + ' bougie(s) 15 min';
+      var txt = 'Balayage ' + (bl.sens > 0 ? 'sous ' : 'au-dessus de ') + bl.lib.toLowerCase() + ' (' + fpx(bl.niveau, 1) + ') il y a ' + (bl.age + 1) + ' bougie(s) 15 min';
       if (bl.sens === sens) ajout('ok', txt + ' : liquidité prise dans le bon sens, setup de retournement en ta faveur.');
       else ajout('att', txt + ' : rejet contre ton trade.');
     });
@@ -5043,13 +5081,13 @@ function controler(){
   var aimant = false;
   (CTX.poches || []).slice().sort(function(x, y){ return Math.abs(x.v - prix) - Math.abs(y.v - prix); }).forEach(function(pch){
     var d = (pch.v - prix) * sens;
-    if (d > 0 && atr && d <= 1.5 * atr && !aimant && (aimant = true)) ajout('info', pch.lib + ' à ' + nbFr(pch.v, 1) + ' (' + nbFr(d, 1) + ' $) : cible naturelle, le prix est souvent attiré vers la liquidité.');
+    if (d > 0 && atr && d <= 1.5 * atr && !aimant && (aimant = true)) ajout('info', pch.lib + ' à ' + fpx(pch.v, 1) + ' (' + nbFr(d, 1) + ' ' + UD + ') : cible naturelle, le prix est souvent attiré vers la liquidité.');
     if (d < 0 && stop != null && atr){
       var dPoche = -d, dStop = (prix - stop) * sens;
       if (dStop < dPoche && dPoche - dStop < 0.3 * atr)
-        ajout('att', 'Ton stop (' + nbFr(stop, 1) + ') est juste avant une poche de stops (' + nbFr(pch.v, 1) + ') : zone typique de chasse aux stops. Place-le au-delà (' + nbFr(pch.v - sens * 0.1 * atr, 1) + ') ou attends le balayage.');
+        ajout('att', 'Ton stop (' + fpx(stop, 1) + ') est juste avant une poche de stops (' + fpx(pch.v, 1) + ') : zone typique de chasse aux stops. Place-le au-delà (' + fpx(pch.v - sens * 0.1 * atr, 1) + ') ou attends le balayage.');
       else if (dStop > dPoche && dStop - dPoche < 0.6 * atr)
-        ajout('ok', 'Stop au-delà de la poche de stops (' + nbFr(pch.v, 1) + ') : protégé d’un balayage.');
+        ajout('ok', 'Stop au-delà de la poche de stops (' + fpx(pch.v, 1) + ') : protégé d’un balayage.');
     }
   });
 
@@ -5060,8 +5098,8 @@ function controler(){
   else if (gDist != null && gDist <= 0) ajout('non', 'Objectif du mauvais côté du prix.');
   else if (rDist != null){
     var rEff = rDist + sp, gEff = gDist != null ? gDist - sp : null;
-    if (atr && rDist < 0.15 * atr) ajout('att', 'Stop très serré (' + nbFr(rDist, 1) + ' $, moins de 15 % de l’ATR) : risque d’être sorti par le bruit.');
-    if (sigma && rDist > 1.5 * sigma) ajout('info', 'Stop large face à la volatilité attendue sur ' + (CTX.horizon || 4) + ' h (±' + nbFr(sigma, 0) + ' $).');
+    if (atr && rDist < 0.15 * atr) ajout('att', 'Stop très serré (' + nbFr(rDist, 1) + ' ' + UD + ', moins de 15 % de l’ATR) : risque d’être sorti par le bruit.');
+    if (sigma && rDist > 1.5 * sigma) ajout('info', 'Stop large face à la volatilité attendue sur ' + (CTX.horizon || 4) + ' h (±' + nbFr(sigma, 0) + ' ' + UD + ').');
     var risque = (P.capital || 0) * (P.risque_pct || 0) / 100;
     taille = Math.floor(risque / (rEff * (P.once_par_lot || 100)) * 100) / 100;
     if (taille < 0.01) ajout('att', 'Stop trop large pour ton risque par trade : même 0,01 lot dépasse ' + nbFr(risque, 0) + ' $.');
@@ -5075,11 +5113,11 @@ function controler(){
         + '. Ton setup doit donc gagner <b>plus de ' + nbFr(pAvant * 100, 0) + ' %</b> de ses trades à ce ratio pour être rentable.</p>';
     }
     plan = '<div class="plan-trade">' +
-      '<div class="pt"><span>Stop' + (stopPropose ? ' proposé' : '') + '</span><b>' + nbFr(stop, 1) + '</b><small>' + esc(stopLib) + ' · ' + nbFr(rDist, 1) + ' $</small></div>' +
-      '<div class="pt"><span>Objectif' + (ciblePropose ? ' proposé' : '') + '</span><b>' + (cible != null ? nbFr(cible, 1) : 'n.d.') + '</b><small>' + esc(cibleLib || '') + (gDist != null ? ' · ' + nbFr(gDist, 1) + ' $' : '') + '</small></div>' +
-      '<div class="pt"><span>Gain / risque</span><b>' + (rr != null ? nbFr(rr, 2) : 'n.d.') + '</b><small>spread de ' + nbFr(sp, 2) + ' $ inclus</small></div>' +
+      '<div class="pt"><span>Stop' + (stopPropose ? ' proposé' : '') + '</span><b>' + fpx(stop, 1) + '</b><small>' + esc(stopLib) + ' · ' + nbFr(rDist, 1) + ' ' + UD + '</small></div>' +
+      '<div class="pt"><span>Objectif' + (ciblePropose ? ' proposé' : '') + '</span><b>' + (cible != null ? fpx(cible, 1) : 'n.d.') + '</b><small>' + esc(cibleLib || '') + (gDist != null ? ' · ' + nbFr(gDist, 1) + ' ' + UD : '') + '</small></div>' +
+      '<div class="pt"><span>Gain / risque</span><b>' + (rr != null ? nbFr(rr, 2) : 'n.d.') + '</b><small>spread de ' + nbFr(sp, ECH === 1 ? 2 : 1) + ' ' + UD + ' inclus</small></div>' +
       '<div class="pt"><span>Taille</span><b>' + nbFr(Math.max(taille, 0), 2) + ' lot</b><small>risque ' + nbFr(risque, 0) + ' $ (' + nbFr(P.risque_pct, 1) + ' %)</small></div>' +
-      '</div>' + (cibles.length > 1 && !cibleU ? '<p class="pied">Objectif suivant : ' + esc(cibles[1].lib) + ' (' + nbFr(cibles[1].v, 1) + ').</p>' : '') +
+      '</div>' + (cibles.length > 1 && !cibleU ? '<p class="pied">Objectif suivant : ' + esc(cibles[1].lib) + ' (' + fpx(cibles[1].v, 1) + ').</p>' : '') +
       ((stopPropose || ciblePropose) ? '<p class="pied">Stop et objectif proposés = niveaux de référence du terminal ; ta structure technique décide.</p>' : '');
   }
 
@@ -5095,13 +5133,13 @@ function controler(){
       l.map(function(x){ return '<li><span class="i-' + x[0] + '">' + g[2] + '</span><span>' + esc(x[1]) + '</span></li>'; }).join('') + '</ul></div>';
   }).join('');
   var ia = CTX.ia && CTX.ia[mot] ? '<div class="avis-ia"><div class="k">L’analyste IA pour une ' + mot + ' · ' + esc(CTX.ia.quand || '') + '</div><p>' + esc(CTX.ia[mot]) + '</p></div>' : '';
-  res.innerHTML = '<div class="verdict-ctl ' + verdict[0] + '">' + verdict[1] + ' <small>' + mot + ' à ' + nbFr(prix, 2) + ' · note ' + note + '</small></div>' +
+  res.innerHTML = '<div class="verdict-ctl ' + verdict[0] + '">' + verdict[1] + ' <small>' + mot + ' à ' + fpx(prix, 2) + ' · note ' + note + '</small></div>' +
     '<p class="pied">' + n.non + ' bloquant, ' + n.att + ' vigilance, ' + n.ok + ' favorable.' + (age != null ? ' Niveaux du relevé d’il y a ' + age + ' min.' : '') + '</p>' +
     plan + proba + liste + ia +
     '<div class="ctl-actions"><button type="button" id="copier-plan">Copier le plan</button></div>' +
     '<p class="pied">Contrôle du contexte, pas un conseil : la décision reste la tienne.</p>';
-  dernierPlan = [mot.toUpperCase() + ' XAU/USD · contrôle ' + verdict[1] + ' (note ' + note + ') · ' + new Date().toLocaleString('fr-FR'),
-    'Entrée ' + nbFr(prix, 2) + (stop != null ? ' · stop ' + nbFr(stop, 1) + ' (' + stopLib + ')' : '') + (cible != null ? ' · objectif ' + nbFr(cible, 1) + ' (' + cibleLib + ')' : ''),
+  dernierPlan = [mot.toUpperCase() + ' ' + (CFG.sym || 'XAU/USD') + ' · contrôle ' + verdict[1] + ' (note ' + note + ') · ' + new Date().toLocaleString('fr-FR'),
+    'Entrée ' + fpx(prix, 2) + (stop != null ? ' · stop ' + fpx(stop, 1) + ' (' + stopLib + ')' : '') + (cible != null ? ' · objectif ' + fpx(cible, 1) + ' (' + cibleLib + ')' : ''),
     (rr != null ? 'Gain / risque ' + nbFr(rr, 2) : '') + (taille != null ? ' · taille ' + nbFr(Math.max(taille, 0), 2) + ' lot' : '')]
     .concat(R.map(function(x){ return '- ' + x[1]; })).join('\\n');
 }
@@ -5126,25 +5164,40 @@ document.addEventListener('keydown', function(ev){
   if (k === 'a' || k === 'v'){ var bt = $('.ctl-boutons .' + (k === 'a' ? 'achat' : 'vente')); if (bt) bt.click(); }
 });
 setInterval(function(){ if (sensCtl) controler(); }, 20000);
-function prixParDefaut(){ var el = $('#ctl-prix'); if (el && (PX.prix || CTX.prix)){ el.placeholder = nbFr(PX.prix || CTX.prix, 2); el.title = 'Prix XAU/USD en direct (XAUS) : tu peux le remplacer par celui de ta plateforme'; } }
+function prixParDefaut(){ var el = $('#ctl-prix'); if (el && (PX.prix || CTX.prix)){ el.placeholder = fpx(PX.prix || CTX.prix, 2); el.title = CFG.titrePrix || 'Prix XAU/USD en direct (XAUS) : tu peux le remplacer par celui de ta plateforme'; } }
 
 /* Prix XAU/USD en direct : même source (XAUS) que la référence de l'analyse */
 var PX = {prix: (CTX.trader && CTX.trader.ref) || CTX.prix, t: null, live: false};
 function affichePrix(){
   var el = $('#px-live'), bg = $('#px-badge'), ag = $('#px-age');
-  if (el && PX.prix) el.textContent = nbFr(PX.prix, 2);
-  var tp = $('#tr-px'); if (tp && PX.prix) tp.textContent = nbFr(PX.prix, 2);
+  if (el && PX.prix) el.textContent = fpx(PX.prix, 2);
+  var tp = $('#tr-px'); if (tp && PX.prix) tp.textContent = fpx(PX.prix, 2);
   [bg, $('#tr-badge')].forEach(function(x){ if (x){ x.textContent = PX.live ? 'LIVE' : 'DIFFÉRÉ'; x.className = 'fr ' + (PX.live ? 'live' : 'differe'); } });
-  if (ag) ag.textContent = PX.t ? 'il y a ' + Math.max(0, Math.round((Date.now() - PX.t) / 1000)) + ' s · XAUS' : 'référence de l’analyse';
+  if (ag) ag.textContent = PX.t ? 'il y a ' + Math.max(0, Math.round((Date.now() - PX.t) / 1000)) + ' s · ' + (PX.src || CFG.src || 'XAUS') : 'référence de l’analyse';
   document.querySelectorAll('.niv-c td.dist').forEach(function(td){
     var v = parseFloat(td.getAttribute('data-v')), d = v - PX.prix;
     td.textContent = (d > 0 ? '+' : '') + nbFr(d, 1); td.className = 'num dist flat';
   });
-  var cp = $('#ctl-prix'); if (cp) cp.placeholder = nbFr(PX.prix, 2) + (PX.live ? ' (live)' : '');
+  var cp = $('#ctl-prix'); if (cp) cp.placeholder = fpx(PX.prix, 2) + (PX.live ? ' (live)' : '');
   majTrader();
+}
+function majPrixListe(i){
+  var L = CFG.live || [];
+  if (i >= L.length){ PX.live = false; affichePrix(); return; }
+  var s = L[i];
+  fetch(s.url, {cache: 'no-store'})
+    .then(function(r){ if (!r.ok) throw 0; return r.json(); })
+    .then(function(j){
+      var v = j; s.chemin.forEach(function(k){ v = (v == null) ? v : (k === '*' ? v[Object.keys(v)[0]] : v[k]); });
+      var p = Number(v) * ECH, ref = (CTX.trader && CTX.trader.ref) || CTX.prix;
+      if (!(p > 0) || (ref && Math.abs(p / ref - 1) > 0.02)) throw 0;  /* garde-fou : prix aberrant */
+      PX = {prix: p, t: Date.now(), live: true, src: s.nom}; affichePrix();
+    })
+    .catch(function(){ majPrixListe(i + 1); });
 }
 function majPrix(){
   if (!window.fetch) return;
+  if (CFG.live) return majPrixListe(0);
   fetch('https://xaus.com/api/v1/spot?compact=1', {cache: 'no-store'})
     .then(function(r){ if (!r.ok) throw 0; return r.json(); })
     .then(function(j){
@@ -5177,7 +5230,7 @@ function majTrader(){
             nw.className = 'tu ' + (dn > 0 && dn <= A * 60000 ? 'warn' : ''); }
   }
   if (!ouvert()){
-    var ny = parties('America/New_York'), weekend = ny.j === 'Sat' || (ny.j === 'Fri' && ny.h >= 17) || (ny.j === 'Sun' && ny.h < 18);
+    var ny = parties('America/New_York'), weekend = CFG.fx || ny.j === 'Sat' || (ny.j === 'Fri' && ny.h >= 17) || (ny.j === 'Sun' && ny.h < 18);
     poseTuile(sig, 'aucun', 'marché fermé', 'flat');
     poseTuile(act, 'Marché fermé', weekend ? 'réouverture dimanche soir (minuit, heure de Paris)' : 'pause quotidienne d’une heure : réouverture à minuit (heure de Paris)', 'flat');
     return;
@@ -5197,7 +5250,7 @@ function majTrader(){
     poseTuile(sig, 'aucun', '', 'flat'); poseTuile(act, msg, T.setup || '', 'warn'); return;
   }
   if ((px - T.stop) * sens < 0){
-    poseTuile(sig, 'aucun', '', 'flat'); poseTuile(act, 'Setup invalidé', 'prix au-delà du stop ' + nbFr(T.stop, 1) + ' : attendre le prochain playbook', 'warn'); return;
+    poseTuile(sig, 'aucun', '', 'flat'); poseTuile(act, 'Setup invalidé', 'prix au-delà du stop ' + fpx(T.stop, 1) + ' : attendre le prochain playbook', 'warn'); return;
   }
   var tol = 0.5;
   if (px >= z.bas - tol && px <= z.haut + tol){
@@ -5214,10 +5267,10 @@ function majTrader(){
   var ecart = sens > 0 ? px - z.haut : z.bas - px;
   if (ecart > 0){
     poseTuile(sig, 'aucun', '', 'flat');
-    poseTuile(act, 'Attendre un retour dans la zone ' + nbFr(z.bas, 1) + '–' + nbFr(z.haut, 1), 'encore ' + nbFr(ecart, 1) + ' $ · ne pas courir après le prix', 'warn');
+    poseTuile(act, 'Attendre un retour dans la zone ' + fpx(z.bas, 1) + '–' + fpx(z.haut, 1), 'encore ' + nbFr(ecart, 1) + ' ' + UD + ' · ne pas courir après le prix', 'warn');
   } else {
     poseTuile(sig, 'en attente', 'prix au-delà de la zone, stop intact', 'warn');
-    poseTuile(act, 'Attendre une reprise de la zone', 'clôture 15 min de retour dans ' + nbFr(z.bas, 1) + '–' + nbFr(z.haut, 1), 'warn');
+    poseTuile(act, 'Attendre une reprise de la zone', 'clôture 15 min de retour dans ' + fpx(z.bas, 1) + '–' + fpx(z.haut, 1), 'warn');
   }
 }
 
@@ -5378,35 +5431,35 @@ def bloc_seance(a):
     if not s:
         return ('<section id="seance"><h2>Séance du jour</h2><p class="vide">Données intraday indisponibles.</p>'
                 '</section>')
-    dec = (f" ; prix convertis en XAU/USD spot, écart future-spot de {nb(DECALAGE_CFD - AJUST, 1)} $ retiré"
-           if AJUST != DECALAGE_CFD else " ; prix en future COMEX")
+    dec = (f" ; prix convertis en {ACTIF['spot']}, écart future-spot de {nb(DECALAGE_CFD - AJUST, 1)} {UNITE} retiré"
+           if AJUST != DECALAGE_CFD else f" ; prix en {ACTIF['future']}")
     ici_fait, lignes = False, ""
     for n in s["niveaux"]:
         if not ici_fait and n["niveau"] < s["prix"]:
-            lignes += (f'<tr class="ici"><td>Prix actuel</td><td class="num">{nb(s["prix"] + AJUST, 1)}</td>'
+            lignes += (f'<tr class="ici"><td>Prix actuel</td><td class="num">{fp(s["prix"] + AJUST, 1)}</td>'
                        f'<td></td><td></td></tr>')
             ici_fait = True
-        lignes += (f'<tr><td>{esc(n["lib"])}</td><td class="num">{nb(n["cfd"], 1)}</td>'
-                   f'<td class="num {"up" if n["dist"] > 0 else "down"}">{nb(n["dist"], 1, True)} $</td>'
+        lignes += (f'<tr><td>{esc(n["lib"])}</td><td class="num">{fp(n["cfd"], 1)}</td>'
+                   f'<td class="num {"up" if n["dist"] > 0 else "down"}">{nb(n["dist"], 1, True)} {UNITE}</td>'
                    f'<td class="num flat">{nb(n["dist_atr"], 2, True)} ATR</td></tr>')
     if not ici_fait:
-        lignes += (f'<tr class="ici"><td>Prix actuel</td><td class="num">{nb(s["prix"] + AJUST, 1)}</td>'
+        lignes += (f'<tr class="ici"><td>Prix actuel</td><td class="num">{fp(s["prix"] + AJUST, 1)}</td>'
                    f'<td></td><td></td></tr>')
     ses = "".join(f'<tr><td class="l">{esc(x["nom"])}{" (en cours)" if x["en_cours"] else ""}</td>'
-                  f'<td class="v">{nb((x["haut"] or 0) + AJUST, 1) if x["haut"] else "n.d."}</td>'
-                  f'<td class="v">{nb((x["bas"] or 0) + AJUST, 1) if x["bas"] else "n.d."}</td>'
+                  f'<td class="v">{fp((x["haut"] or 0) + AJUST, 1) if x["haut"] else "n.d."}</td>'
+                  f'<td class="v">{fp((x["bas"] or 0) + AJUST, 1) if x["bas"] else "n.d."}</td>'
                   f'<td class="d {classe_effet(x["var"], 1)}">{nb(x["var"], 1, True)}</td></tr>' for x in s["seances"])
     vw = s.get("vwap")
     lect_vwap = ""
     if vw:
         lect_vwap = ("Prix au-dessus du VWAP : les acheteurs contrôlent la séance." if s["prix"] > vw
                      else "Prix sous le VWAP : les vendeurs contrôlent la séance.")
-    stats = (f'<div class="kv"><span>Ouverture du jour</span><span>{nb(s["ouverture"] + AJUST, 1)}</span>'
-             f'<span>Plus haut / plus bas du jour</span><span>{nb(s["haut"] + AJUST, 1)} / {nb(s["bas"] + AJUST, 1)}</span>'
+    stats = (f'<div class="kv"><span>Ouverture du jour</span><span>{fp(s["ouverture"] + AJUST, 1)}</span>'
+             f'<span>Plus haut / plus bas du jour</span><span>{fp(s["haut"] + AJUST, 1)} / {fp(s["bas"] + AJUST, 1)}</span>'
              f'<span>Variation du jour</span><span class="{classe_effet(s["var_jour"], 1)}">{nb(s["var_jour"], 2, True)} %</span>'
-             f'<span>ATR 14 jours</span><span>{nb(s["atr"], 1)} $</span>'
+             f'<span>ATR 14 jours</span><span>{nb(s["atr"], 1)} {UNITE}</span>'
              f'<span>Amplitude du jour consommée</span><span>{nb(s["pct_atr"], 0)} % de l\'ATR</span>'
-             f'<span>VWAP du jour</span><span>{nb((vw or 0) + AJUST, 1) if vw else "n.d."}</span></div>'
+             f'<span>VWAP du jour</span><span>{fp((vw or 0) + AJUST, 1) if vw else "n.d."}</span></div>'
              f'<p class="sous">{esc(lect_vwap)} '
              f'{"L’amplitude habituelle est presque atteinte : les extensions deviennent moins probables." if (s["pct_atr"] or 0) >= 85 else ""}</p>')
     return (f'<section id="seance"><h2>Séance du jour</h2><p class="pourquoi">Bougies 15 minutes de la veille et du jour '
@@ -5417,7 +5470,7 @@ def bloc_seance(a):
             f'<div class="grille3" style="margin-top:18px"><div><h3 style="margin-top:0">Niveaux clés, du plus haut au plus bas</h3>'
             f'<table class="niveaux">{lignes}</table></div>'
             f'<div><h3 style="margin-top:0">Séances (heure de Paris)</h3><table class="m"><tr><th></th><th>Haut</th>'
-            f'<th>Bas</th><th>Var. $</th></tr>{ses}</table></div>'
+            f'<th>Bas</th><th>Var. {UNITE}</th></tr>{ses}</table></div>'
             f'<div><h3 style="margin-top:0">Repères de volatilité</h3>{stats}</div></div></section>')
 
 
@@ -5898,7 +5951,7 @@ def bloc_methode():
 def bloc_sources():
     items = "".join(f'<li class="{"ok" if s["ok"] else "ko"}">{esc(nom)}'
                     f'{" : " + esc(s["message"]) if s["message"] else ""}</li>' for nom, s in sorted(STATUT.items()))
-    return (f'<footer><b>Sources</b><ul>{items}</ul>Terminal or v{VERSION}. Données indicatives. '
+    return (f'<footer><b>Sources</b><ul>{items}</ul>{esc(ACTIF["page"])} v{VERSION}. Données indicatives. '
             f'Cotations, graphiques, actualités et calendrier en direct : '
             f'<a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a>. '
             f'Outil d\'aide à la lecture, pas un conseil en investissement.</footer>')
@@ -5934,8 +5987,8 @@ def ligne_playbook(a):
         return ""
     ton = {1: "up", -1: "down"}.get(pb["sens"], "flat")
     z = (pb["zones_entree"] or [None])[0]
-    zone = (f' Zone d\'entrée : <b>{nb(z["bas"], 1)}–{nb(z["haut"], 1)}</b> ({esc(", ".join(z["elements"][:2]))}).' if z else "")
-    inv = f' Invalidation : {nb(pb["invalidation"], 1)}.' if pb.get("invalidation") else ""
+    zone = (f' Zone d\'entrée : <b>{fp(z["bas"], 1)}–{fp(z["haut"], 1)}</b> ({esc(", ".join(z["elements"][:2]))}).' if z else "")
+    inv = f' Invalidation : {fp(pb["invalidation"], 1)}.' if pb.get("invalidation") else ""
     return (f'<div class="pb-ligne"><span class="k">Playbook technico-fondamental</span><br><b class="{ton}">'
             f'{esc(pb["titre"])}</b>.{zone}{inv} <a href="#analyse" data-aller="technique">Détail</a></div>')
 
@@ -5966,7 +6019,7 @@ def bloc_vue_cockpit(a):
                 f'{({1: "▲", -1: "▼"}).get(t["sens"], "●")}{labs}</span>')
     mt = "".join(puce(t) for t in a.get("matrice") or [])
     fourch = (f'<div class="fourch"><span class="k">Fourchette probable à {HORIZON_H} h (68 %)</span>'
-              f'<b>{nb(v["fourchette"][0], 0)} – {nb(v["fourchette"][1], 0)}</b><small>±{nb(v["sigma"], 0)} $</small></div>'
+              f'<b>{fp(v["fourchette"][0], 0)} – {fp(v["fourchette"][1], 0)}</b><small>±{nb(v["sigma"], 0)} {UNITE}</small></div>'
               ) if v["fourchette"] else ""
     alert = "".join(f'<p class="nu">Conviction réduite : {esc(x)}.</p>' for x in v["alertes"])
     sent = "".join(f'<span class="chip {t}">{esc(l)} : {esc(d)}</span>' for l, d, t in v["sentiment"][:4])
@@ -6179,9 +6232,9 @@ def bloc_synthese_tech(a):
     conf = ""
     for z in sorted(t["confluences"], key=lambda z: -z["centre"]):  # du plus haut au plus bas, comme une échelle de prix
         dedans = z["bas"] <= t["prix"] <= z["haut"]
-        pos = "prix dedans" if dedans else (f'{nb(z["dist"], 1, True)} $')
+        pos = "prix dedans" if dedans else (f'{nb(z["dist"], 1, True)} {UNITE}')
         larg = min(z["score"] / 12, 1) * 100
-        conf += (f'<tr{" class=ici" if dedans else ""}><td class="num">{nb(z["bas"], 1)} – {nb(z["haut"], 1)}</td>'
+        conf += (f'<tr{" class=ici" if dedans else ""}><td class="num">{fp(z["bas"], 1)} – {fp(z["haut"], 1)}</td>'
                  f'<td><div class="jauge-s"><i style="width:{larg:.0f}%"></i></div></td><td class="num">{nb(z["score"], 1)}</td>'
                  f'<td class="num flat">{pos}</td>'
                  f'<td class="flat">{esc(", ".join(z["elements"]))}</td></tr>')
@@ -6194,7 +6247,7 @@ def bloc_synthese_tech(a):
             + "".join(f'<p class="nu">{esc(n)}</p>' for n in notes) + '</div></div>'
             f'<h3>Zones de confluence</h3><p class="legende">Là où plusieurs niveaux surveillés par les professionnels se '
             f'superposent : c\'est là que le prix réagit le plus souvent. Plus le score est élevé, plus la zone est forte. '
-            f'Prix en XAU/USD spot.</p><div class="defile"><table class="cal"><tr><th>Zone</th><th></th><th>Score</th>'
+            f'Prix en {ACTIF['spot']}.</p><div class="defile"><table class="cal"><tr><th>Zone</th><th></th><th>Score</th>'
             f'<th>Distance</th><th>Niveaux superposés</th></tr>{conf or "<tr><td>Aucune zone forte à proximité</td></tr>"}'
             f'</table></div></section>')
 
@@ -6218,8 +6271,8 @@ def bloc_details_tech(a):
     struct = "".join(f'<tr><td>{esc(x["nom"])}</td><td class="{({1: "up", -1: "down"}).get(x["tendance"], "flat")}">'
                      f'<b>{esc(x["etat"])}</b><br><small class="flat">{esc(x["detail"])}</small></td>'
                      f'<td>{"".join(lab(y_["label"]) for y_ in x["sequence"])}</td>'
-                     f'<td class="num">{lab(x["label_sommet"])}{nb(x["sommet"] + AJUST, 1)}</td>'
-                     f'<td class="num">{lab(x["label_creux"])}{nb(x["creux"] + AJUST, 1)}</td>'
+                     f'<td class="num">{lab(x["label_sommet"])}{fp(x["sommet"] + AJUST, 1)}</td>'
+                     f'<td class="num">{lab(x["label_creux"])}{fp(x["creux"] + AJUST, 1)}</td>'
                      f'<td class="{({1: "up", -1: "down"}).get(x["sens_evt"], "flat")}">{esc(x["evenement"] or "aucune")}</td></tr>'
                      for x in t["structure"])
     graphes = ""
@@ -6233,12 +6286,12 @@ def bloc_details_tech(a):
     vw, asie = t.get("vwap"), t.get("asie")
     seance_kv = ""
     if vw:
-        seance_kv += (f'<span>VWAP du jour</span><span>{nb(vw["vwap"] + AJUST, 1)}</span>'
-                      f'<span>Bandes -2σ / -1σ</span><span>{nb(vw["bandes"][-2] + AJUST, 1)} / {nb(vw["bandes"][-1] + AJUST, 1)}</span>'
-                      f'<span>Bandes +1σ / +2σ</span><span>{nb(vw["bandes"][1] + AJUST, 1)} / {nb(vw["bandes"][2] + AJUST, 1)}</span>'
+        seance_kv += (f'<span>VWAP du jour</span><span>{fp(vw["vwap"] + AJUST, 1)}</span>'
+                      f'<span>Bandes -2σ / -1σ</span><span>{fp(vw["bandes"][-2] + AJUST, 1)} / {fp(vw["bandes"][-1] + AJUST, 1)}</span>'
+                      f'<span>Bandes +1σ / +2σ</span><span>{fp(vw["bandes"][1] + AJUST, 1)} / {fp(vw["bandes"][2] + AJUST, 1)}</span>'
                       f'<span>Position du prix</span><span>{nb(vw["z"], 1, True)} σ</span>')
     if asie:
-        seance_kv += (f'<span>Range asiatique</span><span>{nb(asie["bas"] + AJUST, 1)} – {nb(asie["haut"] + AJUST, 1)}</span>'
+        seance_kv += (f'<span>Range asiatique</span><span>{fp(asie["bas"] + AJUST, 1)} – {fp(asie["haut"] + AJUST, 1)}</span>'
                       f'<span>État à Londres</span><span>{esc(asie["etat"])}</span>')
     if t.get("fixings"):
         seance_kv += f'<span>Fixings de Londres (Paris)</span><span>{" et ".join(f"{d.hour:02d}:{d.minute:02d}" for d in t["fixings"])}</span>'
@@ -6263,7 +6316,7 @@ def bloc_details_tech(a):
             f'<p class="legende" style="margin-top:8px">BOS : le prix casse le dernier sommet (ou creux) dans le sens de la '
             f'structure, elle continue. CHoCH : il casse contre la structure, premier signe de retournement. Un achat sur un '
             f'nouveau HL dans une structure HH + HL, ou une vente sur un nouveau LH dans une structure LH + LL, est le setup '
-            f'de continuation classique. Prix en XAU/USD spot.</p></section>')
+            f'de continuation classique. Prix en {ACTIF['spot']}.</p></section>')
 
 
 def bloc_concepts(a):
@@ -6280,35 +6333,35 @@ def bloc_concepts(a):
         pos = clamp(pd_["pos"], 0, 100)
         ton = {"premium": "down", "discount": "up"}.get(pd_["zone"], "flat")
         pd_html = (f'<div class="pctbar" style="margin-top:14px"><i style="left:50%"></i><b style="left:{pos:.1f}%"></b></div>'
-                   f'<div class="pctleg"><span>Discount {nb(sp(pd_["bas"]), 1)}</span><span class="{ton}">'
-                   f'{esc(pd_["zone"])} ({nb(pd_["pos"], 0)} %)</span><span>Premium {nb(sp(pd_["haut"]), 1)}</span></div>'
+                   f'<div class="pctleg"><span>Discount {fp(sp(pd_["bas"]), 1)}</span><span class="{ton}">'
+                   f'{esc(pd_["zone"])} ({nb(pd_["pos"], 0)} %)</span><span>Premium {fp(sp(pd_["haut"]), 1)}</span></div>'
                    f'<p class="legende" style="margin-top:6px">Range 1 h entre le dernier creux et le dernier sommet. Les pros '
-                   f'achètent en discount (sous le milieu, {nb(sp(pd_["milieu"]), 1)}) et vendent en premium.</p>')
+                   f'achètent en discount (sous le milieu, {fp(sp(pd_["milieu"]), 1)}) et vendent en premium.</p>')
     # OTE
     ote = ""
     for nom, fb in c["fibo"].items():
         if fb:
             ote += (f'<tr><td>{esc(nom)}</td><td class="{"up" if fb["sens"] > 0 else "down"}">{"hausse" if fb["sens"] > 0 else "baisse"} '
-                    f'{nb(sp(fb["depart"]), 1)} → {nb(sp(fb["arrivee"]), 1)}</td>'
-                    + "".join(f'<td class="num">{nb(sp(fb["niveaux"][r]), 1)}</td>' for r in (0.5, 0.618, 0.705, 0.786)) + '</tr>')
+                    f'{fp(sp(fb["depart"]), 1)} → {fp(sp(fb["arrivee"]), 1)}</td>'
+                    + "".join(f'<td class="num">{fp(sp(fb["niveaux"][r]), 1)}</td>' for r in (0.5, 0.618, 0.705, 0.786)) + '</tr>')
     # FVG et order blocks
     zl = lambda z, lib: (f'<tr><td>{esc(lib)}</td><td class="{"up" if z["sens"] > 0 else "down"}">{"haussier" if z["sens"] > 0 else "baissier"}</td>'
-                         f'<td class="num">{nb(sp(z["bas"]), 1)} – {nb(sp(z["haut"]), 1)}</td>'
-                         f'<td class="num flat">{nb((z["bas"] + z["haut"]) / 2 - (px - AJUST), 1, True)} $</td>'
+                         f'<td class="num">{fp(sp(z["bas"]), 1)} – {fp(sp(z["haut"]), 1)}</td>'
+                         f'<td class="num flat">{nb((z["bas"] + z["haut"]) / 2 - (px - AJUST), 1, True)} {UNITE}</td>'
                          f'<td class="flat">{"partiellement comblé" if z.get("partiel") else ("intact" if "partiel" in z else "non revisité")}</td></tr>')
     fvg = "".join(zl(z, f"FVG {nom}") for nom, lst in c["fvg"].items()
                   for z in sorted(lst, key=lambda z: abs((z["bas"] + z["haut"]) / 2 - (px - AJUST)))[:3])
     ob = "".join(zl(z, f"Order block {nom}") for nom, lst in c["ob"].items()
                  for z in sorted(lst, key=lambda z: abs((z["bas"] + z["haut"]) / 2 - (px - AJUST)))[:2])
     # Liquidité
-    liq = "".join(f'<span>Sommets égaux (stops acheteurs au-dessus)</span><span>{nb(sp(v), 1)}</span>' for v in c["egaux_hauts"])
-    liq += "".join(f'<span>Creux égaux (stops vendeurs en dessous)</span><span>{nb(sp(v), 1)}</span>' for v in c["egaux_bas"])
-    liq += "".join(f'<span>{esc(k)}</span><span>{nb(sp(v), 1)}</span>' for k, v in c["periodes"].items())
-    liq += (f'<span>Projection d\'amplitude haute (bas du jour + ATR)</span><span>{nb(sp(c["adr"]["haut"]), 1)}</span>'
-            f'<span>Projection d\'amplitude basse (haut du jour - ATR)</span><span>{nb(sp(c["adr"]["bas"]), 1)}</span>'
-            f'<span>Amplitude habituelle restante</span><span>{nb(c["adr"]["restant"], 1)} $</span>')
+    liq = "".join(f'<span>Sommets égaux (stops acheteurs au-dessus)</span><span>{fp(sp(v), 1)}</span>' for v in c["egaux_hauts"])
+    liq += "".join(f'<span>Creux égaux (stops vendeurs en dessous)</span><span>{fp(sp(v), 1)}</span>' for v in c["egaux_bas"])
+    liq += "".join(f'<span>{esc(k)}</span><span>{fp(sp(v), 1)}</span>' for k, v in c["periodes"].items())
+    liq += (f'<span>Projection d\'amplitude haute (bas du jour + ATR)</span><span>{fp(sp(c["adr"]["haut"]), 1)}</span>'
+            f'<span>Projection d\'amplitude basse (haut du jour - ATR)</span><span>{fp(sp(c["adr"]["bas"]), 1)}</span>'
+            f'<span>Amplitude habituelle restante</span><span>{nb(c["adr"]["restant"], 1)} {UNITE}</span>')
     bal = "".join(f'<li class="{"up" if x["sens"] > 0 else "down"}">{"Balayage sous" if x["sens"] > 0 else "Balayage au-dessus de"} '
-                  f'{esc(x["lib"].lower())} ({nb(sp(x["niveau"]), 1)}), il y a {x["age"] + 1} bougie(s) 15 min : '
+                  f'{esc(x["lib"].lower())} ({fp(sp(x["niveau"]), 1)}), il y a {x["age"] + 1} bougie(s) 15 min : '
                   f'{"rejet haussier, liquidité vendeuse prise" if x["sens"] > 0 else "rejet baissier, liquidité acheteuse prise"}</li>'
                   for x in c["balayages"]) or '<li class="vide">Aucun balayage de niveau clé sur les 2 dernières heures.</li>'
     dec = c.get("declencheur")
@@ -6321,7 +6374,7 @@ def bloc_concepts(a):
     return (f'<section><h2>Liquidité, FVG, order blocks, OTE</h2><p class="pourquoi">Les outils de localisation des traders '
             f'intraday : ils disent où le prix a des chances de réagir et où dorment les stops. Leur efficacité n\'est pas '
             f'démontrée seule ; ils prennent de la valeur quand ils se superposent aux autres niveaux, c\'est pourquoi ils '
-            f'alimentent les zones de confluence. Prix en XAU/USD spot.</p>'
+            f'alimentent les zones de confluence. Prix en {ACTIF['spot']}.</p>'
             f'<div class="grille3"><div><h3 style="margin-top:0">Premium / discount</h3>{pd_html or "<p class=vide>n.d.</p>"}'
             f'<h3>Kill zones (heure de Paris)</h3><div class="chips">{kz}</div><p class="legende" style="margin-top:6px">'
             f'Créneaux où la liquidité et les mouvements directionnels se concentrent. '
@@ -6341,9 +6394,9 @@ def bloc_concepts(a):
 def bloc_technique(a, data):
     mt = a.get("matrice") or []
     lignes = "".join(f'<tr><td>{esc(t["nom"])}</td><td class="{({1: "up", -1: "down"}).get(t["sens"], "flat")}">'
-                     f'<b>{esc(t["label"])}</b></td><td class="num">{nb(t["ema20"] + AJUST, 1)}</td>'
-                     f'<td class="num">{nb(t["ema50"] + AJUST, 1)}</td><td class="flat">{esc(t["detail"])}</td></tr>' for t in mt)
-    mat = (f'<section><h2>Matrice de tendance</h2><p class="pourquoi">Tendance de l\'or sur quatre unités de temps : '
+                     f'<b>{esc(t["label"])}</b></td><td class="num">{fp(t["ema20"] + AJUST, 1)}</td>'
+                     f'<td class="num">{fp(t["ema50"] + AJUST, 1)}</td><td class="flat">{esc(t["detail"])}</td></tr>' for t in mt)
+    mat = (f'<section><h2>Matrice de tendance</h2><p class="pourquoi">Tendance {ACTIF['de']} sur quatre unités de temps : '
            f'position face aux moyennes mobiles exponentielles 20 et 50, et structure des derniers sommets et creux. '
            f'Un scalp dans le sens des unités 1 h et 4 h a le vent dans le dos.</p><div class="defile"><table class="cal">'
            f'<tr><th>Unité</th><th>Tendance</th><th>EMA 20</th><th>EMA 50</th><th>Détail</th></tr>{lignes}</table></div>'
@@ -6351,10 +6404,10 @@ def bloc_technique(a, data):
     pv = a.get("profil_vol")
     pv_txt = ""
     if pv:
-        pv_txt = (f'<p class="sous">Sur {pv["jours"]} séances : amplitude moyenne de {nb(pv["moy_jour"], 1)} $ par tranche de '
-                  f'15 min. ' + (f'Aujourd\'hui, l\'or bouge <b>{nb(pv["ratio"], 2)} fois</b> la normale à ces heures-là. '
+        pv_txt = (f'<p class="sous">Sur {pv["jours"]} séances : amplitude moyenne de {nb(pv["moy_jour"], 1)} {UNITE} par tranche de '
+                  f'15 min. ' + (f'Aujourd\'hui, {ACTIF["nom"]} bouge <b>{nb(pv["ratio"], 2)} fois</b> la normale à ces heures-là. '
                                  if pv.get("ratio") else "")
-                  + (f'Volatilité attendue sur les {HORIZON_H} prochaines heures : ±{nb(pv["sigma"], 0)} $ (un écart-type).'
+                  + (f'Volatilité attendue sur les {HORIZON_H} prochaines heures : ±{nb(pv["sigma"], 0)} {UNITE} (un écart-type).'
                      if pv.get("sigma") else "") + '</p>')
     vol = (f'<section><h2>Profil de volatilité par heure (Paris)</h2><p class="pourquoi">Barres grises : amplitude moyenne '
            f'de chaque tranche de 15 minutes. Barres dorées : aujourd\'hui. Trait blanc : maintenant. Pointillés rouges : '
@@ -6364,8 +6417,8 @@ def bloc_technique(a, data):
     pvs = []
     for lib, p in (("Veille", s.get("profil_veille")), ("Semaine en cours", s.get("profil_semaine"))):
         if p:
-            pvs.append(f'<span>{lib}</span><span>POC {nb(p["poc"] + AJUST, 1)} · zone de valeur {nb(p["val"] + AJUST, 1)} – '
-                       f'{nb(p["vah"] + AJUST, 1)}</span>')
+            pvs.append(f'<span>{lib}</span><span>POC {fp(p["poc"] + AJUST, 1)} · zone de valeur {fp(p["val"] + AJUST, 1)} – '
+                       f'{fp(p["vah"] + AJUST, 1)}</span>')
     prof = (f'<section><h2>Profil de volume</h2><p class="pourquoi">Le POC est le prix où il s\'est le plus échangé ; la zone '
             f'de valeur contient 70 % des échanges. Le prix a tendance à revenir vers le POC, et les bornes de la zone de '
             f'valeur servent souvent de support ou de résistance. Calcul approché à partir des bougies 15 min du future.</p>'
@@ -6376,13 +6429,13 @@ def bloc_technique(a, data):
 def bloc_reactions(a):
     r = a.get("reactions") or []
     if not r:
-        return ('<section><h2>Réactions passées de l\'or aux annonces</h2><p class="vide">Pas encore assez de données : '
+        return (f'<section><h2>Réactions passées {ACTIF["de"]} aux annonces</h2><p class="vide">Pas encore assez de données : '
                 'la base se remplit à chaque annonce publiée.</p></section>')
-    lignes = "".join(f'<tr><td>{esc(x["type"])}</td><td class="num">{x["n"]}</td><td class="num">{nb(x["med_rng"], 0)} $</td>'
-                     f'<td class="num">{nb(x["max_rng"], 0)} $</td><td class="num">{nb(x["med_mv"], 0)} $</td>'
+    lignes = "".join(f'<tr><td>{esc(x["type"])}</td><td class="num">{x["n"]}</td><td class="num">{nb(x["med_rng"], 0)} {UNITE}</td>'
+                     f'<td class="num">{nb(x["max_rng"], 0)} {UNITE}</td><td class="num">{nb(x["med_mv"], 0)} {UNITE}</td>'
                      f'<td class="num">{nb(x["retour_pct"], 0)} %</td><td class="num">{nb(x["hausse_pct"], 0)} %</td>'
                      f'<td class="flat">{esc(x["precision"])}</td></tr>' for x in r)
-    return (f'<section><h2>Réactions passées de l\'or aux annonces</h2><p class="pourquoi">Ce que l\'or a fait dans '
+    return (f'<section><h2>Réactions passées {ACTIF["de"]} aux annonces</h2><p class="pourquoi">Ce que {ACTIF["nom"]} a fait dans '
             f'l\'heure qui a suivi chaque type d\'annonce. Amplitude = écart entre le plus haut et le plus bas ; retournement = '
             f'le mouvement à 1 h va dans le sens inverse des 15 premières minutes. Sert à placer tes stops et à décider si tu '
             f'trades après l\'annonce ou si tu attends.</p><div class="defile"><table class="cal"><tr><th>Annonce</th>'
@@ -6424,8 +6477,8 @@ def bloc_plan(a):
                 f'{v["direction"]}</span> <small class="flat">conviction {esc(v["conviction"])}, horizon {HORIZON_H} h</small></h2>'
                 f'<div class="grille2"><div><p class="scen"><b>Scénario central.</b> {esc(v["central"])}</p>'
                 + (f'<p class="scen alt"><b>Scénario alternatif.</b> {esc(v["alternatif"])}</p>' if v["alternatif"] else "")
-                + (f'<p class="sous">Fourchette probable à {HORIZON_H} h : <b>{nb(v["fourchette"][0], 0)} – {nb(v["fourchette"][1], 0)}</b> '
-                   f'(deux chances sur trois), à partir du dernier relevé à {nb(v["prix"], 1)}.</p>' if v["fourchette"] else "")
+                + (f'<p class="sous">Fourchette probable à {HORIZON_H} h : <b>{fp(v["fourchette"][0], 0)} – {fp(v["fourchette"][1], 0)}</b> '
+                   f'(deux chances sur trois), à partir du dernier relevé à {fp(v["prix"], 1)}.</p>' if v["fourchette"] else "")
                 + f'<h3>Pourquoi</h3><p class="bloc-txt">{esc("Parce que " + " ; ".join(v["pourquoi"]) + ".")}</p>'
                 + "".join(f'<p class="nu">Conviction réduite : {esc(x)}.</p>' for x in v["alertes"])
                 + f'</div><div><h3 style="margin-top:0">Composantes du score</h3><div class="decomp">{comp}</div>'
@@ -6444,8 +6497,8 @@ def bloc_plan(a):
                     f'{int(x["debut"] % 1 * 60):02d} – {int(x["fin"]):02d}:{int(x["fin"] % 1 * 60):02d}</small></div>'
                     f'<p>Activité habituelle : <b>{esc(x["activite"])}</b></p><ul class="suite">'
                     f'{ann or aucune}</ul></div>')
-        niv_h = "".join(f'<li><span class="num">{nb(v_, 1)}</span> {esc(l)}</li>' for l, v_ in p["dessus"])
-        niv_b = "".join(f'<li><span class="num">{nb(v_, 1)}</span> {esc(l)}</li>' for l, v_ in p["dessous"])
+        niv_h = "".join(f'<li><span class="num">{fp(v_, 1)}</span> {esc(l)}</li>' for l, v_ in p["dessus"])
+        niv_b = "".join(f'<li><span class="num">{fp(v_, 1)}</span> {esc(l)}</li>' for l, v_ in p["dessous"])
         regles = "".join(f"<li>{esc(r)}</li>" for r in p["regles"])
         out += (f'<section><h2>{esc(p["titre"])}</h2><p class="bloc-txt">{esc(p["contexte"])}</p>'
                 f'<div class="grille3"><div><h3 style="margin-top:0">Au-dessus</h3><ul class="suite">{niv_h}</ul>'
@@ -6455,19 +6508,18 @@ def bloc_plan(a):
     if bi:
         ann = "".join(f'<tr><td class="num">{esc(x["heure"])}</td><td>{esc(x["titre"])}</td><td class="num">{esc(x["reel"])}</td>'
                       f'<td class="num">{esc(x["prev"])}</td><td class="num {classe_effet(x["mv"], 1)}">'
-                      f'{nb(x["mv"], 1, True) + " $" if x["mv"] is not None else "n.d."}</td></tr>' for x in bi["annonces"])
+                      f'{nb(x["mv"], 1, True) + " " + UNITE if x["mv"] is not None else "n.d."}</td></tr>' for x in bi["annonces"])
         out += (f'<section><h2>Bilan de la séance du {date_fr(bi["date"])}</h2>'
                 + "".join(f'<p class="bloc-txt">{esc(t)}</p>' for t in bi["phrases"])
-                + (f'<table class="cal"><tr><th>Heure</th><th>Annonce</th><th>Réel</th><th>Prévu</th><th>Or sur 1 h</th></tr>'
+                + (f'<table class="cal"><tr><th>Heure</th><th>Annonce</th><th>Réel</th><th>Prévu</th><th>{ACTIF["court"]} sur 1 h</th></tr>'
                    f'{ann}</table>' if ann else "") + '</section>')
     if se:
         jours = ""
         for d, evs in se["jours"]:
             li = "".join(f'<li><span class="num">{_hm(t)}</span> {esc(x)}</li>' for t, x in sorted(evs, key=lambda z: z[0]))
             jours += f'<div class="fiche"><div class="t">{date_fr(d)}</div><ul class="suite">{li}</ul></div>'
-        out += (f'<section><h2>Les jours à venir</h2><p class="pourquoi">Annonces à fort impact, décision de la Fed et '
-                f'adjudications du Trésor. Plus haut et plus bas de la semaine : {nb((se["haut_sem"] or 0) + AJUST, 1) if se["haut_sem"] else "n.d."} '
-                f'et {nb((se["bas_sem"] or 0) + AJUST, 1) if se["bas_sem"] else "n.d."}.</p>'
+        out += (f'<section><h2>Les jours à venir</h2><p class="pourquoi">{ACTIF["semaine"]} Plus haut et plus bas de la semaine : {fp((se["haut_sem"] or 0) + AJUST, 1) if se["haut_sem"] else "n.d."} '
+                f'et {fp((se["bas_sem"] or 0) + AJUST, 1) if se["bas_sem"] else "n.d."}.</p>'
                 f'<div class="fiches">{jours or "<p class=vide>Rien de majeur au calendrier.</p>"}</div></section>')
     return out
 
@@ -6483,8 +6535,8 @@ def bloc_suivi(a):
             continue
         d = datetime.fromisoformat(p["ts"])
         lignes += (f'<tr><td class="num">{date_fr(d, True)}</td><td>{({1: "Haussière", -1: "Baissière"}).get(p["sens"], "Neutre")} '
-                   f'<span class="flat">({esc(p["conv"])})</span></td><td class="num">{nb(p["prix"] + AJUST, 1)}</td>'
-                   f'<td class="num {classe_effet(p.get("mv"), 1)}">{nb(p.get("mv"), 1, True)} $</td>'
+                   f'<span class="flat">({esc(p["conv"])})</span></td><td class="num">{fp(p["prix"] + AJUST, 1)}</td>'
+                   f'<td class="num {classe_effet(p.get("mv"), 1)}">{nb(p.get("mv"), 1, True)} {UNITE}</td>'
                    f'<td class="{"up" if p["ok"] else "down"}">{"juste" if p["ok"] else "fausse"}</td></tr>')
     taux = (f'<b>{nb(st["taux_dir"], 0)} %</b> de bonnes directions sur {st["n_dir"]} prévisions haussières ou baissières'
             if st["taux_dir"] is not None else "pas encore de prévision directionnelle évaluée")
@@ -6534,7 +6586,7 @@ def bloc_trader(a):
     der_html = ""
     if der and der["date"] >= maintenant() - timedelta(hours=3) and der["reac"].get("or_60") is not None:
         der_html = (f'<p class="pied">Dernière annonce : <b>{esc(der["nom"])}</b> {esc(der["reel"])} contre {esc(der["prevision"])} '
-                    f'prévu · or {nb(der["reac"].get("or_usd_60"), 1, True)} $ en 1 h. {esc(der["interpretation"])}</p>')
+                    f'prévu · {ACTIF["mini"]} {nb(der["reac"].get("or_usd_60"), 1, True)} {UNITE} en 1 h. {esc(der["interpretation"])}</p>')
     sens = tr.get("sens", 0)
     t_ = a.get("technique") or {}
     bt = t_.get("sens", 0) if t_ else 0
@@ -6552,7 +6604,7 @@ def bloc_trader(a):
             + tuile("Action", "…", "", "warn large", "tr-action")
             + '</div><div class="tr-l2">'
             + tuile("Setup", esc(tr.get("setup", "n.d.")), "playbook technico-fondamental", COUL.get(sens, "warn") if sens else "warn")
-            + tuile("Intermarket", im_txt, (f'Gold Relative Strength {nb(grs["score"], 0, True)}' if grs else ""), im_cls)
+            + tuile("Intermarket", im_txt, (f'{ACTIF["rs"]} {nb(grs["score"], 0, True)}' if grs else ""), im_cls)
             + tuile("Prochaine news", esc(fiche_annonce(ev, a)["nom"]) if ev else "aucune", "", "", "tr-news")
             + f'</div>{der_html}</section>')
 
@@ -6650,12 +6702,12 @@ def bloc_barre(a):
     horl = "".join(f'<div><span class="k">{v}</span><b id="{i}">--:--</b></div>'
                    for i, v in (("h-paris", "Paris"), ("h-londres", "Londres"), ("h-ny", "New York"), ("h-tokyo", "Tokyo")))
     return (f'<header class="barre"><div class="ligne">'
-            f'<div class="logo"><i></i>TERMINAL OR<small>v{VERSION}</small></div>'
-            f'<div class="prix-live"><span class="k">XAU/USD <span class="fr live" id="px-badge">LIVE</span></span>'
-            f'<b id="px-live">{nb((a.get("trader") or {}).get("ref") or ((a.get("seance") or {}).get("prix", 0) + AJUST), 2)}</b>'
+            f'<div class="logo"><i></i>{esc(ACTIF["titre"])}<small>v{VERSION}</small></div>{nav_pages()}'
+            f'<div class="prix-live"><span class="k">{esc(ACTIF["sym"])} <span class="fr live" id="px-badge">LIVE</span></span>'
+            f'<b id="px-live">{fp((a.get("trader") or {}).get("ref") or ((a.get("seance") or {}).get("prix", 0) + AJUST), 2)}</b>'
             f'<small id="px-age">référence de l\'analyse</small></div>'
             f'<div class="horloges">{horl}</div>'
-            f'<div class="marche"><span class="k">Marché de l\'or</span><b><span class="led" id="led-marche"></span>'
+            f'<div class="marche"><span class="k">{esc(ACTIF["marche"])}</span><b><span class="led" id="led-marche"></span>'
             f'<span id="txt-marche">...</span></b></div>'
             f'<div class="fraicheur"><span class="k">Analyses</span><b id="maj" data-maj="{maj.isoformat()}">'
             f'{date_fr(maj, True)}</b></div>'
@@ -6670,7 +6722,7 @@ def bloc_barre(a):
 
 def bloc_reglages():
     champs = [("capital", "Taille du compte ($)", "1000"), ("risque_pct", "Risque par trade (% du compte)", "0.1"),
-              ("spread", "Spread moyen de ton broker sur XAU/USD ($)", "0.05")]
+              ("spread", ACTIF["reg_spread"], "0.05")]
     lignes = "".join(f'<label>{esc(lib)}<input type="number" step="{pas}" min="0" data-cle="{cle}" '
                      f'placeholder="{COMPTE[cle]}"></label>' for cle, lib, pas in champs)
     return (f'<dialog id="reglages" aria-label="Réglages"><form method="dialog"><h2>Taille de position</h2>'
@@ -6782,19 +6834,19 @@ def bloc_niveaux_compact(a):
     choisis = [n for n in s["niveaux"] if abs(n["dist"]) <= 3 * (s["atr"] or 1e9)]
     for n in choisis:
         if not fait and n["niveau"] < s["prix"]:
-            lignes += (f'<tr class="ici"><td>Dernier relevé</td><td class="num">{nb(s["prix"] + AJUST, 1)}</td>'
+            lignes += (f'<tr class="ici"><td>Dernier relevé</td><td class="num">{fp(s["prix"] + AJUST, 1)}</td>'
                        f'<td></td></tr>')
             fait = True
-        lignes += (f'<tr><td{" class=liq" if n.get("carnet") else ""}>{esc(n["lib"])}</td><td class="num">{nb(n["cfd"], 1)}</td>'
+        lignes += (f'<tr><td{" class=liq" if n.get("carnet") else ""}>{esc(n["lib"])}</td><td class="num">{fp(n["cfd"], 1)}</td>'
                    f'<td class="num dist flat" data-v="{n["cfd"]:.2f}">{nb(n["dist"], 1, True)}</td></tr>')
     if not fait:
-        lignes += f'<tr class="ici"><td>Dernier relevé</td><td class="num">{nb(s["prix"] + AJUST, 1)}</td><td></td></tr>'
+        lignes += f'<tr class="ici"><td>Dernier relevé</td><td class="num">{fp(s["prix"] + AJUST, 1)}</td><td></td></tr>'
     vw = s.get("vwap")
     pos = ("au-dessus du VWAP : acheteurs aux commandes" if s["prix"] > vw else "sous le VWAP : vendeurs aux commandes") if vw else ""
-    ses = " · ".join(f'{x["nom"]} <b>{nb(x["haut"] + AJUST, 1)}</b>/<b>{nb(x["bas"] + AJUST, 1)}</b>'
+    ses = " · ".join(f'{x["nom"]} <b>{fp(x["haut"] + AJUST, 1)}</b>/<b>{fp(x["bas"] + AJUST, 1)}</b>'
                      for x in s["seances"] if x["haut"] is not None)
     return (f'<table class="niv-c">{lignes}</table>'
-            f'<p class="pied">ATR 14 j <b>{nb(s["atr"], 1)} $</b> · consommé <b>{nb(s["pct_atr"], 0)} %</b>'
+            f'<p class="pied">ATR 14 j <b>{nb(s["atr"], 1)} {UNITE}</b> · consommé <b>{nb(s["pct_atr"], 0)} %</b>'
             f'{" · prix " + esc(pos) if pos else ""}</p><p class="pied">{ses}</p>'
             f'<p class="pied"><a href="#analyse" data-aller="technique">Graphique des niveaux et détail des séances</a></p>')
 
@@ -6827,7 +6879,7 @@ def bloc_cockpit(a, y, f):
         "autosize": True, "symbol": TV_OR, "interval": "15", "timezone": FUSEAU, "theme": "dark", "style": "1",
         "locale": "fr", "allow_symbol_change": True, "calendar": False, "hide_volume": True,
         "backgroundColor": "#121b23", "gridColor": "rgba(34,50,66,0.45)", "support_host": "https://www.tradingview.com"},
-        "Graphique XAU/USD en direct (TradingView)")
+        f"Graphique {ACTIF['sym']} en direct (TradingView)")
     minis = "".join(
         f'<div class="panel">{tv("embed-widget-mini-symbol-overview.js", {"symbol": sym, "width": "100%", "height": "100%", "locale": "fr", "dateRange": "1D", "colorTheme": "dark", "isTransparent": True, "autosize": True, "largeChartUrl": "", "noTimeScale": True}, lib)}</div>'
         for sym, lib in TV_MINIS)
@@ -6835,7 +6887,7 @@ def bloc_cockpit(a, y, f):
                                            "displayMode": "compact", "width": "100%", "height": "100%",
                                            "locale": TV_LANGUE_ACTUS}, "Fil d'actualité en direct (TradingView)")
     return (f'<main class="cockpit">'
-            f'<div class="col col-g"><div class="panel" id="p-graph"><div class="ph"><span class="k">XAU/USD en direct</span>'
+            f'<div class="col col-g"><div class="panel" id="p-graph"><div class="ph"><span class="k">{esc(ACTIF["sym"])} en direct</span>'
             f'<small>{fraicheur("live")} {esc(TV_OR)} · TradingView</small></div><div class="pb nopad">{chart}</div></div>'
             f'<div class="minis analyst">{minis}</div></div>'
             f'<div class="col col-c"><div class="panel analyst" id="p-vue"><div class="ph"><span class="k">Où va le marché</span>'
@@ -6848,7 +6900,7 @@ def bloc_cockpit(a, y, f):
             f'<div class="pb"><div id="evt-carte" data-cle="x"><p class="vide">Chargement...</p></div>'
             f'<div class="k" style="margin-top:10px">Ensuite</div><ul class="suite" id="evt-suite"></ul></div></div>'
             f'<div class="panel analyst" id="p-niv"><div class="ph"><span class="k">Niveaux de séance</span>'
-            f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))} {"XAU/USD spot" if a.get("base") is not None else "future COMEX"}, écart au prix</small></div>'
+            f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))} {esc(ACTIF["spot"]) if a.get("base") is not None else esc(ACTIF["future"])}, écart au prix</small></div>'
             f'<div class="pb" data-zone="niv">{bloc_niveaux_compact(a)}</div></div>'
             f'<div class="panel analyst" id="p-news"><div class="ph"><span class="k">Fil d\'actualité en direct</span>'
             f'<small>{fraicheur("live")} TradingView</small></div><div class="pb nopad">{news}</div></div></div></main>')
@@ -6858,9 +6910,9 @@ ONGLETS = [("synthese", "Synthèse"), ("fondamental", "Fondamental"), ("techniqu
            ("annonces", "Annonces"), ("actus", "Actualités"), ("suivi", "Suivi et méthode")]
 
 
-def bloc_onglets(data, a, ia):
+def contenus_onglets(data, a, ia):
     y, f = data["yahoo"], data["fred"]
-    contenus = {
+    return {
         # 1. Le lien entre les deux : ce qu'il faut faire maintenant
         "synthese": (bloc_synthese_tech(a) + bloc_intermarket(a) + bloc_regimes(a, compact=True) + bloc_plan(a) +
                      f'<section>{bloc_routine()}</section>'),
@@ -6874,6 +6926,10 @@ def bloc_onglets(data, a, ia):
         "actus": bloc_actus(data.get("news"), data.get("fed_off"), a),
         "suivi": bloc_suivi(a) + bloc_methode(),
     }
+
+
+def bloc_onglets(data, a, ia):
+    contenus = contenus_onglets(data, a, ia)
     nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false">{esc(t)}<kbd>{(k + 1) % 10}</kbd></button>'
                   for k, (i, t) in enumerate(ONGLETS))
     ta_tv = tv("embed-widget-technical-analysis.js", {"interval": "15m", "width": "100%", "height": "100%",
@@ -6881,7 +6937,7 @@ def bloc_onglets(data, a, ia):
                                                         "displayMode": "multiple", "locale": "fr", "colorTheme": "dark"},
                "Consensus technique en direct (TradingView)")
     cal_tv = tv("embed-widget-events.js", {"colorTheme": "dark", "isTransparent": True, "width": "100%", "height": "100%",
-                                           "locale": "fr", "importanceFilter": "0,1", "countryFilter": "us"},
+                                           "locale": "fr", "importanceFilter": "0,1", "countryFilter": ACTIF["tv_pays"]},
                 "Calendrier économique en direct (TradingView)")
     panneaux = ""
     for i, t in ONGLETS:
@@ -6903,7 +6959,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
     y, f = data["yahoo"], data["fred"]
     refresh = f'<meta http-equiv="refresh" content="{int(watch_min * 60) + 60}">' if (watch_min and not site) else ""
     cfg = json.dumps({"alertes": ALERTES_MIN, "zone": 30, "refresh": RAFRAICHISSEMENT_MIN,
-                      "site": bool(site), "seances": [[n, d, fn] for n, d, fn in SEANCES]})
+                      "site": bool(site), "seances": [[n, d, fn] for n, d, fn in SEANCES], **ACTIF["cfg_js"]},
+                     ensure_ascii=False)
     ctx_json = json.dumps(contexte_controle(a), ensure_ascii=False).replace("</", "<\\/")
     corps = (f'{bloc_barre(a)}{bloc_reglages()}{bloc_bandeau_tv()}{bloc_trader(a)}{bloc_strip(a, y, f)}{bloc_cockpit(a, y, f)}'
              f'{bloc_onglets(data, a, ia)}'
@@ -6913,7 +6970,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
              f'{esc(brief)}</textarea></div>')
     return (f'<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">{refresh}'
-            f'<title>Or {nb(a["or"]["prix"], 0)} · {a["biais"]["verdict"]} · Terminal or</title>'
+            f'<title>{esc(ACTIF["court"])} {fp(a["or"]["prix"], 0)} · {a["biais"]["verdict"]} · {esc(ACTIF["page"])}</title>'
             f'<link rel="preconnect" href="https://fonts.googleapis.com">'
             f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
             f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
@@ -7010,7 +7067,7 @@ def construire_brief(data, a):
                 morceaux.append(f"prix en {av_['pd']['zone']} ({nb(av_['pd']['pos'], 0)} % du range 1 h)")
             for nom, fb in av_["fibo"].items():
                 if fb:
-                    morceaux.append(f"OTE {nom} {nb(fb['ote'][0] + AJUST, 1)}-{nb(fb['ote'][1] + AJUST, 1)}")
+                    morceaux.append(f"OTE {nom} {fp(fb['ote'][0] + AJUST, 1)}-{fp(fb['ote'][1] + AJUST, 1)}")
             if av_["balayages"]:
                 x = av_["balayages"][0]
                 morceaux.append(f"balayage récent {'sous' if x['sens'] > 0 else 'au-dessus de'} {x['lib'].lower()}")
@@ -7345,6 +7402,22 @@ def generer(demo=False, watch_min=None, site_dir=None):
     return a
 
 
+def page_eurusd(site, demo=False):
+    """Génère la page EUR/USD (terminal_eurusd.py, s'il est présent) dans site/eurusd, dans un processus séparé."""
+    script = DOSSIER / "terminal_eurusd.py"
+    if not script.exists():
+        return
+    import subprocess
+    cmd = [sys.executable, str(script), "--site", str(site / "eurusd")] + (["--demo"] if demo else [])
+    print("Page EUR/USD...")
+    try:
+        r = subprocess.run(cmd, timeout=600)
+        if r.returncode:
+            print(f"Page EUR/USD non publiée (code {r.returncode}) : la page de l'or reste en ligne.")
+    except Exception as e:
+        print(f"Page EUR/USD non publiée ({e}) : la page de l'or reste en ligne.")
+
+
 def main():
     if os.name == "nt":
         os.system("")  # active les couleurs dans le terminal Windows
@@ -7365,6 +7438,7 @@ def main():
         print(f"Site généré : {Path(args.site).resolve() / 'index.html'}")
         for nom, st in sorted(STATUT.items()):
             print(f"  {nom} : {'ok' if st['ok'] else 'EN PANNE'} {st['message']}")
+        page_eurusd(Path(args.site), args.demo)
         return
 
     print("Collecte des données en cours...")
