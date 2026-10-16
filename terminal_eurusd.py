@@ -1061,6 +1061,7 @@ def analyser_eur(data):
     a["regimes"] = regimes6_eur(a, data)
     a["reactions_evt"] = reactions_evt_eur(a, data)
     a["trader"] = T.plan_trader(a, data)
+    a["setup_a"] = T.setup_a(a, data)
     a["plan"] = T.plan_du_jour(a, data)
     a["bilan"] = T.bilan_seance(a, data)
     a["semaine"] = semaine_eur(a, data)

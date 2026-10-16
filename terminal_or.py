@@ -2209,8 +2209,17 @@ def suivre_previsions(hist, a, data):
     if ouvert and vue.get("sigma"):
         der_ts = datetime.fromisoformat(prev[-1]["ts"]) if prev else None
         if der_ts is None or (dernier.to_pydatetime() - der_ts).total_seconds() >= 55 * 60:
-            prev.append({"ts": dernier.isoformat(), "prix": float(b["close"].iloc[-1]), "sens": vue["sens"],
-                         "conv": vue["conviction"], "score": round(vue["score"], 3), "sigma": round(vue["sigma"], 2)})
+            p_ = {"ts": dernier.isoformat(), "prix": float(b["close"].iloc[-1]), "sens": vue["sens"],
+                  "conv": vue["conviction"], "score": round(vue["score"], 3), "sigma": round(vue["sigma"], 2)}
+            # Suivi séparé : direction donnée par la technique seule et par le fondamental seul (tels qu'affichés)
+            t_ = a.get("technique")
+            if t_:
+                p_["tech"], p_["tsens"] = round(t_["score"], 3), t_["sens"]
+            b_ = a.get("biais") or {}
+            if b_.get("n"):
+                p_["fond"] = b_["total"]
+                p_["fsens"] = {"Haussier": 1, "Baissier": -1}.get(b_.get("verdict"), 0)
+            prev.append(p_)
     for p in prev:
         if "res" in p:
             continue
@@ -2229,6 +2238,28 @@ def suivre_previsions(hist, a, data):
         p["res"] = "ok" if p["ok"] else "ko"
 
 
+def stats_sources(ev):
+    """Qui a raison : la technique seule, le fondamental seul, et les deux quand ils sont d'accord ou se contredisent."""
+    ev = [p for p in ev if "tsens" in p and "fsens" in p and p.get("mv") is not None]
+
+    def ligne(nom, liste, sens_de):
+        liste = [(p, sens_de(p)) for p in liste if sens_de(p)]
+        if not liste:
+            return {"nom": nom, "n": 0, "taux": None, "gain": None}
+        bons = sum(1 for p, sv in liste if p["mv"] * sv > 0)
+        return {"nom": nom, "n": len(liste), "taux": bons / len(liste) * 100,
+                "gain": sum(p["mv"] * sv for p, sv in liste) / len(liste)}
+
+    accord = [p for p in ev if p["tsens"] and p["tsens"] == p["fsens"]]
+    desaccord = [p for p in ev if p["tsens"] and p["fsens"] and p["tsens"] != p["fsens"]]
+    return {"n": len(ev),
+            "lignes": [ligne("Technique seule", ev, lambda p: p["tsens"]),
+                       ligne("Fondamental seul", ev, lambda p: p["fsens"]),
+                       ligne("Les deux d'accord", accord, lambda p: p["tsens"]),
+                       ligne("En désaccord : si on suit la technique", desaccord, lambda p: p["tsens"]),
+                       ligne("En désaccord : si on suit le fondamental", desaccord, lambda p: p["fsens"])]}
+
+
 def stats_previsions(hist, jours=30):
     lim = maintenant() - timedelta(days=jours)
     ev = [p for p in hist.get("previsions", []) if p.get("res") in ("ok", "ko")
@@ -2242,6 +2273,7 @@ def stats_previsions(hist, jours=30):
         sub = [p for p in dirs if p["conv"] == cv]
         if sub:
             res["par_conv"].append((cv, len(sub), sum(p["ok"] for p in sub) / len(sub) * 100))
+    res["sources"] = stats_sources(ev)
     neutres = [p for p in ev if not p["sens"]]
     res["n_neutre"] = len(neutres)
     res["taux_neutre"] = (sum(p["ok"] for p in neutres) / len(neutres) * 100) if neutres else None
@@ -3143,8 +3175,18 @@ def playbook(a, data):
     etapes, zones_entree, invalid, cibles = [], [], None, []
     fmt_z = lambda z: f"{fp(z['bas'], 1)}–{fp(z['haut'], 1)} ({', '.join(z['elements'][:3])})"
     pdz = ((t.get("avances") or {}).get("pd") or {})
+    # Les pros achètent en discount et vendent en premium : les zones d'entrée sont prises du bon côté du milieu du
+    # range 1 h (si ce côté en contient), pas simplement les plus proches du prix.
+    mil = (pdz["milieu"] + AJUST) if pdz.get("milieu") is not None else None
+    if mil is not None:
+        bons_dessous = [z for z in dessous if z["centre"] <= mil]
+        bons_dessus = [z for z in dessus if z["centre"] >= mil]
+        dessous_e = bons_dessous or dessous
+        dessus_e = bons_dessus or dessus
+    else:
+        dessous_e, dessus_e = dessous, dessus
     if sens > 0:
-        zones_entree = dessous[:2]
+        zones_entree = dessous_e[:2]
         cibles = dessus[:2]
         invalid = (s1["creux"] + AJUST) if s1 else None
         etapes = ["Attendre un repli vers " + (fmt_z(zones_entree[0]) if zones_entree else "une zone de confluence") + ".",
@@ -3154,9 +3196,9 @@ def playbook(a, data):
                   "Invalidation : clôture 1 h sous le dernier creux 1 h" + (f" ({fp(invalid, 1)})" if invalid else "") + "."]
         if pdz.get("zone") == "premium":
             etapes.insert(1, f"Le prix est en premium ({nb(pdz['pos'], 0)} % du range 1 h) : attendre son retour sous le "
-                             f"milieu du range avant d'acheter.")
+                             f"milieu du range ({fp(mil, 1)}) avant d'acheter.")
     elif sens < 0:
-        zones_entree = dessus[:2]
+        zones_entree = dessus_e[:2]
         cibles = dessous[:2]
         invalid = (s1["sommet"] + AJUST) if s1 else None
         etapes = ["Attendre un rebond vers " + (fmt_z(zones_entree[0]) if zones_entree else "une zone de confluence") + ".",
@@ -3166,7 +3208,7 @@ def playbook(a, data):
                   "Invalidation : clôture 1 h au-dessus du dernier sommet 1 h" + (f" ({fp(invalid, 1)})" if invalid else "") + "."]
         if pdz.get("zone") == "discount":
             etapes.insert(1, f"Le prix est en discount ({nb(pdz['pos'], 0)} % du range 1 h) : attendre son retour au-dessus "
-                             f"du milieu du range avant de vendre.")
+                             f"du milieu du range ({fp(mil, 1)}) avant de vendre.")
     elif cas == "range":
         bas_z = dessous[0] if dessous else None
         haut_z = dessus[0] if dessus else None
@@ -3429,6 +3471,105 @@ def moteur_reactions(a, data):
                     "reel": e["reel"], "surprise": surprise, "sens_surprise": sens_s, "reac": reac, "interpretation": interp})
     out.sort(key=lambda x: x["date"], reverse=True)
     return out[:8]
+
+
+# ---------------------------------------------------------------------------
+# SETUP A : BALAYAGE DE LIQUIDITÉ PUIS RETOURNEMENT (la stratégie de Samuel, version 1 à tester)
+# ---------------------------------------------------------------------------
+
+FENETRES_SETUP_A = [(8.0, 11.0), (14.5, 17.0)]   # heure de Paris : ouverture de Londres et de New York
+ASIE_SETUP_A = (0.0, 8.0)                        # range asiatique de la règle : 0 h - 8 h, heure de Paris
+NEWS_SETUP_A = 30                                # minutes sans trade avant et après une annonce forte
+
+
+def dernier_bos(df, swings, k=2):
+    """Sens de la dernière cassure de structure (BOS ou CHoCH) : clôture au-delà du dernier sommet ou creux confirmé."""
+    if df is None or not swings or len(df) < 10:
+        return None
+    idx = df.index
+    pos = {x["t"]: idx.get_indexer([x["t"]], method="nearest")[0] for x in swings}
+    conf = sorted(((pos[x["t"]] + k, x) for x in swings), key=lambda c: c[0])
+    clo = df["close"].to_numpy()
+    der_h = der_l = None
+    evt, j = None, 0
+    for i in range(int(conf[0][0]) if conf else 0, len(df)):
+        while j < len(conf) and conf[j][0] <= i:
+            x = conf[j][1]
+            if x["type"] == "H":
+                der_h = dict(x, casse=False)
+            else:
+                der_l = dict(x, casse=False)
+            j += 1
+        if der_h and not der_h["casse"] and clo[i] > der_h["prix"]:
+            der_h["casse"] = True
+            evt = {"sens": 1, "niveau": der_h["prix"], "t": idx[i]}
+        if der_l and not der_l["casse"] and clo[i] < der_l["prix"]:
+            der_l["casse"] = True
+            evt = {"sens": -1, "niveau": der_l["prix"], "t": idx[i]}
+    return evt
+
+
+def setup_a(a, data):
+    """Ce que le terminal peut vérifier du Setup A toutes les 15 minutes : biais H4, alignement H1, liquidités à balayer,
+    balayage récent, cibles et stop maximal pour 2R. Horaires et annonces sont vérifiés en direct dans la page."""
+    t, s = a.get("technique"), a.get("seance")
+    intra = data.get("intraday")
+    if not t or not s or not intra or intra.get("barres") is None:
+        return None
+    b = intra["barres"]
+    st = {x["nom"]: x for x in t["structure"]}
+    h1, h4 = t.get("_h1"), t.get("_h4")
+    bos4 = dernier_bos(h4, (st.get("4 heures") or {}).get("swings"), PARAMS_STRUCTURE["4 heures"][0])
+    bos1 = dernier_bos(h1, (st.get("1 heure") or {}).get("swings"), PARAMS_STRUCTURE["1 heure"][0])
+    d4 = bos4["sens"] if bos4 else 0
+    d1 = bos1["sens"] if bos1 else 0
+    d = d4 if d4 and d4 == d1 else 0
+    sp = lambda v: None if v is None else v + AJUST
+    px = s["prix"]
+    atr15 = float((b["high"] - b["low"]).tail(14).mean()) if len(b) >= 14 else None
+    atr_h1 = float((h1["high"] - h1["low"]).tail(14).mean()) if h1 is not None and len(h1) >= 14 else None
+    # range asiatique de la règle (0 h - 8 h, heure de Paris), sur la séance du jour
+    bj = b[b.index.date == s["date"]]
+    hr = bj.index.hour + bj.index.minute / 60 if len(bj) else []
+    asie = bj[(hr >= ASIE_SETUP_A[0]) & (hr < ASIE_SETUP_A[1])] if len(bj) else bj
+    av = t.get("avances") or {}
+    s15 = st.get("15 min")
+    bas_, hauts_ = [], []
+    if len(asie) >= 4:
+        bas_.append(("Bas du range asiatique", float(asie["low"].min())))
+        hauts_.append(("Haut du range asiatique", float(asie["high"].max())))
+    if s.get("pdl") is not None:
+        bas_.append(("Plus bas de la veille", s["pdl"]))
+    if s.get("pdh") is not None:
+        hauts_.append(("Plus haut de la veille", s["pdh"]))
+    bas_ += [("Creux égaux", v) for v in av.get("egaux_bas", [])]
+    hauts_ += [("Sommets égaux", v) for v in av.get("egaux_hauts", [])]
+    if s15:
+        hauts_.append(("Dernier sommet 15 min", s15["sommet"]))
+        bas_.append(("Dernier creux 15 min", s15["creux"]))
+    # balayage récent (8 dernières bougies 15 min) d'une liquidité dans le sens du biais
+    niveaux = [(l, v, "L") for l, v in bas_ if not l.startswith("Dernier")] + \
+              [(l, v, "H") for l, v in hauts_ if not l.startswith("Dernier")]
+    bal = [x for x in balayages(b, niveaux, n=8) if d and x["sens"] == d]
+    if d > 0:
+        a_balayer = sorted([(l, v) for l, v in bas_ if v < px and not l.startswith("Dernier")], key=lambda x: -x[1])
+        cibles = sorted([(l, v) for l, v in hauts_ if v > px], key=lambda x: x[1])
+    elif d < 0:
+        a_balayer = sorted([(l, v) for l, v in hauts_ if v > px and not l.startswith("Dernier")], key=lambda x: x[1])
+        cibles = sorted([(l, v) for l, v in bas_ if v < px], key=lambda x: -x[1])
+    else:
+        a_balayer, cibles = [], []
+    ref = bal[0]["niveau"] if bal else (a_balayer[0][1] if a_balayer else None)
+    dist = abs(cibles[0][1] - ref) if (cibles and ref is not None) else None
+    stop_max = dist / 2 if dist else None
+    if stop_max is not None and atr_h1:
+        stop_max = min(stop_max, atr_h1)
+    marge = 0.3 * atr15 / math.sqrt(3) if atr15 else None   # 0,3 ATR M5, ATR M5 estimé depuis l'ATR 15 min
+    return {"d": d, "d4": d4, "d1": d1, "bos4": bos4, "bos1": bos1,
+            "a_balayer": [(l, sp(v), sp(v) - sp(px)) for l, v in a_balayer[:3]],
+            "cibles": [(l, sp(v), sp(v) - sp(px)) for l, v in cibles[:3]],
+            "balayage": ({"lib": bal[0]["lib"], "niveau": sp(bal[0]["niveau"]), "t": bal[0]["t"]} if bal else None),
+            "dist": dist, "stop_max": stop_max, "atr_h1": atr_h1, "marge": marge}
 
 
 def plan_trader(a, data):
@@ -3770,6 +3911,7 @@ def analyser(data):
     a["regimes"] = regimes_v2(a, data)
     a["reactions_evt"] = moteur_reactions(a, data)
     a["trader"] = plan_trader(a, data)
+    a["setup_a"] = setup_a(a, data)
     a["plan"] = plan_du_jour(a, data)
     a["bilan"] = bilan_seance(a, data)
     a["semaine"] = semaine_a_venir(a, data)
@@ -4307,8 +4449,19 @@ body.zone-news .prochaine b{color:var(--amber)}
 #p-graph{flex:none;height:calc(100vh - 330px);min-height:520px}
 .minis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;height:118px;flex:none}
 .minis .panel{overflow:hidden}
-#p-vue,#p-ctl,#p-evt,#p-niv{flex:none}
-#p-vue .pb,#p-ctl .pb,#p-evt .pb,#p-niv .pb{overflow:visible}
+#p-vue,#p-ctl,#p-evt,#p-niv,#p-setup{flex:none}
+#p-vue .pb,#p-ctl .pb,#p-evt .pb,#p-niv .pb,#p-setup .pb{overflow:visible}
+.sa-statut{font-family:var(--cond);font-size:21px;font-weight:600;line-height:1.2;margin-bottom:8px}
+.sa-liste{list-style:none;margin:0 0 8px;padding:0}
+.sa-liste li{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:8px;align-items:baseline;padding:4px 0;
+  border-bottom:1px solid rgba(34,50,66,.7);font-size:14px}
+.sa-liste li>span:last-child{text-align:right}
+.sa-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:6px 0}
+.sa-cols .kv{font-size:13.5px}
+.kv.regles{grid-template-columns:110px minmax(0,1fr);max-width:900px}.kv.regles span:nth-child(odd){font-weight:600}
+@media (max-width:720px){.sa-cols{grid-template-columns:minmax(0,1fr)}
+  .sa-liste li{grid-template-columns:18px minmax(0,1fr)}.sa-liste li>span:last-child{grid-column:2;text-align:left}
+  .kv.regles{grid-template-columns:minmax(0,1fr)}.kv.regles span:nth-child(even){margin-bottom:6px}}
 #p-news{flex:none;height:460px}
 .tv{position:relative;width:100%;height:100%}
 .tv::before{content:attr(data-lib);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
@@ -4742,8 +4895,40 @@ function rendreCarte(){
 var faites = {};
 try { faites = JSON.parse(lire('alertes-or', '{}')) || {}; } catch(e){ faites = {}; }
 function marquer(cle){ faites[cle] = Date.now(); ecrire('alertes-or', JSON.stringify(faites)); }
+/* Setup A : horaires et annonces vérifiés en direct, statut combiné avec ce que le robot a calculé */
+var SA = null, SA_brut = null;
+function lireSA(){  /* relu à chaque tour : le panneau est remplacé quand une nouvelle analyse arrive */
+  var el = document.getElementById('setup-a'), brut = el ? el.getAttribute('data-cfg') : null;
+  if (brut !== SA_brut){ SA_brut = brut; try { SA = brut ? JSON.parse(brut) : null; } catch(e){ SA = null; } }
+}
+var FMT_SA = new Intl.DateTimeFormat('en-GB', {timeZone:'Europe/Paris', hour:'2-digit', minute:'2-digit', weekday:'short', hour12:false});
+function majSetupA(){
+  lireSA(); if (!SA) return;
+  var parts = {}; FMT_SA.formatToParts(new Date()).forEach(function(p){ parts[p.type] = p.value; });
+  var h = (+parts.hour % 24) + (+parts.minute) / 60, ouvre = ['Sat', 'Sun'].indexOf(parts.weekday) < 0;
+  var dans = ouvre && SA.fen.some(function(f){ return h >= f[0] && h < f[1]; });
+  var proch = null;
+  if (ouvre) SA.fen.forEach(function(f){ if (!proch && h < f[0]) proch = f[0]; });
+  var hm = function(x){ return Math.floor(x) + ' h ' + (x % 1 ? pad(Math.round(x % 1 * 60)) : ''); };
+  var now = Date.now(), lim = SA.news * 60000;
+  var ev = (typeof EV !== 'undefined' ? EV : []).filter(function(e){ return Math.abs(e.ts - now) <= lim; })[0];
+  var li = function(id, ok, txt){ var el = document.getElementById(id); if (!el) return;
+    el.children[0].className = 'ic ' + (ok ? 'up' : 'down'); el.children[0].textContent = ok ? '✓' : '✗'; el.children[2].textContent = txt; };
+  li('sa-h', dans, dans ? 'dans la fenêtre' : (proch ? 'prochaine fenêtre à ' + hm(proch) : 'fermé pour aujourd’hui'));
+  li('sa-n', !ev, ev ? esc2(ev.nom) + (ev.ts > now ? ' dans ' + Math.ceil((ev.ts - now) / 60000) + ' min' : ' il y a ' + Math.floor((now - ev.ts) / 60000) + ' min') : 'rien à ±' + SA.news + ' min');
+  var cls = 'flat', txt;
+  if (!SA.d) { txt = 'Pas de trade : H4 et H1 ne sont pas alignés'; }
+  else if (!dans) { txt = 'Hors horaires : ' + (proch ? 'reviens à ' + hm(proch) : 'plus de fenêtre aujourd’hui'); }
+  else if (ev) { txt = 'Annonce forte proche : on attend'; cls = 'warn'; }
+  else if (SA.bal) { txt = 'Balayage fait : guette le MSS en M5 pour des ' + SA.mot; cls = SA.d > 0 ? 'up' : 'down'; }
+  else { txt = 'À surveiller : ' + SA.mot + ' après un balayage' + (SA.liq ? ' (' + SA.liq + ')' : ''); cls = SA.d > 0 ? 'up' : 'down'; }
+  var st = document.getElementById('sa-statut'); if (st){ st.textContent = txt; st.className = 'sa-statut ' + cls; }
+  var tu = document.getElementById('tr-setupa');
+  if (tu){ tu.className = 'tu large ' + cls; tu.querySelector('b').textContent = txt.split(' : ')[0]; tu.querySelector('small').textContent = txt.split(' : ')[1] || 'balayage puis retournement'; }
+}
+function esc2(x){ return String(x == null ? '' : x); }
 function tick(){
-  horloges(); age(); majBadges(); majTrader();
+  horloges(); age(); majBadges(); majTrader(); majSetupA();
   var barre = $('.barre'); if (barre) document.documentElement.style.setProperty('--haut-barre', barre.offsetHeight + 'px');
   var now = Date.now(), e = prochain(now), b = $('#alerte');
   var carte = $('#evt-carte');
@@ -6035,6 +6220,48 @@ def bloc_vue_cockpit(a):
             f'<p class="pied"><a href="#analyse" data-aller="synthese">Plan de séance, sentiment et catalyseurs</a></p>')
 
 
+def bloc_setup_a(a):
+    sa = a.get("setup_a")
+    if not sa:
+        return '<p class="vide">Setup A indisponible (données intraday manquantes).</p>'
+    mot = {1: "achats", -1: "ventes"}
+    fl = {1: '<span class="up">▲ haussière</span>', -1: '<span class="down">▼ baissière</span>', 0: '<span class="flat">aucune</span>'}
+
+    def bos_txt(x):
+        return (f'{fl[x["sens"]]} <small class="flat">({fp(x["niveau"] + AJUST, 1)}, {date_fr(x["t"].to_pydatetime(), True)})</small>'
+                if x else fl[0])
+    ic = lambda ok: '<span class="ic up">✓</span>' if ok else '<span class="ic down">✗</span>'
+    lignes = [(sa["d4"] != 0, "Biais H4 : dernière cassure", bos_txt(sa["bos4"])),
+              (sa["d"] != 0, "H1 dans le même sens", bos_txt(sa["bos1"]) + ("" if sa["d"] or not sa["d4"] else
+                                                                            ' <small class="down">contradiction : pas de trade</small>'))]
+    li = "".join(f'<li>{ic(ok)}<span>{esc(lib)}</span><span>{val}</span></li>' for ok, lib, val in lignes)
+    li += ('<li id="sa-h"><span class="ic flat">●</span><span>Horaires (8 h–11 h, 14 h 30–17 h)</span><span>…</span></li>'
+           '<li id="sa-n"><span class="ic flat">●</span><span>Pas d\'annonce forte à ±30 min</span><span>…</span></li>')
+    niv = lambda L: "".join(f'<span>{esc(l)}</span><span class="num">{fp(v, 1)} <small class="flat">{nb(dd, 1, True)}</small></span>'
+                            for l, v, dd in L)
+    det = ""
+    if sa["d"]:
+        bal = sa["balayage"]
+        bal_txt = (f'<p class="bloc-txt"><b class="{"up" if sa["d"] > 0 else "down"}">Balayage fait</b> '
+                   f'{"sous" if sa["d"] > 0 else "au-dessus de"} {esc(bal["lib"].lower())} ({fp(bal["niveau"], 1)}) à '
+                   f'{bal["t"].hour:02d}:{bal["t"].minute:02d} : guette le MSS en M5.</p>') if bal else ""
+        r2 = (f'<p class="pied">Écart entre la liquidité et la première cible : {nb(sa["dist"], 1)} {UNITE}. Pour un trade à '
+              f'2R, ton stop ne doit pas dépasser <b>{nb(sa["stop_max"], 1)} {UNITE}</b>'
+              + (f' (plafond 1 ATR H1 : {nb(sa["atr_h1"], 1)})' if sa.get("atr_h1") else "")
+              + (f'. Marge derrière la mèche : environ {nb(sa["marge"], 1)} {UNITE} (0,3 ATR M5)' if sa.get("marge") else "")
+              + '.</p>') if sa.get("stop_max") else ""
+        det = (bal_txt + f'<div class="sa-cols"><div><div class="k">Liquidités à balayer</div><div class="kv">'
+               f'{niv(sa["a_balayer"]) or "<span>aucune nette</span><span></span>"}</div></div>'
+               f'<div><div class="k">Cibles (liquidité opposée)</div><div class="kv">'
+               f'{niv(sa["cibles"]) or "<span>aucune nette</span><span></span>"}</div></div></div>{r2}')
+    cfg = json.dumps({"d": sa["d"], "bal": bool(sa["balayage"]), "mot": mot.get(sa["d"], ""),
+                      "liq": (sa["a_balayer"][0][0].lower() if sa["a_balayer"] else ""), "fen": FENETRES_SETUP_A,
+                      "news": NEWS_SETUP_A}, ensure_ascii=False)
+    return (f'<div id="setup-a" data-cfg="{esc(cfg)}"><div class="sa-statut flat" id="sa-statut">…</div>'
+            f'<ul class="sa-liste">{li}</ul>{det}<p class="pied">Le balayage en M15 et le MSS en M5 se vérifient sur ton '
+            f'graphique : le terminal se met à jour toutes les 15 minutes. <a href="#regles-setup-a" data-aller="suivi">Règles du Setup A</a></p></div>')
+
+
 def bloc_controle():
     return ('<div class="ctl"><div class="ctl-boutons"><button type="button" class="achat" data-sens="1">Achat <kbd>A</kbd></button>'
             '<button type="button" class="vente" data-sens="-1">Vente <kbd>V</kbd></button></div>'
@@ -6551,7 +6778,51 @@ def bloc_suivi(a):
             f'<span>Prévisions en attente d\'évaluation</span><span>{st["en_attente"]}</span></div></div>'
             f'<div><h3 style="margin-top:0">Dernières prévisions évaluées</h3><table class="cal"><tr><th>Émise</th><th>Vue</th>'
             f'<th>Prix</th><th>Après {HORIZON_H} h</th><th>Résultat</th></tr>{lignes or "<tr><td>Aucune</td></tr>"}</table></div>'
-            f'</div></section>')
+            f'</div></section>' + bloc_qui_a_raison(st.get("sources")) + bloc_regles_setup_a())
+
+
+def bloc_regles_setup_a():
+    """Les règles écrites du Setup A, telles qu'elles sont testées dans le script Pine."""
+    regles = [
+        ("Biais", "Dernière cassure de structure (BOS ou CHoCH) en H4 dans le sens du trade, et même sens en H1. Sinon, pas de trade."),
+        ("Liquidité", "Bas ou haut du range asiatique (0 h–8 h, heure de Paris), plus bas ou plus haut de la veille, creux ou sommets égaux."),
+        ("Horaires", "Uniquement de 8 h à 11 h et de 14 h 30 à 17 h (heure de Paris), jamais à moins de 30 minutes d'une annonce forte."),
+        ("Balayage", "Une bougie M15 perce la liquidité par la mèche puis clôture de l'autre côté."),
+        ("Déclencheur", "MSS en M5 : clôture au-delà du dernier sommet (ou creux) M5, bougie au corps d'au moins 1 ATR M5 qui laisse un FVG."),
+        ("Entrée", "Ordre limite au milieu de ce FVG, dans la bonne moitié (discount pour acheter, premium pour vendre) du mouvement "
+                   "balayage → MSS. Annulé s'il n'est pas touché en 30 minutes."),
+        ("Stop", "Derrière la mèche du balayage, plus 0,3 ATR M5. Pas de trade si le stop dépasse 1 ATR H1."),
+        ("Objectif", "La prochaine liquidité opposée. Pas de trade si elle est à moins de 2R. Version 1 : tout à 2R. Version 2 : "
+                     "moitié à 2R, reste sur la liquidité, stop au prix d'entrée."),
+        ("Limites", "2 trades par jour au maximum, arrêt après 2 pertes, positions fermées à 21 h, risque fixe par trade."),
+    ]
+    li = "".join(f'<span>{esc(k)}</span><span>{esc(v)}</span>' for k, v in regles)
+    return (f'<section id="regles-setup-a"><h2>Règles du Setup A (version 1 à tester)</h2><p class="pourquoi">Les mêmes règles '
+            f'que dans le script Pine. Elles restent figées pendant le test : on ne les retouche qu\'après au moins 40 trades.</p>'
+            f'<div class="kv regles">{li}</div></section>')
+
+
+def bloc_qui_a_raison(so):
+    """Technique contre fondamental : chacun noté séparément sur la même échéance que la vue."""
+    titre = '<section><h2>Qui a raison : la technique ou le fondamental ?</h2>'
+    expl = (f'<p class="pourquoi">À chaque prévision, le terminal note aussi la direction donnée par la technique seule '
+            f'(biais technique) et par le fondamental seul (biais fondamental), puis vérifie {HORIZON_H} heures plus tard '
+            f'laquelle avait raison. Gain moyen : mouvement moyen dans le sens annoncé, en {UNITE}. Il faut au moins 50 cas '
+            f'sur une ligne pour en tirer une conclusion.</p>')
+    if not so or not so["n"]:
+        return (titre + expl + '<p class="vide">Collecte en cours : les premiers résultats arrivent '
+                f'{HORIZON_H} heures après la mise en ligne de cette version.</p></section>')
+    lignes = ""
+    for l in so["lignes"]:
+        if l["n"]:
+            cl = "up" if l["taux"] >= 55 else ("down" if l["taux"] <= 45 else "flat")
+            lignes += (f'<tr><td>{esc(l["nom"])}</td><td class="num">{l["n"]}</td><td class="num {cl}">{nb(l["taux"], 0)} %</td>'
+                       f'<td class="num {classe_effet(l["gain"], 1)}">{nb(l["gain"], 1, True)} {UNITE}</td></tr>')
+        else:
+            lignes += f'<tr><td>{esc(l["nom"])}</td><td class="num">0</td><td class="num flat">n.d.</td><td class="num flat">n.d.</td></tr>'
+    return (titre + expl + f'<div class="defile"><table class="cal"><tr><th>Signal</th><th>Cas</th><th>Bonnes directions</th>'
+            f'<th>Gain moyen en {HORIZON_H} h</th></tr>{lignes}</table></div><p class="legende" style="margin-top:6px">'
+            f'Les vues neutres ne comptent pas. Vert : au-dessus de 55 %. Rouge : 45 % ou moins.</p></section>')
 
 
 # ---------------------------------------------------------------------------
@@ -6587,7 +6858,6 @@ def bloc_trader(a):
     if der and der["date"] >= maintenant() - timedelta(hours=3) and der["reac"].get("or_60") is not None:
         der_html = (f'<p class="pied">Dernière annonce : <b>{esc(der["nom"])}</b> {esc(der["reel"])} contre {esc(der["prevision"])} '
                     f'prévu · {ACTIF["mini"]} {nb(der["reac"].get("or_usd_60"), 1, True)} {UNITE} en 1 h. {esc(der["interpretation"])}</p>')
-    sens = tr.get("sens", 0)
     t_ = a.get("technique") or {}
     bt = t_.get("sens", 0) if t_ else 0
     bt_txt = {1: "Haussier", -1: "Baissier", 0: "Neutre"}[bt] if t_ else "n.d."
@@ -6601,9 +6871,9 @@ def bloc_trader(a):
                     f'score {nb(a["biais"]["total"], 0, True) if a["biais"]["total"] else "0"} sur {a["biais"]["n"]}', COUL.get(b, "flat"))
             + tuile("Bias technique", esc(bt_txt), bt_sub, COUL.get(bt, "flat"))
             + tuile("Signal", "aucun", "", "flat", "tr-signal")
-            + tuile("Action", "…", "", "warn large", "tr-action")
+            + tuile("Setup A", "…", "balayage puis retournement", "flat large", "tr-setupa")
             + '</div><div class="tr-l2">'
-            + tuile("Setup", esc(tr.get("setup", "n.d.")), "playbook technico-fondamental", COUL.get(sens, "warn") if sens else "warn")
+            + tuile("Playbook général", "…", "", "warn large", "tr-action")
             + tuile("Intermarket", im_txt, (f'{ACTIF["rs"]} {nb(grs["score"], 0, True)}' if grs else ""), im_cls)
             + tuile("Prochaine news", esc(fiche_annonce(ev, a)["nom"]) if ev else "aucune", "", "", "tr-news")
             + f'</div>{der_html}</section>')
@@ -6890,7 +7160,9 @@ def bloc_cockpit(a, y, f):
             f'<div class="col col-g"><div class="panel" id="p-graph"><div class="ph"><span class="k">{esc(ACTIF["sym"])} en direct</span>'
             f'<small>{fraicheur("live")} {esc(TV_OR)} · TradingView</small></div><div class="pb nopad">{chart}</div></div>'
             f'<div class="minis analyst">{minis}</div></div>'
-            f'<div class="col col-c"><div class="panel analyst" id="p-vue"><div class="ph"><span class="k">Où va le marché</span>'
+            f'<div class="col col-c"><div class="panel" id="p-setup"><div class="ph"><span class="k">Setup A · balayage puis retournement</span>'
+            f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))}</small></div><div class="pb" data-zone="setup">{bloc_setup_a(a)}</div></div>'
+            f'<div class="panel analyst" id="p-vue"><div class="ph"><span class="k">Où va le marché</span>'
             f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))} <a href="#analyse" data-aller="synthese">plan complet</a></small></div>'
             f'<div class="pb" data-zone="vue">{bloc_vue_cockpit(a)}</div></div>'
             f'<div class="panel" id="p-ctl"><div class="ph"><span class="k">Contrôle avant l\'entrée</span>'
@@ -6987,7 +7259,8 @@ def construire_brief(data, a):
     y, f = data["yahoo"], data["fred"]
     o, b = a["or"], a["biais"]
     L = [f"BRIEF TERMINAL OR v{VERSION} ({date_fr(maintenant(), True)}, heure de Paris)", ""]
-    L.append(f"Or : {nb(o['prix'], 1)} $ (1 j {nb(o['d1'], 2, True)} %, 5 j {nb(o['d5'], 2, True)} %, "
+    px_or = (a["seance"]["prix"] if a.get("seance") else o["prix"])   # dernier prix du future, converti en spot
+    L.append(f"Or (XAU/USD spot) : {nb(px_or + AJUST, 1) if px_or else 'n.d.'} $ (1 j {nb(o['d1'], 2, True)} %, 5 j {nb(o['d5'], 2, True)} %, "
              f"20 j {nb(o['d20'], 2, True)} %). Amplitude attendue du jour : ±{nb(a['range_jour'], 0)} $.")
     L.append(f"Régime : {a['regime']['nom']} ({a['regime']['resume']})")
     v = a.get("vue")
@@ -7094,9 +7367,10 @@ def construire_brief(data, a):
                                                             for c in a["correlations"]))
     s = a.get("seance")
     if s:
-        L.append(f"Séance : prix {nb(s['prix'], 1)}, jour {nb(s['bas'], 1)}-{nb(s['haut'], 1)}, ATR14 {nb(s['atr'], 1)} $ "
-                 f"({nb(s['pct_atr'], 0)} % consommé), VWAP {nb(s.get('vwap'), 1)}, veille haut {nb(s.get('pdh'), 1)} / "
-                 f"bas {nb(s.get('pdl'), 1)}, pivot {nb(s.get('pivot'), 1)}")
+        sp_ = lambda x: None if x is None else x + AJUST   # séance calculée sur le future : convertie en spot
+        L.append(f"Séance (XAU/USD spot) : prix {nb(sp_(s['prix']), 1)}, jour {nb(sp_(s['bas']), 1)}-{nb(sp_(s['haut']), 1)}, "
+                 f"ATR14 {nb(s['atr'], 1)} $ ({nb(s['pct_atr'], 0)} % consommé), VWAP {nb(sp_(s.get('vwap')), 1)}, "
+                 f"veille haut {nb(sp_(s.get('pdh')), 1)} / bas {nb(sp_(s.get('pdl')), 1)}, pivot {nb(sp_(s.get('pivot')), 1)}")
     v = a.get("vue")
     if v and a.get("seance"):
         dessus, dessous = niveaux_autour(a, v["prix"])
@@ -7336,12 +7610,14 @@ def previsions_demo(data):
     """Historique fictif de prévisions pour tester l'affichage du suivi."""
     import random
     random.seed(3)
+    r2 = random.Random(7)  # tirage séparé : la séquence de démo d'origine reste identique
     b = data["intraday"]["barres"]
     out = []
     for t in b.index[-900:-20:16]:
         sens = random.choice([1, 1, -1, 0])
         out.append({"ts": t.isoformat(), "prix": float(b.loc[t, "close"]), "sens": sens,
-                    "conv": random.choice(["faible", "moyenne", "forte"]), "score": 0.3 * sens, "sigma": 14.0})
+                    "conv": random.choice(["faible", "moyenne", "forte"]), "score": 0.3 * sens, "sigma": 14.0,
+                    "tech": 0.3 * sens, "tsens": sens, "fsens": r2.choice([1, -1, 0])})
     return out
 
 
