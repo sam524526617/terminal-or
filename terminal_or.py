@@ -991,11 +991,202 @@ def gld_par_yahoo(data):
     return s
 
 
+# ---------------------------------------------------------------------------
+# DEVISES UNE PAR UNE : force du dollar, de l'euro et du yen face à un panier de 7 grandes devises
+# ---------------------------------------------------------------------------
+
+# paire Yahoo -> (devise, sens) : sens 1 si la paire cote la devise en dollars (EUR/USD), -1 si elle cote des
+# unités de la devise pour 1 dollar (USD/JPY)
+DEVISES_PAIRES = {"EURUSD=X": ("EUR", 1), "GBPUSD=X": ("GBP", 1), "AUDUSD=X": ("AUD", 1),
+                  "JPY=X": ("JPY", -1), "CHF=X": ("CHF", -1), "CAD=X": ("CAD", -1)}
+DEVISES_AFFICHEES = [("USD", "Dollar américain"), ("EUR", "Euro"), ("JPY", "Yen japonais")]
+NOMS_DEVISES = {"USD": "le dollar", "EUR": "l'euro", "JPY": "le yen", "GBP": "la livre", "CHF": "le franc suisse",
+                "AUD": "le dollar australien", "CAD": "le dollar canadien"}
+COUL_DEVISES = {"USD": "#cfa54b", "EUR": "#6fa8dc", "JPY": "#c58fd6"}
+
+
+def charger_devises():
+    """Paires majeures et DXY : 6 mois en journalier, 5 jours en 15 min (pour les variations sur 1 h et 4 h)."""
+    if yf is None:
+        return None
+    tick = list(DEVISES_PAIRES) + ["DX-Y.NYB"]
+    jour = extraire_close(telecharger_yahoo(tick, "6mo", "1d"), tick)
+    m15 = telecharger_yahoo(tick, "5d", "15m")
+    c15 = _niveau(m15, "Close") if m15 is not None and len(m15) else None
+    if c15 is not None and len(c15):
+        c15 = c15.copy()
+        idx = pd.to_datetime(c15.index)
+        if idx.tz is None:
+            idx = idx.tz_localize("UTC")
+        tz = tz_local()
+        c15.index = idx.tz_convert(tz) if tz else idx
+    if jour is None or jour.empty:
+        noter("Yahoo devises", False, "indisponible")
+        return None
+    manq = [t for t in tick if t not in jour.columns]
+    noter("Yahoo devises", True, ("manquants : " + ", ".join(manq)) if manq else "")
+    return {"jour": jour, "m15": c15}
+
+
+def indices_devises(px):
+    """Force de chaque devise (logarithme) face à la moyenne d'un panier de 7 devises, USD compris."""
+    if px is None or px.empty:
+        return None
+    cols = {"USD": pd.Series(0.0, index=px.index)}
+    for t, (dev, sens) in DEVISES_PAIRES.items():
+        if t in px.columns:
+            cols[dev] = sens * np.log(px[t].astype(float))
+    df = pd.DataFrame(cols).ffill().dropna()
+    if df.shape[1] < 5 or len(df) < 2:
+        return None
+    return df.sub(df.mean(axis=1), axis=0)
+
+
+def analyser_devises(data):
+    dv = data.get("devises")
+    if not dv:
+        return None
+    ij = indices_devises(dv.get("jour"))
+    if ij is None:
+        return None
+    im = indices_devises(dv.get("m15"))
+
+    def var_j(s, n):
+        s = s.dropna()
+        return float((s.iloc[-1] - s.iloc[-1 - n]) * 100) if len(s) > n else None
+
+    def var_h(s, heures):
+        if s is None:
+            return None
+        s = s.dropna()
+        if len(s) < 3:
+            return None
+        avant = s[s.index <= s.index[-1] - pd.Timedelta(hours=heures)]
+        return float((s.iloc[-1] - avant.iloc[-1]) * 100) if len(avant) else None
+
+    lignes = {}
+    for dev in ij.columns:
+        lignes[dev] = {"1h": var_h(im[dev], 1) if im is not None and dev in im else None,
+                       "4h": var_h(im[dev], 4) if im is not None and dev in im else None,
+                       "1j": var_j(ij[dev], 1), "5j": var_j(ij[dev], 5), "20j": var_j(ij[dev], 20)}
+    dxy = None
+    pj = dv.get("jour")
+    if pj is not None and "DX-Y.NYB" in pj.columns:
+        sd = pj["DX-Y.NYB"].dropna()
+        lj = np.log(sd) if len(sd) else None
+        lm = np.log(dv["m15"]["DX-Y.NYB"]) if dv.get("m15") is not None and "DX-Y.NYB" in dv["m15"] else None
+        if len(sd) > 1:
+            dxy = {"niveau": float(sd.iloc[-1]), "1h": var_h(lm, 1), "4h": var_h(lm, 4),
+                   "1j": var_j(lj, 1), "5j": var_j(lj, 5), "20j": var_j(lj, 20)}
+    classement = sorted([(d, l["1j"]) for d, l in lignes.items() if l["1j"] is not None], key=lambda x: -x[1])
+    courbes = (np.exp(ij.tail(30) - ij.tail(30).iloc[0]) * 100)
+    # lecture
+    lec = []
+    if len(classement) >= 2:
+        f_, fa = classement[0], classement[-1]
+        lec.append(f"Aujourd'hui, la devise la plus forte est {NOMS_DEVISES[f_[0]]} ({nb(f_[1], 2, True)} %), "
+                   f"la plus faible {NOMS_DEVISES[fa[0]]} ({nb(fa[1], 2, True)} %).")
+    u = lignes.get("USD", {}).get("1j")
+    if u is not None:
+        if u >= 0.2:
+            lec.append(f"Le dollar se renforce face à l'ensemble des devises : défavorable à {ACTIF['nom']}.")
+        elif u <= -0.2:
+            lec.append(f"Le dollar recule face à l'ensemble des devises : favorable à {ACTIF['nom']}.")
+        else:
+            lec.append("Le dollar est stable face au panier : pas de pression nette venant du dollar.")
+    if dxy and dxy["1j"] is not None and u is not None and abs(dxy["1j"]) >= 0.15 and abs(u) < abs(dxy["1j"]) / 2:
+        lec.append("Le DXY bouge surtout à cause de l'euro (58 % de l'indice) : ce n'est pas un mouvement général du dollar.")
+    yj = lignes.get("JPY", {}).get("1j")
+    if yj is not None and yj >= 0.3:
+        lec.append("Le yen monte : les investisseurs cherchent un refuge (aversion au risque).")
+    elif yj is not None and yj <= -0.3:
+        lec.append("Le yen baisse : appétit pour le risque, les investisseurs empruntent en yen pour placer ailleurs.")
+    ej = lignes.get("EUR", {}).get("1j")
+    if ej is not None and abs(ej) >= 0.3:
+        lec.append(f"L'euro {'se démarque à la hausse' if ej > 0 else 'décroche'} face aux autres devises.")
+    return {"lignes": lignes, "dxy": dxy, "classement": classement, "courbes": courbes, "lecture": lec,
+            "maj": ij.index[-1]}
+
+
+def svg_devises(courbes, w=720, h=220):
+    cols = [d for d, _ in DEVISES_AFFICHEES if d in courbes.columns]
+    if not cols or len(courbes) < 3:
+        return ""
+    v = courbes[cols]
+    lo, hi = float(v.min().min()), float(v.max().max())
+    if hi - lo < 1e-9:
+        hi = lo + 1
+    pad = (hi - lo) * 0.08
+    lo, hi = lo - pad, hi + pad
+    n = len(v)
+    x = lambda i: 40 + i * (w - 80) / (n - 1)
+    y = lambda val: 10 + (hi - val) * (h - 40) / (hi - lo)
+    traits = ""
+    # étiquettes en bout de courbe, écartées d'au moins 13 px pour rester lisibles
+    pos = sorted(((y(float(v[d].iloc[-1])), d) for d in cols))
+    ajust = {}
+    der = -1e9
+    for yy, d in pos:
+        yy = max(yy, der + 13)
+        ajust[d] = yy
+        der = yy
+    for d in cols:
+        pts = " ".join(f"{x(i):.1f},{y(float(val)):.1f}" for i, val in enumerate(v[d]))
+        traits += f'<polyline fill="none" stroke="{COUL_DEVISES[d]}" stroke-width="2" points="{pts}"/>'
+        traits += (f'<text x="{w - 2}" y="{ajust[d] + 4:.1f}" fill="{COUL_DEVISES[d]}" font-size="12" '
+                   f'text-anchor="end">{d}</text>')
+    base = f'<line x1="40" x2="{w - 20}" y1="{y(100):.1f}" y2="{y(100):.1f}" stroke="#5a6b7c" stroke-dasharray="3 4"/>'
+    lab = (f'<text x="4" y="{y(100) + 4:.1f}" fill="#8594a2" font-size="11">100</text>'
+           f'<text x="40" y="{h - 6}" fill="#8594a2" font-size="11">{date_fr(v.index[0])}</text>'
+           f'<text x="{w - 20}" y="{h - 6}" fill="#8594a2" font-size="11" text-anchor="end">{date_fr(v.index[-1])}</text>')
+    return (f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" aria-label="Force du dollar, de l\'euro et du yen sur 30 jours">'
+            f'{base}{traits}{lab}</svg>')
+
+
+def bloc_devises(a):
+    dv = a.get("force_devises")
+    titre = '<section id="devises"><h2>Devises une par une : dollar, euro, yen</h2>'
+    if not dv:
+        return titre + '<p class="vide">Données des devises indisponibles.</p></section>'
+    cell = lambda v: (f'<td class="num {classe_effet(v, 1)}">{nb(v, 2, True)} %</td>' if v is not None
+                      else '<td class="num flat">n.d.</td>')
+    lignes = ""
+    if dv["dxy"]:
+        d = dv["dxy"]
+        lignes += (f'<tr><td><b>DXY</b> <span class="flat">{nb(d["niveau"], 2)}</span></td>'
+                   + "".join(cell(d[k]) for k in ("1h", "4h", "1j", "5j", "20j")) + '</tr>')
+    for code, nom in DEVISES_AFFICHEES:
+        l = dv["lignes"].get(code)
+        if not l:
+            continue
+        lignes += (f'<tr><td><span style="color:{COUL_DEVISES[code]}">●</span> <b>{code}</b> <span class="flat">{nom}</span></td>'
+                   + "".join(cell(l[k]) for k in ("1h", "4h", "1j", "5j", "20j")) + '</tr>')
+    rang = " ".join(f'<span class="chip {classe_effet(v, 1)}">{d} {nb(v, 2, True)} %</span>' for d, v in dv["classement"])
+    lec = "".join(f'<p class="bloc-txt">{esc(t)}</p>' for t in dv["lecture"])
+    return (titre + '<p class="pourquoi">Chaque devise est mesurée seule, face à la moyenne de 7 grandes devises (dollar, euro, '
+            'yen, livre, franc suisse, dollar australien, dollar canadien), et non en paire. Vert : la devise se renforce. '
+            'Rouge : elle s\'affaiblit. Le DXY, lui, est l\'indice officiel du dollar, composé à 58 % d\'euro.</p>'
+            f'<div class="grille2"><div><div class="defile"><table class="cal"><tr><th>Devise</th><th>1 h</th><th>4 h</th>'
+            f'<th>1 jour</th><th>5 jours</th><th>20 jours</th></tr>{lignes}</table></div>'
+            f'<h3>Classement du jour (7 devises)</h3><div class="chips">{rang}</div></div>'
+            f'<div>{lec}<h3>Force sur 30 jours (base 100)</h3>{svg_devises(dv["courbes"])}</div></div></section>')
+
+
+def devises_demo():
+    """Séries fictives des paires (6 mois en journalier, 5 jours en 15 min) pour tester l'affichage."""
+    rng = np.random.default_rng(11)
+    debut = {"EURUSD=X": 1.13, "GBPUSD=X": 1.31, "AUDUSD=X": 0.66, "JPY=X": 151.0, "CHF=X": 0.80, "CAD=X": 1.38, "DX-Y.NYB": 99.5}
+    ij = pd.bdate_range(end=pd.Timestamp(datetime.now().date()), periods=130)
+    i15 = pd.date_range(end=maintenant().replace(second=0, microsecond=0), periods=5 * 96, freq="15min")
+    mk = lambda idx, vol: pd.DataFrame({t: v * np.exp(np.cumsum(rng.normal(0, vol, len(idx)))) for t, v in debut.items()}, index=idx)
+    return {"jour": mk(ij, 0.004), "m15": mk(i15, 0.0006)}
+
+
 def collecter():
     """Lance toutes les collectes en parallèle. Une source en panne n'empêche pas les autres."""
     data = {"yahoo": {}, "fred": {}, "cot": None, "gld": None, "cal": [], "news": {}, "zq": {},
             "intraday": None, "courbe": [], "fed_off": {}, "tresor": {}, "nyfed": {}, "adjudic": None,
-            "oanda": None, "intermarche": None, "xaus": None}
+            "oanda": None, "intermarche": None, "xaus": None, "devises": None}
     taches = {
         "yahoo": (charger_yahoo, "Yahoo Finance"),
         "fred": (charger_fred, "FRED (Fed de St. Louis)"),
@@ -1013,6 +1204,7 @@ def collecter():
         "oanda": (charger_oanda, "OANDA (carnets d'ordres et de positions)"),
         "xaus": (charger_spot_xaus, "XAUS (spot XAU/USD)"),
         "intermarche": (charger_intermarche, "Yahoo intermarché 15 min"),
+        "devises": (charger_devises, "Yahoo devises"),
     }
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
         futs = {ex.submit(fn): (cle, nom) for cle, (fn, nom) in taches.items()}
@@ -3906,6 +4098,7 @@ def analyser(data):
     a["reactions"] = reactions_annonces(data.get("intraday"), hist)
     expliquer(data, a)
     a["vue"] = vue_marche(a, data)
+    a["force_devises"] = analyser_devises(data)   # affichage seul : n'entre dans aucun score
     a["intermarket"] = module_intermarche(a, data)
     a["grs"] = force_relative(a, data)
     a["regimes"] = regimes_v2(a, data)
@@ -4458,6 +4651,8 @@ body.zone-news .prochaine b{color:var(--amber)}
 .sa-liste li>span:last-child{text-align:right}
 .sa-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:6px 0}
 .sa-cols .kv{font-size:13.5px}
+#devises td.num{white-space:nowrap}
+@media (max-width:720px){#devises td span.flat{display:none}#devises table.cal td,#devises table.cal th{padding-left:4px;padding-right:4px}}
 .kv.regles{grid-template-columns:110px minmax(0,1fr);max-width:900px}.kv.regles span:nth-child(odd){font-weight:600}
 @media (max-width:720px){.sa-cols{grid-template-columns:minmax(0,1fr)}
   .sa-liste li{grid-template-columns:18px minmax(0,1fr)}.sa-liste li>span:last-child{grid-column:2;text-align:left}
@@ -6789,8 +6984,9 @@ def bloc_regles_setup_a():
         ("Horaires", "Uniquement de 8 h à 11 h et de 14 h 30 à 17 h (heure de Paris), jamais à moins de 30 minutes d'une annonce forte."),
         ("Balayage", "Une bougie M15 perce la liquidité par la mèche puis clôture de l'autre côté."),
         ("Déclencheur", "MSS en M5 : clôture au-delà du dernier sommet (ou creux) M5, bougie au corps d'au moins 1 ATR M5 qui laisse un FVG."),
-        ("Entrée", "Ordre limite au milieu de ce FVG, dans la bonne moitié (discount pour acheter, premium pour vendre) du mouvement "
-                   "balayage → MSS. Annulé s'il n'est pas touché en 30 minutes."),
+        ("Entrée", "Ordre limite au milieu de ce FVG ; si ce point est du mauvais côté du mouvement balayage → MSS, l'ordre "
+                   "descend (ou monte) au milieu du mouvement, pour entrer en discount à l'achat et en premium à la vente. "
+                   "Annulé s'il n'est pas touché en 30 minutes."),
         ("Stop", "Derrière la mèche du balayage, plus 0,3 ATR M5. Pas de trade si le stop dépasse 1 ATR H1."),
         ("Objectif", "La prochaine liquidité opposée. Pas de trade si elle est à moins de 2R. Version 1 : tout à 2R. Version 2 : "
                      "moitié à 2R, reste sur la liquidité, stop au prix d'entrée."),
@@ -7189,7 +7385,7 @@ def contenus_onglets(data, a, ia):
         "synthese": (bloc_synthese_tech(a) + bloc_intermarket(a) + bloc_regimes(a, compact=True) + bloc_plan(a) +
                      f'<section>{bloc_routine()}</section>'),
         # 2. Tout le fondamental
-        "fondamental": (bloc_regimes(a) + bloc_lecture(a) + bloc_biais_detail(a) + bloc_ia(ia) + bloc_moteurs(a) + bloc_risque(a) +
+        "fondamental": (bloc_regimes(a) + bloc_lecture(a) + bloc_devises(a) + bloc_biais_detail(a) + bloc_ia(ia) + bloc_moteurs(a) + bloc_risque(a) +
                         f'<section>{bloc_correlations(a)}</section>' + bloc_fed(y, f, a) + bloc_marches(y, f, a) +
                         bloc_flux(a) + bloc_graphiques(y, f, data["cot"], a)),
         # 3. Toute la technique
@@ -7360,6 +7556,11 @@ def construire_brief(data, a):
     im = a.get("intermarche")
     if im:
         L.append("Confirmation intermarché : " + " ".join(l["texte"] for l in im["lignes"]))
+    dv_ = a.get("force_devises")
+    if dv_:
+        L.append("Devises face au panier de 7 (1 j / 5 j) : " + ", ".join(
+            f"{d} {nb(dv_['lignes'][d]['1j'], 2, True)} % / {nb(dv_['lignes'][d]['5j'], 2, True)} %"
+            for d, _ in DEVISES_AFFICHEES if d in dv_["lignes"]) + ". " + " ".join(dv_["lecture"]))
     if a.get("base") is not None:
         L.append(f"Écart future COMEX - spot : {nb(a['base'], 1, True)} $ (niveaux de séance donnés en spot)")
     if a["correlations"]:
@@ -7562,7 +7763,7 @@ def donnees_demo():
         noter(nom, True, "données de démonstration")
     return {"yahoo": y, "fred": f, "cot": cot, "gld": gld, "cal": cal, "news": news, "zq": zq,
             "intraday": intraday, "courbe": courbe, "fed_off": fed_off, "tresor": {}, "nyfed": {}, "adjudic": adjudic,
-            "oanda": None, "intermarche": intermarche_demo(barres), "xaus": xaus_demo(barres, 36.8)}
+            "oanda": None, "intermarche": intermarche_demo(barres), "xaus": xaus_demo(barres, 36.8), "devises": devises_demo()}
 
 
 def oanda_demo(spot, now):

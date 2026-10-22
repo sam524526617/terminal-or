@@ -394,6 +394,7 @@ def collecter_eur():
         "tresor": (T.charger_tresor, "Trésor américain (courbes)"),
         "nyfed": (T.charger_nyfed, "Fed de New York (EFFR, SOFR)"),
         "intermarche": (charger_intermarche_eur, "Yahoo intermarché 15 min"),
+        "devises": (T.charger_devises, "Yahoo devises"),
     }
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
         futs = {ex.submit(fn): (cle, nom) for cle, (fn, nom) in taches.items()}
@@ -1061,6 +1062,7 @@ def analyser_eur(data):
     a["regimes"] = regimes6_eur(a, data)
     a["reactions_evt"] = reactions_evt_eur(a, data)
     a["trader"] = T.plan_trader(a, data)
+    a["force_devises"] = T.analyser_devises(data)
     a["setup_a"] = T.setup_a(a, data)
     a["plan"] = T.plan_du_jour(a, data)
     a["bilan"] = T.bilan_seance(a, data)
@@ -1542,7 +1544,7 @@ def contenus_onglets_eur(data, a, ia):
     return {
         "synthese": (T.bloc_synthese_tech(a) + bloc_intermarket_eur(a) + bloc_regimes_eur(a, compact=True) + T.bloc_plan(a) +
                      f'<section>{bloc_routine_eur()}</section>'),
-        "fondamental": (bloc_regimes_eur(a) + bloc_lecture_eur(a) + T.bloc_biais_detail(a) + T.bloc_ia(ia) + bloc_taux_eur(a, y, f) +
+        "fondamental": (bloc_regimes_eur(a) + bloc_lecture_eur(a) + T.bloc_devises(a) + T.bloc_biais_detail(a) + T.bloc_ia(ia) + bloc_taux_eur(a, y, f) +
                         bloc_moteurs_eur(a) + bloc_risque_eur(a) + bloc_correlations_eur(a) + bloc_marches_eur(y, f, a) +
                         bloc_flux_eur(a, data.get("cot"))),
         "technique": T.bloc_technique(a, data),
@@ -1644,6 +1646,11 @@ def construire_brief_eur(data, a):
     if c:
         L.append(f"COT euro : fonds spéculatifs {nb(c['net'], 0)} contrats nets ({nb(c['chg'], 0, True)}), percentile 3 ans "
                  f"{nb(c['pct3a'], 0)} ; {c['lecture'][0] if c.get('lecture') else ''}")
+    dv_ = a.get("force_devises")
+    if dv_:
+        L.append("Devises face au panier de 7 (1 j / 5 j) : " + ", ".join(
+            f"{d} {nb(dv_['lignes'][d]['1j'], 2, True)} % / {nb(dv_['lignes'][d]['5j'], 2, True)} %"
+            for d, _ in T.DEVISES_AFFICHEES if d in dv_["lignes"]) + ". " + " ".join(dv_["lecture"]))
     im = a.get("intermarket")
     if im:
         L.append("Intermarket : " + im["statut"] + " ; " + " ; ".join(f"{l['horizon']} {l['statut']}" for l in im["lignes"]))
