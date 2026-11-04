@@ -7,7 +7,7 @@ Le plan, à la hausse (la baisse est le miroir) :
   1. Annonces    : aucune entrée 30 min avant ou après une annonce USD à fort impact.
   2. Fondamental : on n'achète pas si le bloc Fed / dollar / taux réels est baissier (neutre accepté).
   3. Tendance    : Daily et H4 haussiers (sens de la dernière cassure de structure), H1 pas baissier.
-  4. Zone        : le prix revient dans un OB ou au 50 % d'un FVG haussier tracé en M30, H1 ou H4.
+  4. Zone        : le prix revient dans un OB, au 50 % d'un FVG (M30, H1, H4) ou sur un support à 3 contacts (H1, H4).
   5. Déclencheur : cassure de structure M15 haussière qui laisse un FVG M15 ; ordre limite au 50 % de ce FVG.
   Stop sous l'OB d'entrée. 50 % fermé à 2R puis stop au point d'entrée, le reste sur la prochaine liquidité H1.
   Note A : Weekly dans le sens du trade ET (zone H4 ou divergence RSI M15). B sinon. RSI M15 extrême : un cran de moins.
@@ -41,6 +41,9 @@ PERTE_MAX_JOUR_R = -2.0
 RSI_HAUT, RSI_BAS = 70, 30
 NEWS_MIN = 30            # minutes bloquées avant et après une annonce USD forte
 RISQUE_PCT = 1.0         # risque par trade, en % du compte
+SR_CONTACTS = 3          # un support / une résistance doit avoir été touché au moins 3 fois (règle α1)
+SR_TOL_ATR = 0.25        # deux points hauts ou bas à moins de 0,25 ATR l'un de l'autre = même niveau
+SR_FENETRE = 240         # contacts comptés sur les 240 dernières bougies de l'unité de temps (10 jours en H1)
 
 DECALAGE = pd.Timedelta(hours=7)
 RANGS = {1: "M30", 2: "H1", 3: "H4"}
@@ -166,6 +169,36 @@ def zones(df, rang):
     return out
 
 
+def supports_resistances(df, st_, rang):
+    """Supports et résistances à 3 contacts ou plus (règle α1), à partir des sommets et creux confirmés.
+    Un niveau naît quand le 3e contact est confirmé : support si le prix est au-dessus, résistance s'il est en dessous.
+    Même format que zones() : (sens, rang, "S/R", bas, haut, niveau de contact, heure de création)."""
+    if len(df) < 20:
+        return []
+    a, fin, c = atr(df), df["fin"].to_numpy(), df["close"].to_numpy()
+    points = sorted([(ic, j, p) for ic, j, p in st_["sommets"]] + [(ic, j, p) for ic, j, p in st_["creux"]])
+    out, groupes = [], []       # groupe : [prix moyen, liste des (j, prix), déjà émis]
+    for ic, j, p in points:
+        if not np.isfinite(a[ic]):
+            continue
+        tol = SR_TOL_ATR * a[ic]
+        groupes = [g for g in groupes if j - g[1][-1][0] <= SR_FENETRE]
+        g = min((g for g in groupes if abs(g[0] - p) <= tol), key=lambda g: abs(g[0] - p), default=None)
+        if g is None:
+            groupes.append([p, [(j, p)], False])
+            continue
+        g[1].append((j, p))
+        g[0] = float(np.mean([x[1] for x in g[1]]))
+        if len(g[1]) >= SR_CONTACTS and not g[2]:
+            g[2] = True
+            niv, bas, haut = g[0], g[0] - tol, g[0] + tol
+            if c[ic] > haut:
+                out.append((1, rang, "S/R", bas, haut, haut, fin[ic]))
+            elif c[ic] < bas:
+                out.append((-1, rang, "S/R", bas, haut, bas, fin[ic]))
+    return out
+
+
 def armer(liste, m15):
     """Pour chaque bougie M15 : rang de la zone touchée récemment (0 = aucune, 1 = M30, 2 = H1, 3 = H4).
     Renvoie aussi les zones encore intactes et jamais touchées à la dernière bougie (à afficher)."""
@@ -232,7 +265,8 @@ def contexte(tf):
     fins = m15["fin"].to_numpy()
     st = {k: structure(tf[k], K_SWING.get(k, 2)) for k in ("W", "D", "H4", "H1", "M15")}
     tend = {k: etat_a(tf[k], st[k]["tend"], fins) for k in ("W", "D", "H4", "H1")}
-    zs = zones(tf["M30"], 1) + zones(tf["H1"], 2) + zones(tf["H4"], 3)
+    zs = (zones(tf["M30"], 1) + zones(tf["H1"], 2) + zones(tf["H4"], 3)
+          + supports_resistances(tf["H1"], st["H1"], 2) + supports_resistances(tf["H4"], st["H4"], 3))
     arme, vierges = armer(zs, m15)
     s15 = st["M15"]
     ctx = {"tf": tf, "st": st, "tend": tend, "zones": zs, "arme": arme, "vierges": vierges,

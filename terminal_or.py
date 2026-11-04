@@ -7509,7 +7509,7 @@ def construire_brief(data, a):
             L.append(f"DÉCISION DU PLAN : {'ACHAT' if o_['sens'] > 0 else 'VENTE'} (note {dz['note']}, {dz['etat']}) entrée {nb(o_['entree'], 2)}, "
                      f"stop {nb(o_['stop'], 2)}, TP1 {nb(o_['tp1'], 2)}, TP2 {nb(o_['tp2'], 2)}")
         else:
-            L.append(f"DÉCISION DU PLAN : RIEN. {dz.get('debloque') or ''}")
+            L.append("DÉCISION DU PLAN : RIEN. " + " ".join(dz.get("debloque") or []))
     L.append(f"Régime : {a['regime']['nom']} ({a['regime']['resume']})")
     v = a.get("vue")
     if v:
@@ -7686,7 +7686,7 @@ def resume_terminal(a):
             mot = ("ACHAT" if o_["sens"] > 0 else "VENTE") if o_ else "RIEN"
             print("Décision du plan :", couleur(mot, "1;" + ({"ACHAT": "32", "VENTE": "31"}.get(mot, "37"))),
                   (f"note {dz['note']}, {dz['etat']}, entrée {nb(o_['entree'], 2)}, stop {nb(o_['stop'], 2)}, "
-                   f"TP1 {nb(o_['tp1'], 2)}, TP2 {nb(o_['tp2'], 2)}" if o_ else (dz.get("debloque") or "")))
+                   f"TP1 {nb(o_['tp1'], 2)}, TP2 {nb(o_['tp2'], 2)}" if o_ else " | ".join(dz.get("debloque") or [])))
             for f_ in dz["filtres"]:
                 print(f"  {({'ok': '✓', 'ko': '✗'}).get(f_[2], '–')} {f_[0]:<12} {f_[1]}")
     ko = [n for n, s in STATUT.items() if not s["ok"]]

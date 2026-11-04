@@ -152,12 +152,12 @@ def decider(data, maintenant, ajust, fond_vals, compte):
             return None
         return None if x[1] else x[0]
 
-    filtres, debloque = [], None
+    filtres, deb = [], []          # deb : tout ce qui doit changer pour débloquer, dans l'ordre des filtres
     # 1. annonces
     if proche:
         fin_blocage = proche["date"] + timedelta(minutes=P.NEWS_MIN)
         filtres.append(("Annonces", f"{proche['titre']} à {proche['date']:%H:%M} : zone interdite", "ko"))
-        debloque = f"Attendre {fin_blocage:%H:%M}, 30 min après {proche['titre']}."
+        deb.append(f"Annonces : attendre {fin_blocage:%H:%M}, 30 min après {proche['titre']}.")
     else:
         txt = (f"Rien à ±30 min · prochaine forte : {suivante['titre']} à {suivante['date']:%H:%M}"
                if suivante and suivante["date"] - t_now_paris < timedelta(hours=24) else "Aucune annonce forte proche")
@@ -165,26 +165,25 @@ def decider(data, maintenant, ajust, fond_vals, compte):
     # 2. fondamental
     if d_ref and fond == -d_ref:
         filtres.append(("Fondamental", f"Bloc Fed / dollar / taux {mot[fond]} : contre {'un achat' if d_ref > 0 else 'une vente'}", "ko"))
-        debloque = debloque or "Le bloc Fed / dollar / taux réels doit redevenir neutre (taux et dollar qui se calment)."
+        deb.append("Fondamental : le bloc Fed / dollar / taux réels doit redevenir neutre (taux et dollar qui se calment).")
     else:
         filtres.append(("Fondamental", f"Bloc Fed / dollar / taux {mot[fond]}", "ok"))
     # 3. tendance
     t_txt = " · ".join(f"{k} {FLECHE[tend[k]]}" for k in ("W", "D", "H4", "H1"))
     if not d:
         filtres.append(("Tendance", f"{t_txt} : Daily et H4 pas alignés", "ko"))
-        if not debloque:
-            if tend["D"]:
-                niv = niveau_cassure("H4", tend["D"])
-                debloque = (f"Le H4 doit recasser dans le sens du Daily : clôture H4 "
-                            f"{'au-dessus de' if tend['D'] > 0 else 'sous'} {fr(sp(niv))}." if niv is not None else
-                            "Le H4 doit former un nouveau point puis casser dans le sens du Daily.")
-            else:
-                debloque = "Le Daily n'a pas de direction : attendre une cassure de structure en Daily."
+        if tend["D"]:
+            niv = niveau_cassure("H4", tend["D"])
+            deb.append(f"Tendance : le H4 doit recasser dans le sens du Daily, clôture H4 "
+                       f"{'au-dessus de' if tend['D'] > 0 else 'sous'} {fr(sp(niv))}." if niv is not None else
+                       "Tendance : le H4 doit former un nouveau point puis casser dans le sens du Daily.")
+        else:
+            deb.append("Tendance : le Daily n'a pas de direction, attendre une cassure de structure en Daily.")
     elif tend["H1"] == -d:
         filtres.append(("Tendance", f"{t_txt} : le H1 contredit", "ko"))
         niv = niveau_cassure("H1", d)
-        debloque = debloque or (f"Clôture H1 {'au-dessus de' if d > 0 else 'sous'} {fr(sp(niv))} pour réaligner le H1."
-                                if niv is not None else "Le H1 doit recasser dans le sens du Daily et du H4.")
+        deb.append(f"Tendance : clôture H1 {'au-dessus de' if d > 0 else 'sous'} {fr(sp(niv))} pour réaligner le H1."
+                   if niv is not None else "Tendance : le H1 doit recasser dans le sens du Daily et du H4.")
     else:
         filtres.append(("Tendance", f"{t_txt} : {MOT_SENS[d].lower()}s seulement", "ok"))
     # 4. zone
@@ -209,8 +208,8 @@ def decider(data, maintenant, ajust, fond_vals, compte):
     else:
         filtres.append(("Zone", f"Attendre : {prochaine_zone}" if prochaine_zone else
                         "Aucune zone OB / FVG intacte dans ce sens", "wait"))
-        debloque = debloque or (f"Attendre le retour du prix dans la zone {prochaine_zone}." if prochaine_zone else
-                                "Attendre qu'une nouvelle zone OB / FVG se forme en M30, H1 ou H4.")
+        deb.append(f"Zone : attendre le retour du prix dans la zone {prochaine_zone}." if prochaine_zone else
+                   "Zone : attendre qu'une nouvelle zone OB / FVG / S-R se forme en M30, H1 ou H4.")
     # 5. déclencheur
     if any(x[2] in ("ko", "wait") for x in filtres):
         filtres.append(("Déclencheur", "Vérifié après les filtres précédents", "wait"))
@@ -219,8 +218,8 @@ def decider(data, maintenant, ajust, fond_vals, compte):
     else:
         niv = niveau_cassure("M15", d)
         filtres.append(("Déclencheur", "Attendre une cassure M15 qui laisse un FVG", "wait"))
-        debloque = debloque or (f"Clôture M15 {'au-dessus de' if d > 0 else 'sous'} {fr(sp(niv))} en laissant un FVG."
-                                if niv is not None else "Attendre une cassure de structure M15 qui laisse un FVG.")
+        deb.append(f"Déclencheur : clôture M15 {'au-dessus de' if d > 0 else 'sous'} {fr(sp(niv))} en laissant un FVG."
+                   if niv is not None else "Déclencheur : attendre une cassure de structure M15 qui laisse un FVG.")
 
     # ---- verdict ----
     out = {"maj": P.depuis_horloge(ctx["fins"][i_der]), "px": sp(px), "fond": fond, "tend": tend, "filtres": filtres, "ajust": ajust,
@@ -244,7 +243,7 @@ def decider(data, maintenant, ajust, fond_vals, compte):
                           "divergence": a["divergence"], "W": a["W"]})
     else:
         out.update(verdict=0, note=None, etat=None, ordre=None,
-                   debloque=("Limite du jour atteinte (2 trades ou −2 R) : reprise demain." if limite else debloque))
+                   debloque=(["Limite du jour atteinte (2 trades ou −2 R) : reprise demain."] if limite else deb))
     return out
 
 
@@ -479,16 +478,27 @@ def bloc_html(dec):
         setup = f"Zone {o['zone']} + cassure M15 + FVG" + (f" · {', '.join(bonus)}" if bonus else "")
     else:
         sous, note, setup = "Aucun ordre à placer", '<span class="dz-note">Pas de setup</span>', ""
-        bloquant = next((f for f in dec["filtres"] if f[2] == "ko"), None) or next((f for f in dec["filtres"] if f[2] == "wait"), None)
-        pourquoi = (f"Filtre « {bloquant[0]} » : {bloquant[1]}." if bloquant else "Tous les filtres sont verts, en attente du signal.")
-        k1, v1 = "Ce qui débloque", dec.get("debloque") or "—"
+        ko = [f for f in dec["filtres"] if f[2] == "ko"]
+        bloquants = ko or [f for f in dec["filtres"] if f[2] == "wait"][:1]
+        if len(bloquants) > 1:
+            pourquoi = f"{len(bloquants)} filtres bloquent : " + " ; ".join(f"{f[0].lower()} ({f[1]})" for f in bloquants) + "."
+        elif bloquants:
+            pourquoi = f"Filtre « {bloquants[0][0]} » : {bloquants[0][1]}."
+        else:
+            pourquoi = "Tous les filtres sont verts, en attente du signal."
+        lst = dec.get("debloque") or []
+        if isinstance(lst, str):
+            lst = [lst]
+        k1, v1 = ("Ce qui débloque (tout est nécessaire)" if len(lst) > 1 else "Ce qui débloque"), lst or ["—"]
         k2, v2 = "Aujourd'hui", f"{dec['nb_jour']} trade{'s' if dec['nb_jour'] > 1 else ''} sur {P.MAX_TRADES_JOUR}, {fr(dec['r_jour'], 1, True)} R"
     carte = (f'<div class="dz-carte {cls}"><div class="dz-tete"><span class="k">Décision maintenant</span>'
              f'<span class="dz-maj">bougie 15 min de {dec["maj"]:%H:%M} · prix {fr(dec["px"])}</span></div>'
              f'<div class="dz-verdict"><b>{MOT_SENS[v]}</b><div>{note}<small>{esc(sous)}</small>'
              f'{f"<small>{esc(setup)}</small>" if setup else ""}</div></div>'
              f'<p class="dz-pourquoi">{esc(pourquoi)}</p>'
-             f'<div class="dz-kv"><div><span class="k">{esc(k1)}</span><span>{esc(v1)}</span></div>'
+             f'<div class="dz-kv"><div><span class="k">{esc(k1)}</span>'
+             + (f'<ol class="dz-deb">{"".join(f"<li>{esc(x)}</li>" for x in v1)}</ol>' if isinstance(v1, list) and len(v1) > 1
+                else f'<span>{esc(v1[0] if isinstance(v1, list) else v1)}</span>') + '</div>'
              f'<div><span class="k">{esc(k2)}</span><span>{esc(v2)}</span></div></div></div>')
     # filtres
     ico = {"ok": "✓", "ko": "✗", "wait": "–"}
@@ -596,6 +606,7 @@ CSS = """
 .dz-leg i.zu{height:9px;border:1px solid rgba(79,184,132,.5);background:rgba(79,184,132,.18)}
 .dz-leg i.zd{height:9px;border:1px solid rgba(224,96,90,.5);background:rgba(224,96,90,.18)}
 .dz-lien{font:500 12px var(--cond);color:var(--brass)}
+.dz-deb{margin:2px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
 .dz-struct{width:100%;border-collapse:collapse}
 .dz-struct td{padding:8px 0;border-bottom:1px solid var(--band2);font:500 14px var(--cond)}
 .dz-struct td:last-child{text-align:right;font-weight:600}
