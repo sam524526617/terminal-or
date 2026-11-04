@@ -164,7 +164,7 @@ def decider(data, maintenant, ajust, fond_vals, compte):
         filtres.append(("Annonces", txt, "ok"))
     # 2. fondamental
     if d_ref and fond == -d_ref:
-        filtres.append(("Fondamental", f"Bloc Fed / dollar / taux {mot[fond]} : contre un {MOT_SENS[d_ref].lower()}", "ko"))
+        filtres.append(("Fondamental", f"Bloc Fed / dollar / taux {mot[fond]} : contre {'un achat' if d_ref > 0 else 'une vente'}", "ko"))
         debloque = debloque or "Le bloc Fed / dollar / taux réels doit redevenir neutre (taux et dollar qui se calment)."
     else:
         filtres.append(("Fondamental", f"Bloc Fed / dollar / taux {mot[fond]}", "ok"))
