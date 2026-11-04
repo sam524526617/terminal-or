@@ -78,7 +78,66 @@ def bloque_par_annonce(cal):
 # DÉCISION
 # ---------------------------------------------------------------------------
 
-def decider(data, maintenant, ajust, fond_vals, compte):
+def historique(ctx, tf, fond_hist, cal, ajust):
+    """Le plan rejoué sur toutes les bougies 15 min disponibles (environ 60 jours) : ce qu'il aurait fait.
+    Fondamental jour par jour (fond_hist), annonces : calendrier si connu, sinon fenêtre de secours."""
+    m15 = tf["M15"]
+    n = len(m15)
+    T = m15.index.to_numpy().astype("datetime64[ns]").astype(np.int64)
+    H, L, C = ctx["h"], ctx["l"], ctx["c"]
+    bloque_cal = bloque_par_annonce(cal)
+    bloque = lambda t: bloque_cal(t) or P.annonce_probable(t)
+    if fond_hist is not None and len(fond_hist):
+        f_dates, f_vals = pd.DatetimeIndex(fond_hist.index).to_numpy(), fond_hist.to_numpy()
+    sigs = []
+    for i in range(60, n):
+        if not (ctx["st"]["M15"]["bos_h"][i] or ctx["st"]["M15"]["bos_b"][i]):
+            continue
+        fv = 0
+        if fond_hist is not None and len(fond_hist):
+            jour = pd.Timestamp(ctx["fins"][i]).normalize()
+            p = int(np.searchsorted(f_dates, np.datetime64(jour - pd.Timedelta(days=1)), side="right")) - 1
+            fv = int(f_vals[p]) if p >= 0 else 0
+        for d in (1, -1):
+            for s_ in P.signal(ctx, i, d, fv) or []:
+                if s_["entree_type"] == "ce" and P.filtres_ok(s_) and not bloque(s_["t_sig"]):
+                    sigs.append(s_)
+    pris, occupe, jours = [], None, {}
+    for s_ in sorted(sigs, key=lambda x: x["t_sig"]):
+        t_e, t_s, r, issue, etat = P.suivre_ordre(s_, T, H, L, C, bloque=bloque)
+        if t_e is None:
+            continue
+        if occupe is not None and t_e < occupe:
+            continue
+        j = t_e.normalize()
+        nb, clos = jours.setdefault(j, [0, []])
+        if nb >= P.MAX_TRADES_JOUR or sum(x for t, x in clos if t is not None and t <= t_e) <= P.PERTE_MAX_JOUR_R:
+            continue
+        jours[j][0] += 1
+        clos.append((t_s, r if etat == "fini" else 0.0))
+        occupe = t_s if t_s is not None else pd.Timestamp.max
+        pris.append({"t_sig": s_["t_sig"], "t_entree": t_e, "t_sortie": t_s, "sens": s_["sens"], "note": s_["note"],
+                     "zone": P.RANGS[s_["rang_zone"]], "entree": s_["entree"] + ajust, "stop": s_["stop"] + ajust,
+                     "tp1": s_["tp1"] + ajust, "tp2": s_["tp2"] + ajust, "R": r, "issue": issue, "etat": etat,
+                     "cle": pd.Timestamp(s_["t_sig"]).strftime("%Y%m%d%H%M") + ("A" if s_["sens"] > 0 else "V")})
+    finis = [x["R"] for x in pris if x["etat"] == "fini" and x["R"] is not None]
+    st = None
+    if finis:
+        R = np.array(finis)
+        cum = np.cumsum(R)
+        serie = pire = 0
+        for x in R:
+            serie = serie + 1 if x < 0 else 0
+            pire = max(pire, serie)
+        pertes = -R[R < 0].sum()
+        st = {"n": len(R), "reussite": float((R > 0).mean() * 100), "esp": float(R.mean()), "total": float(cum[-1]),
+              "pf": float(R[R > 0].sum() / pertes) if pertes else None,
+              "dd": float((cum - np.maximum.accumulate(np.r_[0, cum])[1:]).min()), "pire": pire,
+              "debut": P.depuis_horloge(m15.index[60]), "courbe": cum.tolist()}
+    return {"trades": pris[::-1], "stats": st}
+
+
+def decider(data, maintenant, ajust, fond_vals, compte, fond_hist=None):
     """data : données du terminal ; maintenant : datetime avec fuseau ; ajust : future -> prix affiché (spot) ;
     fond_vals : (taux réel 10 ans en pb sur 5 j, dollar en % sur 5 j, taux 2 ans en pb sur 5 j)."""
     intra = data.get("intraday")
@@ -231,6 +290,10 @@ def decider(data, maintenant, ajust, fond_vals, compte):
         out["tech"] = technique(ctx, tf, px, sp, d)
     except Exception as e:
         out["tech"] = {"erreur": str(e)[:120]}
+    try:
+        out["histo"] = historique(ctx, tf, fond_hist, cal, ajust)
+    except Exception as e:
+        out["histo"] = {"erreur": str(e)[:120], "trades": [], "stats": None}
     if actif and not (limite and actif["etat"] == "attente"):
         a = actif
         risque = a["risque"]

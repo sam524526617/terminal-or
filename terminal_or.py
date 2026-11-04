@@ -57,6 +57,11 @@ import pandas as pd
 import requests
 
 try:
+    import onglets  # onglets Annonces, Actualités et Suivi (v7)
+except Exception:
+    onglets = None
+
+try:
     import fondamental  # onglet Fondamental (lecture macro reliée au filtre du plan)
 except Exception:
     fondamental = None
@@ -4130,7 +4135,7 @@ def analyser(data):
             a["decision"] = decision.decider(
                 data, maintenant(), AJUST,
                 (variation(f.get("reel10"), 5, "pb"), variation(y.get("dxy"), 5, "pct"), variation(f.get("us2"), 5, "pb")),
-                COMPTE)
+                COMPTE, fond_hist=fondamental_jour_par_jour(y, f))
         except Exception as e:
             noter("Moteur de décision", False, str(e)[:120])
             a["decision"] = {"erreur": str(e)[:120]}
@@ -7410,6 +7415,19 @@ ONGLETS = [("synthese", "Synthèse"), ("fondamental", "Fondamental"), ("techniqu
            ("annonces", "Annonces"), ("actus", "Actualités"), ("suivi", "Suivi et méthode")]
 
 
+def fondamental_jour_par_jour(y, f):
+    """Bloc fondamental du plan pour chaque jour (pour rejouer le plan sur les 60 derniers jours)."""
+    try:
+        import plan as P_
+        norm = lambda s: s.set_axis(pd.DatetimeIndex(s.index).tz_localize(None).normalize())
+        df = pd.concat({"reel": norm(f["reel10"]), "dxy": norm(y["dxy"]), "us2": norm(f["us2"])}, axis=1).sort_index().ffill().dropna()
+        df = df[~df.index.duplicated(keep="last")]
+        r, dl, u = (df["reel"] - df["reel"].shift(5)) * 100, (df["dxy"] / df["dxy"].shift(5) - 1) * 100, (df["us2"] - df["us2"].shift(5)) * 100
+        return pd.Series([P_.bloc_fondamental(a_, b_, c_) for a_, b_, c_ in zip(r, dl, u)], index=df.index)
+    except Exception:
+        return None
+
+
 ONGLETS_V7 = [("technique", "Technique du plan"), ("fondamental", "Fondamental"), ("annonces", "Annonces"),
               ("actus", "Actualités"), ("suivi", "Suivi et méthode")]
 
@@ -7428,9 +7446,15 @@ def contenus_onglets(data, a, ia):
                             + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
                             + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
                             + bloc_devises(a) + '</details>'),
-            "annonces": bloc_reactions_evt(a) + bloc_calendrier(data["cal"], a) + bloc_reactions(a) + bloc_adjudications(a),
-            "actus": bloc_actus(data.get("news"), data.get("fed_off"), a),
-            "suivi": bloc_suivi(a) + bloc_methode(),
+            "annonces": (onglets.bloc_annonces(
+                [fiche_annonce(e, a) for e in (data["cal"] or []) if e["impact"] == "High"
+                 and e["date"] >= maintenant() - timedelta(minutes=30)][:4],
+                data["cal"], a.get("reactions_evt"), a.get("reactions"), maintenant(), bloc_adjudications(a))
+                if onglets else bloc_reactions_evt(a) + bloc_calendrier(data["cal"], a) + bloc_reactions(a) + bloc_adjudications(a)),
+            "actus": (onglets.bloc_actus(data.get("news"), data.get("fed_off"), a.get("barometre"), MOTS_BAROMETRE, maintenant())
+                      if onglets else bloc_actus(data.get("news"), data.get("fed_off"), a)),
+            "suivi": (onglets.bloc_suivi(a["decision"].get("histo"), COMPTE, onglets.bloc_methode())
+                      if onglets else bloc_suivi(a) + bloc_methode()),
         }
     return {
         # 1. Le lien entre les deux : ce qu'il faut faire maintenant
@@ -7463,7 +7487,10 @@ def bloc_onglets(data, a, ia):
     panneaux = ""
     for i, t in onglets:
         extra = ""
-        if i == "annonces":
+        if i == "annonces" and v7(a):
+            extra = (f'<details class="on-plus"><summary>Calendrier en direct (TradingView)</summary>'
+                     f'<div class="tv-cal">{cal_tv}</div></details>')
+        elif i == "annonces":
             extra = (f'<section><h2>Calendrier en direct</h2><p class="pourquoi">Les chiffres réels s\'affichent ici dès '
                      f'leur publication (TradingView).</p><div class="tv-cal">{cal_tv}</div></section>')
         if i == "technique" and not v7(a):
@@ -7505,10 +7532,11 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
             f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
             f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">'
-            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}'
+            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
-            f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}</body></html>')
+            f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
+            f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}</body></html>')
 
 
 # ---------------------------------------------------------------------------
