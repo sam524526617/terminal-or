@@ -1,0 +1,56 @@
+# Backtest du plan de trading sur l'historique de l'or (bougies 1 minute Dukascopy).
+# Lancé automatiquement quand le script change, ou à la main avec « Run workflow ».
+# Le rapport s'affiche dans le résumé du run ; les fichiers détaillés sont dans « Artifacts ».
+name: Backtest du plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      debut:
+        description: "Date de début (AAAA-MM-JJ)"
+        default: "2019-01-01"
+  push:
+    branches: [claude/backtest-plan]
+    paths: ["backtest/**", ".github/workflows/backtest.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest
+  cancel-in-progress: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Installer les modules
+        run: pip install pandas numpy requests
+
+      - name: Récupérer l'historique déjà téléchargé
+        uses: actions/cache@v6
+        with:
+          path: backtest/.donnees
+          key: dukascopy-m1-${{ github.run_id }}
+          restore-keys: dukascopy-m1-
+
+      - name: Lancer le backtest
+        run: python backtest/backtest_plan.py --debut "${{ github.event.inputs.debut || '2019-01-01' }}" --sortie resultats
+
+      - name: Afficher le rapport
+        if: always()
+        run: test -f resultats/rapport.md && cat resultats/rapport.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resultats-backtest
+          path: resultats/
+          if-no-files-found: ignore
