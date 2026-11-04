@@ -40,7 +40,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import plan as P  # noqa: E402  (règles communes avec le terminal)
 from plan import (SPREAD, DECALAGE, MAX_TRADES_JOUR, PERTE_MAX_JOUR_R)  # noqa: E402
 
-URL_DUKA = "https://datafeed.dukascopy.com/datafeed/XAUUSD/{y}/{m:02d}/{d:02d}/BID_candles_min_1.bi5"
+URL_DUKA = "https://datafeed.dukascopy.com/datafeed/{inst}/{y}/{m:02d}/{d:02d}/BID_candles_min_1.bi5"
+# Instrument téléchargé (le backtest des stratégies MTF le change pour BTCUSD) : nom Dukascopy, diviseur des prix, cote le samedi
+INSTRUMENT = {"nom": "XAUUSD", "diviseur": None, "samedi": False}
 URL_FRED = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}"
 UA = {"User-Agent": "Mozilla/5.0 (backtest terminal-or)"}
 
@@ -65,7 +67,7 @@ def telecharger_jour(j, dossier):
     f = dossier / f"{j:%Y%m%d}.bi5"
     if f.exists():
         return f, "cache"
-    url = URL_DUKA.format(y=j.year, m=j.month - 1, d=j.day)   # mois numérotés à partir de 0 chez Dukascopy
+    url = URL_DUKA.format(inst=INSTRUMENT["nom"], y=j.year, m=j.month - 1, d=j.day)   # mois numérotés à partir de 0 chez Dukascopy
     ancien = j < date.today() - timedelta(days=3)
     erreur = "?"
     for essai in range(3):
@@ -107,9 +109,10 @@ def telecharger(debut, fin, dossier):
     """Télécharge les jours manquants avec une progression visible ; s'arrête vite si la source refuse les requêtes."""
     dossier.mkdir(parents=True, exist_ok=True)
     jours = [debut + timedelta(days=i) for i in range((fin - debut).days + 1)]
-    jours = [j for j in jours if j.weekday() != 5]   # le samedi, l'or ne cote pas
+    if not INSTRUMENT["samedi"]:
+        jours = [j for j in jours if j.weekday() != 5]   # le samedi, l'or ne cote pas
     deja = sum(1 for j in jours if (dossier / f"{j:%Y%m%d}.bi5").exists())
-    log(f"Dukascopy : {len(jours)} jours, {deja} déjà en cache, {len(jours) - deja} à télécharger")
+    log(f"Dukascopy {INSTRUMENT['nom']} : {len(jours)} jours, {deja} déjà en cache, {len(jours) - deja} à télécharger")
     fichiers, echecs, t0 = {}, {}, time.time()
     with cf.ThreadPoolExecutor(16) as ex:
         futurs = {ex.submit(telecharger_jour, j, dossier): j for j in jours}
@@ -143,7 +146,7 @@ def charger_dukascopy(debut, fin, dossier):
     px = np.concatenate([b[1] for b in blocs])
     vol = np.concatenate([b[2] for b in blocs])
     med = np.median(px[:, 0])
-    div = next((d for d in (1000, 100, 10, 1, 10000) if 300 <= med / d <= 10000), 1000)
+    div = INSTRUMENT["diviseur"] or next((d for d in (1000, 100, 10, 1, 10000) if 300 <= med / d <= 10000), 1000)
     px = px / div
     # ordre des champs : (open, close, low, high) ou (open, high, low, close) ; on garde le plus cohérent
     ordres = {"ocLH": (0, 3, 2, 1), "oHLc": (0, 1, 2, 3)}

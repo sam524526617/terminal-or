@@ -1,0 +1,80 @@
+# Backtest indépendant des stratégies MTF (autobot_mtf) sur données 1 minute Dukascopy (BTCUSD et XAUUSD).
+# Lancé à la main avec « Run workflow » (onglet Actions). Rapport dans le résumé du run.
+name: Backtest stratégies MTF
+
+on:
+  workflow_dispatch:
+    inputs:
+      debut:
+        description: "Premier jour compté (AAAA-MM-JJ)"
+        default: "2025-01-01"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest-mtf
+  cancel-in-progress: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      DEBUT: ${{ github.event.inputs.debut || '2025-01-01' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Installer les modules
+        run: pip install pandas numpy requests yfinance
+
+      - name: Récupérer l'historique de l'or
+        uses: actions/cache/restore@v6
+        with:
+          path: backtest/.donnees
+          key: dukascopy-m1-${{ github.run_id }}
+          restore-keys: dukascopy-m1-
+
+      - name: Récupérer l'historique du bitcoin
+        uses: actions/cache/restore@v6
+        with:
+          path: backtest/.donnees_btc
+          key: dukascopy-btc-m1-${{ github.run_id }}
+          restore-keys: dukascopy-btc-m1-
+
+      - name: Télécharger les jours manquants
+        timeout-minutes: 120
+        run: python backtest/strategies_mtf.py --debut "$DEBUT" --telecharger-seulement
+
+      - name: Sauvegarder l'historique de l'or
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: backtest/.donnees
+          key: dukascopy-m1-${{ github.run_id }}
+
+      - name: Sauvegarder l'historique du bitcoin
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: backtest/.donnees_btc
+          key: dukascopy-btc-m1-${{ github.run_id }}
+
+      - name: Lancer le backtest
+        timeout-minutes: 30
+        run: python backtest/strategies_mtf.py --debut "$DEBUT" --sortie resultats_mtf
+
+      - name: Afficher le rapport
+        if: always()
+        run: test -f resultats_mtf/rapport_mtf.md && cat resultats_mtf/rapport_mtf.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resultats-mtf
+          path: resultats_mtf/
+          if-no-files-found: ignore
