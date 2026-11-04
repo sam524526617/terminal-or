@@ -57,12 +57,17 @@ import pandas as pd
 import requests
 
 try:
+    import decision  # moteur de décision du plan (ACHAT / VENTE / RIEN), règles communes avec le backtest
+except Exception:  # le terminal reste utilisable sans lui
+    decision = None
+
+try:
     import yfinance as yf
     logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 except ImportError:
     yf = None
 
-VERSION = "6.2"
+VERSION = "7.0"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -158,7 +163,7 @@ TV_LANGUE_ACTUS = "en"   # le fil d'actualité en direct est plus fourni en angl
 # directement dans la page (bouton « Réglages »), sans toucher à ce fichier.
 COMPTE = {
     "capital": 50000,            # taille du compte, en $
-    "risque_pct": 0.5,           # risque par trade, en % du compte
+    "risque_pct": 1.0,           # risque par trade, en % du compte (plan : 1 %)
     "spread": 0.30,              # écart achat-vente moyen de ton broker sur XAU/USD, en $ (compté dans le risque)
     "once_par_lot": 100,         # XAU/USD : 1 lot = 100 onces, donc 1 $ de mouvement = 100 $ par lot
 }
@@ -4108,6 +4113,16 @@ def analyser(data):
     a["plan"] = plan_du_jour(a, data)
     a["bilan"] = bilan_seance(a, data)
     a["semaine"] = semaine_a_venir(a, data)
+    a["decision"] = None
+    if decision is not None and ACTIF["sym"] == "XAU/USD":
+        try:
+            a["decision"] = decision.decider(
+                data, maintenant(), AJUST,
+                (variation(f.get("reel10"), 5, "pb"), variation(y.get("dxy"), 5, "pct"), variation(f.get("us2"), 5, "pb")),
+                COMPTE)
+        except Exception as e:
+            noter("Moteur de décision", False, str(e)[:120])
+            a["decision"] = {"erreur": str(e)[:120]}
     return a
 
 
@@ -7340,7 +7355,7 @@ def evenements_json(data, a):
     return json.dumps(out[:16], ensure_ascii=False).replace("</", "<\\/")
 
 
-def bloc_cockpit(a, y, f):
+def bloc_cockpit(a, y, f, sans_setup=False):
     chart = tv("embed-widget-advanced-chart.js", {
         "autosize": True, "symbol": TV_OR, "interval": "15", "timezone": FUSEAU, "theme": "dark", "style": "1",
         "locale": "fr", "allow_symbol_change": True, "calendar": False, "hide_volume": True,
@@ -7356,8 +7371,11 @@ def bloc_cockpit(a, y, f):
             f'<div class="col col-g"><div class="panel" id="p-graph"><div class="ph"><span class="k">{esc(ACTIF["sym"])} en direct</span>'
             f'<small>{fraicheur("live")} {esc(TV_OR)} · TradingView</small></div><div class="pb nopad">{chart}</div></div>'
             f'<div class="minis analyst">{minis}</div></div>'
-            f'<div class="col col-c"><div class="panel" id="p-setup"><div class="ph"><span class="k">Setup A · balayage puis retournement</span>'
-            f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))}</small></div><div class="pb" data-zone="setup">{bloc_setup_a(a)}</div></div>'
+            f'<div class="col col-c">'
+            + ("" if sans_setup else
+               f'<div class="panel" id="p-setup"><div class="ph"><span class="k">Setup A · balayage puis retournement</span>'
+               f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))}</small></div><div class="pb" data-zone="setup">{bloc_setup_a(a)}</div></div>')
+            + ''
             f'<div class="panel analyst" id="p-vue"><div class="ph"><span class="k">Où va le marché</span>'
             f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))} <a href="#analyse" data-aller="synthese">plan complet</a></small></div>'
             f'<div class="pb" data-zone="vue">{bloc_vue_cockpit(a)}</div></div>'
@@ -7430,7 +7448,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                       "site": bool(site), "seances": [[n, d, fn] for n, d, fn in SEANCES], **ACTIF["cfg_js"]},
                      ensure_ascii=False)
     ctx_json = json.dumps(contexte_controle(a), ensure_ascii=False).replace("</", "<\\/")
-    corps = (f'{bloc_barre(a)}{bloc_reglages()}{bloc_bandeau_tv()}{bloc_trader(a)}{bloc_strip(a, y, f)}{bloc_cockpit(a, y, f)}'
+    dec_html = decision.bloc_html(a.get("decision")) if (decision is not None and a.get("decision")) else bloc_trader(a)
+    corps = (f'{bloc_barre(a)}{bloc_reglages()}{dec_html}{bloc_bandeau_tv()}{bloc_strip(a, y, f)}{bloc_cockpit(a, y, f, sans_setup=bool(a.get("decision")))}'
              f'{bloc_onglets(data, a, ia)}'
              f'<script type="application/json" id="evts" data-zone="evts">{evenements_json(data, a)}</script>'
              f'<script type="application/json" id="ctx" data-zone="ctx">{ctx_json}</script>'
@@ -7443,8 +7462,9 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
             f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
             f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">'
-            f'<style>{CSS}</style></head><body>{corps}'
-            f'<script>{JS.replace("__CFG__", cfg)}</script></body></html>')
+            f'<style>{CSS}{decision.CSS if decision is not None else ""}</style></head><body>{corps}'
+            f'<script>{JS.replace("__CFG__", cfg)}</script>'
+            f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}</body></html>')
 
 
 # ---------------------------------------------------------------------------
@@ -7458,6 +7478,14 @@ def construire_brief(data, a):
     px_or = (a["seance"]["prix"] if a.get("seance") else o["prix"])   # dernier prix du future, converti en spot
     L.append(f"Or (XAU/USD spot) : {nb(px_or + AJUST, 1) if px_or else 'n.d.'} $ (1 j {nb(o['d1'], 2, True)} %, 5 j {nb(o['d5'], 2, True)} %, "
              f"20 j {nb(o['d20'], 2, True)} %). Amplitude attendue du jour : ±{nb(a['range_jour'], 0)} $.")
+    dz = a.get("decision")
+    if dz and not dz.get("erreur"):
+        if dz.get("ordre"):
+            o_ = dz["ordre"]
+            L.append(f"DÉCISION DU PLAN : {'ACHAT' if o_['sens'] > 0 else 'VENTE'} (note {dz['note']}, {dz['etat']}) entrée {nb(o_['entree'], 2)}, "
+                     f"stop {nb(o_['stop'], 2)}, TP1 {nb(o_['tp1'], 2)}, TP2 {nb(o_['tp2'], 2)}")
+        else:
+            L.append(f"DÉCISION DU PLAN : RIEN. {dz.get('debloque') or ''}")
     L.append(f"Régime : {a['regime']['nom']} ({a['regime']['resume']})")
     v = a.get("vue")
     if v:

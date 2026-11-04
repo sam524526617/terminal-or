@@ -36,28 +36,10 @@ import numpy as np
 import pandas as pd
 import requests
 
-# ---------------------------------------------------------------------------
-# PARAMÈTRES DU PLAN
-# ---------------------------------------------------------------------------
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import plan as P  # noqa: E402  (règles communes avec le terminal)
+from plan import (SPREAD, DECALAGE, MAX_TRADES_JOUR, PERTE_MAX_JOUR_R)  # noqa: E402
 
-SPREAD = 0.30            # écart achat-vente, en $
-K_SWING = {"W": 2, "D": 2, "H4": 2, "H1": 2, "M15": 2}   # bougies de chaque côté pour valider un sommet ou un creux
-FVG_MIN_ATR = 0.10       # taille minimale d'un FVG de zone, en ATR de son unité de temps
-ZONE_VIE_M15 = 480       # une zone reste valable 5 jours (480 bougies M15)
-ARME_M15 = 24            # après le contact avec la zone, le déclencheur a 6 h pour arriver
-FENETRE_DECL = 8         # la cassure M15 doit suivre le contact de 2 h au plus
-ORDRE_VIE_MIN = 120      # l'ordre limite est annulé s'il n'est pas exécuté en 2 h
-TENUE_MAX_J = 3          # position fermée au bout de 3 jours, et toujours avant la clôture du vendredi
-STOP_MARGE_ATR = 0.10    # marge sous l'OB, en ATR M15
-R_MIN_ATR, R_MAX_ATR = 0.25, 4.0   # stops trop serrés ou trop larges ignorés (en ATR M15)
-TP1_R = 2.0
-TP2_DEFAUT_R = 3.0       # si aucune liquidité H1 n'est trouvée
-TP2_MAX_R = 8.0
-MAX_TRADES_JOUR = 2
-PERTE_MAX_JOUR_R = -2.0
-RSI_HAUT, RSI_BAS = 70, 30
-
-DECALAGE = pd.Timedelta(hours=7)   # horloge interne : heure de New York + 7 h, la journée de trading commence à 0 h
 URL_DUKA = "https://datafeed.dukascopy.com/datafeed/XAUUSD/{y}/{m:02d}/{d:02d}/BID_candles_min_1.bi5"
 URL_FRED = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}"
 UA = {"User-Agent": "Mozilla/5.0 (backtest terminal-or)"}
@@ -200,129 +182,14 @@ def charger_fred(debut):
 
 
 # ---------------------------------------------------------------------------
-# BOUGIES, STRUCTURE, ZONES
+# SIGNAUX ET SIMULATION (règles de plan.py)
 # ---------------------------------------------------------------------------
 
 def horloge(df_utc):
-    """Index UTC -> horloge interne (heure de New York + 7 h, sans fuseau)."""
-    t = df_utc.index.tz_convert("America/New_York").tz_localize(None) + DECALAGE
-    out = df_utc.copy()
-    out.index = t
+    out = df_utc[["open", "high", "low", "close"]].copy()
+    out.index = P.vers_horloge(df_utc.index)
     return out[~out.index.duplicated()].sort_index()
 
-
-def agreger(m1, regle):
-    if regle == "W":
-        cle = m1.index.normalize() - pd.to_timedelta(m1.index.weekday, unit="D")
-        g = m1.groupby(cle)
-        df = pd.DataFrame({"open": g["open"].first(), "high": g["high"].max(),
-                           "low": g["low"].min(), "close": g["close"].last()})
-        df["fin"] = df.index + pd.Timedelta(days=7)
-        return df
-    g = m1.resample(regle, label="left", closed="left")
-    df = pd.DataFrame({"open": g["open"].first(), "high": g["high"].max(),
-                       "low": g["low"].min(), "close": g["close"].last()}).dropna()
-    df["fin"] = df.index + pd.Timedelta(regle)
-    return df
-
-
-def atr(df, n=14):
-    h, l, c = df["high"], df["low"], df["close"]
-    pc = c.shift(1)
-    tr = pd.concat([h - l, (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
-    return tr.rolling(n, min_periods=n).mean().to_numpy()
-
-
-def rsi(c, n=14):
-    d = np.diff(c, prepend=c[0])
-    hausse = pd.Series(np.clip(d, 0, None)).ewm(alpha=1 / n, adjust=False).mean()
-    baisse = pd.Series(np.clip(-d, 0, None)).ewm(alpha=1 / n, adjust=False).mean()
-    return (100 - 100 / (1 + hausse / baisse.replace(0, np.nan))).fillna(50).to_numpy()
-
-
-def structure(df, k):
-    """Tendance = sens de la dernière cassure (clôture au-delà du dernier sommet ou creux confirmé)."""
-    h, l, c = df["high"].to_numpy(), df["low"].to_numpy(), df["close"].to_numpy()
-    n = len(df)
-    tend = np.zeros(n, np.int8)
-    bos_h, bos_b = np.zeros(n, bool), np.zeros(n, bool)
-    sommets, creux = [], []          # (indice de confirmation, indice du point, prix)
-    der_h = der_l = None
-    t = 0
-    for i in range(n):
-        j = i - k
-        if j >= k:
-            if h[j] > h[j - k:j].max() and h[j] >= h[j + 1:i + 1].max():
-                der_h = [h[j], False]
-                sommets.append((i, j, h[j]))
-            if l[j] < l[j - k:j].min() and l[j] <= l[j + 1:i + 1].min():
-                der_l = [l[j], False]
-                creux.append((i, j, l[j]))
-        if der_h is not None and not der_h[1] and c[i] > der_h[0]:
-            der_h[1], t, bos_h[i] = True, 1, True
-        if der_l is not None and not der_l[1] and c[i] < der_l[0]:
-            der_l[1], t, bos_b[i] = True, -1, True
-        tend[i] = t
-    return {"tend": tend, "bos_h": bos_h, "bos_b": bos_b, "sommets": sommets, "creux": creux}
-
-
-def etat_a(df_tf, tend, fins):
-    pos = np.searchsorted(df_tf["fin"].to_numpy(), fins, side="right") - 1
-    return np.where(pos >= 0, tend[np.clip(pos, 0, None)], 0)
-
-
-def zones(df, rang):
-    """FVG et OB de l'unité de temps : (sens, rang, type, bas, haut, niveau de contact, heure de création)."""
-    o, h, l, c = (df[x].to_numpy() for x in ("open", "high", "low", "close"))
-    a, fin = atr(df), df["fin"].to_numpy()
-    out = []
-    for j in range(3, len(df)):
-        if not np.isfinite(a[j]):
-            continue
-        if l[j] > h[j - 2] and l[j] - h[j - 2] >= FVG_MIN_ATR * a[j]:
-            out.append((1, rang, "FVG", h[j - 2], l[j], (h[j - 2] + l[j]) / 2, fin[j]))
-            for m in (j - 1, j - 2, j - 3):
-                if c[m] < o[m]:
-                    out.append((1, rang, "OB", l[m], o[m], o[m], fin[j]))
-                    break
-        if h[j] < l[j - 2] and l[j - 2] - h[j] >= FVG_MIN_ATR * a[j]:
-            out.append((-1, rang, "FVG", h[j], l[j - 2], (h[j] + l[j - 2]) / 2, fin[j]))
-            for m in (j - 1, j - 2, j - 3):
-                if c[m] > o[m]:
-                    out.append((-1, rang, "OB", o[m], h[m], o[m], fin[j]))
-                    break
-    return out
-
-
-def armer(liste, m15):
-    """Pour chaque bougie M15 : rang de la zone touchée récemment (0 = aucune, 1 = M30, 2 = H1, 3 = H4)."""
-    debut = m15.index.to_numpy()
-    lo, hi, cl = (m15[x].to_numpy() for x in ("low", "high", "close"))
-    n = len(m15)
-    arme = {1: np.zeros(n, np.int8), -1: np.zeros(n, np.int8)}
-    for d, rang, typ, bas, haut, niv, cree in liste:
-        s = int(np.searchsorted(debut, cree))
-        e = min(n, s + ZONE_VIE_M15)
-        if s >= e:
-            continue
-        if d > 0:
-            contact, casse = np.flatnonzero(lo[s:e] <= niv), np.flatnonzero(cl[s:e] < bas)
-        else:
-            contact, casse = np.flatnonzero(hi[s:e] >= niv), np.flatnonzero(cl[s:e] > haut)
-        if not len(contact):
-            continue
-        t0 = contact[0]
-        i0 = casse[0] if len(casse) else e - s
-        if i0 <= t0:
-            continue
-        a, b = s + t0, min(s + t0 + ARME_M15, s + i0, n)
-        arme[d][a:b] = np.maximum(arme[d][a:b], rang)
-    return arme
-
-
-# ---------------------------------------------------------------------------
-# SIGNAUX
-# ---------------------------------------------------------------------------
 
 def fenetre_annonce(t):
     """Approximation des grosses annonces US : 8 h - 9 h à New York (CPI, emploi, ventes...), du lundi au vendredi."""
@@ -331,181 +198,37 @@ def fenetre_annonce(t):
     return ny.weekday() < 5 and 8 * 60 <= m < 9 * 60
 
 
-def liquidite_h1(h1, st_h1, t_sig, d, seuil):
-    """Prochain sommet (achat) ou creux (vente) H1 confirmé et pas encore pris, au-delà de seuil."""
-    fins = h1["fin"].to_numpy()
-    dern = int(np.searchsorted(fins, np.datetime64(t_sig), side="right")) - 1
-    if dern < 0:
-        return None
-    hi, lo = h1["high"].to_numpy(), h1["low"].to_numpy()
-    pts = st_h1["sommets"] if d > 0 else st_h1["creux"]
-    meilleur = None
-    for ic, j, p in reversed(pts):
-        if ic > dern:
-            continue
-        if dern - ic > 240:
-            break
-        if d > 0:
-            pris = j + 1 <= dern and hi[j + 1:dern + 1].max() >= p
-            if not pris and p > seuil and (meilleur is None or p < meilleur):
-                meilleur = p
-        else:
-            pris = j + 1 <= dern and lo[j + 1:dern + 1].min() <= p
-            if not pris and p < seuil and (meilleur is None or p > meilleur):
-                meilleur = p
-    return meilleur
-
-
 def candidats(m1, fond):
     log("Construction des unités de temps...")
-    tf = {"M15": agreger(m1, "15min"), "M30": agreger(m1, "30min"), "H1": agreger(m1, "1h"),
-          "H4": agreger(m1, "4h"), "D": agreger(m1, "1D"), "W": agreger(m1, "W")}
-    m15 = tf["M15"]
-    fins = m15["fin"].to_numpy()
-    log("Structure de marché par unité de temps...")
-    st = {k: structure(tf[k], K_SWING.get(k, 2)) for k in ("W", "D", "H4", "H1", "M15")}
-    tend = {k: etat_a(tf[k], st[k]["tend"], fins) for k in ("W", "D", "H4", "H1")}
-    log("Zones OB et FVG en M30, H1 et H4...")
-    zs = zones(tf["M30"], 1) + zones(tf["H1"], 2) + zones(tf["H4"], 3)
-    arme = armer(zs, m15)
-    log(f"  {len(zs)} zones")
-    o, h, l, c = (m15[x].to_numpy() for x in ("open", "high", "low", "close"))
-    a15, r15 = atr(m15), rsi(c)
-    s15 = st["M15"]
-    creux_conf = np.array([x[0] for x in s15["creux"]])
-    sommets_conf = np.array([x[0] for x in s15["sommets"]])
+    tf = {"M15": P.agreger(m1, "15min"), "M30": P.agreger(m1, "30min"), "H1": P.agreger(m1, "1h"),
+          "H4": P.agreger(m1, "4h"), "D": P.agreger(m1, "1D"), "W": P.agreger(m1, "W")}
+    log("Structure de marché, zones OB et FVG...")
+    ctx = P.contexte(tf)
+    log(f"  {len(ctx['zones'])} zones")
     if fond is not None:
-        f_dates = fond.index.to_numpy()
-        f_vals = fond.to_numpy()
-
-    def divergence(i, d):
-        pts, conf = (s15["creux"], creux_conf) if d > 0 else (s15["sommets"], sommets_conf)
-        k = int(np.searchsorted(conf, i, side="right"))
-        if k < 2:
-            return False
-        (_, j1, p1), (_, j2, p2) = pts[k - 2], pts[k - 1]
-        if i - j2 > 20:
-            return False
-        return (p2 < p1 and r15[j2] > r15[j1]) if d > 0 else (p2 > p1 and r15[j2] < r15[j1])
-
+        f_dates, f_vals = fond.index.to_numpy(), fond.to_numpy()
     out = []
-    for i in range(30, len(m15)):
+    for i in range(30, len(tf["M15"])):
         for d in (1, -1):
-            if not (s15["bos_h"][i] if d > 0 else s15["bos_b"][i]):
-                continue
-            rang = int(arme[d][max(0, i - FENETRE_DECL):i + 1].max())
-            if rang == 0:
-                continue
-            j = next((x for x in (i, i - 1, i - 2) if x >= 2 and
-                      ((l[x] > h[x - 2]) if d > 0 else (h[x] < l[x - 2]))), None)
-            if j is None or not np.isfinite(a15[i]):
-                continue
-            if d > 0:
-                bas_fvg, haut_fvg = h[j - 2], l[j]
-                m = next((x for x in range(j - 1, max(j - 6, -1), -1) if c[x] < o[x]), None)
-                ob = l[m] if m is not None else l[max(0, j - 4):j + 1].min()
-                stop = ob - STOP_MARGE_ATR * a15[i]
-                entrees = {"ce": (bas_fvg + haut_fvg) / 2, "bord": haut_fvg}
-            else:
-                bas_fvg, haut_fvg = h[j], l[j - 2]
-                m = next((x for x in range(j - 1, max(j - 6, -1), -1) if c[x] > o[x]), None)
-                ob = h[m] if m is not None else h[max(0, j - 4):j + 1].max()
-                stop = ob + STOP_MARGE_ATR * a15[i]
-                entrees = {"ce": (bas_fvg + haut_fvg) / 2, "bord": bas_fvg}
-            t_sig = pd.Timestamp(fins[i])
-            jour = t_sig.normalize()
             fv = 0
-            if fond is not None:
+            if fond is not None and (ctx["st"]["M15"]["bos_h"][i] or ctx["st"]["M15"]["bos_b"][i]):
+                jour = pd.Timestamp(ctx["fins"][i]).normalize()
                 p = int(np.searchsorted(f_dates, np.datetime64(jour - pd.Timedelta(days=1)), side="right")) - 1
                 fv = int(f_vals[p]) if p >= 0 else 0
-            div = divergence(i, d)
-            note = "A" if (tend["W"][i] == d and (rang == 3 or div)) else "B"
-            extreme = (r15[i] > RSI_HAUT) if d > 0 else (r15[i] < RSI_BAS)
-            if extreme:
-                note = {"A": "B", "B": "C"}[note]
-            base = {"t_sig": t_sig, "sens": d, "rang_zone": rang, "W": int(tend["W"][i]), "D": int(tend["D"][i]),
-                    "H4": int(tend["H4"][i]), "H1": int(tend["H1"][i]), "fond": fv, "divergence": div,
-                    "rsi": round(float(r15[i]), 1), "note": note, "atr15": float(a15[i])}
-            for nom, e in entrees.items():
-                risque = abs(e - stop)
-                if (e - stop) * d <= 0 or not (R_MIN_ATR * a15[i] <= risque <= R_MAX_ATR * a15[i]):
-                    continue
-                tp1 = e + d * TP1_R * risque
-                liq = liquidite_h1(tf["H1"], st["H1"], t_sig, d, tp1)
-                if liq is None or abs(liq - e) > TP2_MAX_R * risque:
-                    tp2 = e + d * TP2_DEFAUT_R * risque
-                else:
-                    tp2 = liq
-                out.append(dict(base, entree_type=nom, entree=e, stop=stop, tp1=tp1, tp2=tp2, risque=risque))
+            out.extend(P.signal(ctx, i, d, fv) or [])
     log(f"  {len(out)} signaux candidats (avant filtres)")
     return pd.DataFrame(out)
 
 
-# ---------------------------------------------------------------------------
-# SIMULATION MINUTE PAR MINUTE
-# ---------------------------------------------------------------------------
-
 def simuler(cand, m1):
     T = m1.index.to_numpy().astype("datetime64[ns]").astype(np.int64)
     H, L, C = (m1[x].to_numpy() for x in ("high", "low", "close"))
-    N = len(T)
-    MIN, JOUR = 60 * 10**9, 86400 * 10**9
     res = []
-    for r in cand.itertuples(index=False):
-        d, e, sl, tp1, tp2 = r.sens, r.entree, r.stop, r.tp1, r.tp2
-        t0 = pd.Timestamp(r.t_sig).value
-        i = int(np.searchsorted(T, t0))
-        lim = t0 + ORDRE_VIE_MIN * MIN
-        rempli = None
-        while i < N and T[i] < lim:
-            if d > 0:
-                if H[i] >= tp1:
-                    break
-                if L[i] + SPREAD <= e:
-                    rempli = i
-                    break
-            else:
-                if L[i] + SPREAD <= tp1:
-                    break
-                if H[i] >= e:
-                    rempli = i
-                    break
-            i += 1
-        if rempli is None:
-            res.append((None, None, None, "non exécuté"))
-            continue
-        t_f = pd.Timestamp(T[rempli])
-        if fenetre_annonce(t_f):
-            res.append((None, None, None, "annonce"))
-            continue
-        lundi = t_f.normalize() - pd.Timedelta(days=t_f.weekday())
-        fin_max = min(T[rempli] + TENUE_MAX_J * JOUR,
-                      (lundi + pd.Timedelta(days=4, hours=23, minutes=45)).value)
-        pos, pnl, stop_c, tp1_ok, issue, t_x = 1.0, 0.0, sl, False, None, None
-        for k in range(rempli, N):
-            if T[k] >= fin_max:
-                sortie = C[k] if d > 0 else C[k] + SPREAD
-                pnl += pos * (sortie - e) * d
-                issue, t_x = "temps", T[k]
-                break
-            bas, haut = (L[k], H[k]) if d > 0 else (L[k] + SPREAD, H[k] + SPREAD)
-            touche_stop = (bas <= stop_c) if d > 0 else (haut >= stop_c)
-            if touche_stop:
-                pnl += pos * (stop_c - e) * d
-                issue = "stop" if not tp1_ok else "TP1 puis BE"
-                t_x = T[k]
-                break
-            if not tp1_ok and ((haut >= tp1) if d > 0 else (bas <= tp1)):
-                pnl += 0.5 * (tp1 - e) * d
-                pos, tp1_ok, stop_c = 0.5, True, e
-            if tp1_ok and ((haut >= tp2) if d > 0 else (bas <= tp2)):
-                pnl += pos * (tp2 - e) * d
-                issue, t_x = "TP2", T[k]
-                break
-        if issue is None:
-            pnl += pos * ((C[-1] if d > 0 else C[-1] + SPREAD) - e) * d
-            issue, t_x = "fin des données", T[-1]
-        res.append((t_f, pd.Timestamp(t_x), pnl / r.risque, issue))
+    for sig in cand.to_dict("records"):
+        t_e, t_s, r, issue, etat = P.suivre_ordre(sig, T, H, L, C, bloque=fenetre_annonce)
+        if etat in ("en cours", "tp1"):
+            t_s, issue = pd.Timestamp(T[-1]), "fin des données"
+        res.append((t_e, t_s, r, issue))
     cand = cand.copy()
     cand["t_entree"] = [x[0] for x in res]
     cand["t_sortie"] = [x[1] for x in res]
@@ -637,14 +360,14 @@ def rapport(cand, periode, avec_fond, sortie):
         iss = b["issue"].value_counts()
         L += ["", "## Comment les trades du plan se terminent", "", "| Issue | Trades | Part |", "|---|---|---|"]
         L += [f"| {k} | {v} | {v / len(b) * 100:.0f} % |" for k, v in iss.items()]
-    nb_non = (cand[plan & (cand["entree_type"] == "ce")]["issue"] == "non exécuté").sum()
+    nb_non = cand[plan & (cand["entree_type"] == "ce")]["issue"].isin(["non exécuté", "annulé (objectif atteint sans nous)"]).sum()
     L += ["", "## Limites de ce test", "",
           "- Les annonces sont approximées par la fenêtre 8 h - 9 h de New York ; les réunions de la Fed (20 h à Paris) "
           "ne sont pas bloquées.",
           "- Le fondamental testé est le bloc Fed / dollar / taux réels (FRED). COT, ETF et liquidité ne sont pas rejoués.",
           "- Les supports et résistances à 3 contacts ne sont pas encore codés : seules les zones OB et FVG sont testées.",
           "- Quand une même minute touche le stop et l'objectif, le test compte le stop (hypothèse prudente).",
-          f"- {nb_non} signaux du plan n'ont jamais été exécutés (le prix n'est pas revenu dans le FVG en 2 h).",
+          f"- {nb_non} signaux du plan n'ont jamais été exécutés (le prix n'est pas revenu dans le FVG en 2 h, ou a filé vers l'objectif sans nous).",
           "- Un backtest décrit le passé. Il sert à éliminer ce qui ne marche pas, pas à garantir l'avenir."]
     txt = "\n".join(L) + "\n"
     sortie.mkdir(parents=True, exist_ok=True)
