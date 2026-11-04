@@ -57,6 +57,11 @@ import pandas as pd
 import requests
 
 try:
+    import fondamental  # onglet Fondamental (lecture macro reliée au filtre du plan)
+except Exception:
+    fondamental = None
+
+try:
     import decision  # moteur de décision du plan (ACHAT / VENTE / RIEN), règles communes avec le backtest
 except Exception:  # le terminal reste utilisable sans lui
     decision = None
@@ -4113,6 +4118,12 @@ def analyser(data):
     a["plan"] = plan_du_jour(a, data)
     a["bilan"] = bilan_seance(a, data)
     a["semaine"] = semaine_a_venir(a, data)
+    a["fonda"] = None
+    if fondamental is not None and ACTIF["sym"] == "XAU/USD":
+        try:
+            a["fonda"] = fondamental.analyser(y, f, a, data.get("cal"), maintenant())
+        except Exception as e:
+            noter("Fondamental du plan", False, str(e)[:120])
     a["decision"] = None
     if decision is not None and ACTIF["sym"] == "XAU/USD":
         try:
@@ -7413,9 +7424,10 @@ def contenus_onglets(data, a, ia):
     if v7(a):
         return {
             "technique": decision.bloc_technique(a["decision"]),
-            "fondamental": (bloc_lecture(a) + bloc_biais_detail(a) + bloc_ia(ia) + bloc_moteurs(a) + bloc_fed(y, f, a) +
-                            bloc_marches(y, f, a) + bloc_flux(a) + bloc_devises(a) + bloc_risque(a) +
-                            f'<section>{bloc_correlations(a)}</section>' + bloc_graphiques(y, f, data["cot"], a)),
+            "fondamental": ((fondamental.bloc_html(a["fonda"], bloc_ia(ia)) if a.get("fonda") else bloc_ia(ia))
+                            + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
+                            + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
+                            + bloc_devises(a) + '</details>'),
             "annonces": bloc_reactions_evt(a) + bloc_calendrier(data["cal"], a) + bloc_reactions(a) + bloc_adjudications(a),
             "actus": bloc_actus(data.get("news"), data.get("fed_off"), a),
             "suivi": bloc_suivi(a) + bloc_methode(),
@@ -7464,6 +7476,13 @@ def bloc_onglets(data, a, ia):
             f'<div class="contenu analyst">{panneaux}<div data-zone="sources">{bloc_sources()}</div></div>')
 
 
+def titre_verdict(a):
+    if v7(a):
+        o_ = a["decision"].get("ordre")
+        return ("ACHAT" if o_["sens"] > 0 else "VENTE") if o_ else "RIEN"
+    return a["biais"]["verdict"]
+
+
 def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
     y, f = data["yahoo"], data["fred"]
     refresh = f'<meta http-equiv="refresh" content="{int(watch_min * 60) + 60}">' if (watch_min and not site) else ""
@@ -7481,12 +7500,13 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
              f'{esc(brief)}</textarea></div>')
     return (f'<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">{refresh}'
-            f'<title>{esc(ACTIF["court"])} {fp(a["or"]["prix"], 0)} · {a["biais"]["verdict"]} · {esc(ACTIF["page"])}</title>'
+            f'<title>{esc(ACTIF["court"])} {fp(a["or"]["prix"], 0)} · {titre_verdict(a)} · {esc(ACTIF["page"])}</title>'
             f'<link rel="preconnect" href="https://fonts.googleapis.com">'
             f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
             f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
             f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">'
-            f'<style>{CSS}{decision.CSS if decision is not None else ""}</style></head><body>{corps}'
+            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}'
+            f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}</body></html>')
 
@@ -7502,6 +7522,8 @@ def construire_brief(data, a):
     px_or = (a["seance"]["prix"] if a.get("seance") else o["prix"])   # dernier prix du future, converti en spot
     L.append(f"Or (XAU/USD spot) : {nb(px_or + AJUST, 1) if px_or else 'n.d.'} $ (1 j {nb(o['d1'], 2, True)} %, 5 j {nb(o['d5'], 2, True)} %, "
              f"20 j {nb(o['d20'], 2, True)} %). Amplitude attendue du jour : ±{nb(a['range_jour'], 0)} $.")
+    if a.get("fonda"):
+        L.append("FONDAMENTAL DU PLAN : " + a["fonda"]["synthese"])
     dz = a.get("decision")
     if dz and not dz.get("erreur"):
         if dz.get("ordre"):

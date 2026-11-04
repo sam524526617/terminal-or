@@ -32,7 +32,7 @@ jobs:
           python-version: "3.12"
 
       - name: Installer les modules
-        run: pip install pandas numpy requests
+        run: pip install pandas numpy requests yfinance
 
       - name: Récupérer l'historique déjà téléchargé
         uses: actions/cache@v6

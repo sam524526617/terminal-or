@@ -155,8 +155,26 @@ def donnees_demo(jours=120, graine=7):
     return pd.DataFrame({"open": op, "high": hi, "low": lo, "close": cl, "vol": 1.0}, index=idx)
 
 
+def charger_dxy(debut):
+    """Dollar index (DXY) quotidien, la même série que le terminal en direct. Repli : dollar large de la Fed."""
+    try:
+        import yfinance as yf
+        d = yf.download("DX-Y.NYB", start=str(debut - timedelta(days=60)), progress=False, auto_adjust=False)
+        c = d["Close"]
+        c = c.iloc[:, 0] if isinstance(c, pd.DataFrame) else c
+        c = c.dropna()
+        c.index = pd.DatetimeIndex(c.index).tz_localize(None).normalize()
+        if len(c) > 200:
+            log(f"  DXY (Yahoo) : {len(c)} jours")
+            return c, "DXY"
+    except Exception as e:
+        log(f"  DXY Yahoo indisponible : {e}")
+    return None, None
+
+
 def charger_fred(debut):
-    series = {"reel": "DFII10", "dollar": "DTWEXBGS", "us2": "DGS2"}
+    """Bloc fondamental du plan jour par jour : sur 5 jours (règle actuelle) et sur 20 jours (variante)."""
+    series = {"reel": "DFII10", "dollar_large": "DTWEXBGS", "us2": "DGS2"}
     cols = {}
     for nom, code in series.items():
         try:
@@ -169,16 +187,24 @@ def charger_fred(debut):
             cols[nom] = d.dropna().set_index("date")["v"]
         except Exception as e:
             log(f"  FRED {code} indisponible : {e}")
-            return None
-    f = pd.DataFrame(cols).sort_index().ffill()
-    f = f[f.index >= pd.Timestamp(debut) - pd.Timedelta(days=30)]
-    vote = lambda s: np.where(s >= 1, -1, np.where(s <= -1, 1, 0))
-    v = (vote((f["reel"] - f["reel"].shift(5)) * 100 / 8)
-         + vote((f["dollar"] / f["dollar"].shift(5) - 1) * 100 / 0.5)
-         + vote((f["us2"] - f["us2"].shift(5)) * 100 / 8))
-    bloc = np.where(v >= 2, 1, np.where(v <= -2, -1, 0))
-    log(f"  FRED : {len(f)} jours de taux réels, dollar et taux 2 ans")
-    return pd.Series(bloc, index=f.index)
+            if nom != "dollar_large":
+                return None
+    dxy, src = charger_dxy(debut)
+    cols["dollar"] = dxy if dxy is not None else cols.get("dollar_large")
+    if cols["dollar"] is None:
+        return None
+    cols.pop("dollar_large", None)
+    f = pd.DataFrame(cols).sort_index().ffill().dropna()
+    f = f[f.index >= pd.Timestamp(debut) - pd.Timedelta(days=60)]
+
+    def bloc(n, k):
+        out = []
+        for r, dl, u in zip((f["reel"] - f["reel"].shift(n)) * 100, (f["dollar"] / f["dollar"].shift(n) - 1) * 100,
+                            (f["us2"] - f["us2"].shift(n)) * 100):
+            out.append(P.bloc_fondamental(r / k, dl / k, u / k))
+        return pd.Series(out, index=f.index)
+    log(f"  FRED : {len(f)} jours (taux réels, taux 2 ans) · dollar : {src or 'dollar large Fed'}")
+    return pd.DataFrame({"f5": bloc(5, 1), "f20": bloc(20, 2)})   # 20 jours : seuils doublés
 
 
 # ---------------------------------------------------------------------------
@@ -221,16 +247,20 @@ def candidats(m1, fond):
     ctx = P.contexte(tf)
     log(f"  {len(ctx['zones'])} zones")
     if fond is not None:
-        f_dates, f_vals = fond.index.to_numpy(), fond.to_numpy()
+        f_dates, f5, f20 = fond.index.to_numpy(), fond["f5"].to_numpy(), fond["f20"].to_numpy()
     out = []
     for i in range(30, len(tf["M15"])):
         for d in (1, -1):
-            fv = 0
+            fv = fv20 = 0
             if fond is not None and (ctx["st"]["M15"]["bos_h"][i] or ctx["st"]["M15"]["bos_b"][i]):
                 jour = pd.Timestamp(ctx["fins"][i]).normalize()
                 p = int(np.searchsorted(f_dates, np.datetime64(jour - pd.Timedelta(days=1)), side="right")) - 1
-                fv = int(f_vals[p]) if p >= 0 else 0
-            out.extend(P.signal(ctx, i, d, fv) or [])
+                fv, fv20 = (int(f5[p]), int(f20[p])) if p >= 0 else (0, 0)
+            for sg in P.signal(ctx, i, d, fv) or []:
+                sg["fond20"] = fv20
+                ny = pd.Timestamp(sg["t_sig"]) - DECALAGE
+                sg["gros_jour"] = ny.date() in FOMC or (ny.weekday() == 4 and ny.day <= 7)   # Fed ou emploi (1er vendredi)
+                out.append(sg)
     log(f"  {len(out)} signaux candidats (avant filtres)")
     return pd.DataFrame(out)
 
@@ -325,6 +355,15 @@ def rapport(cand, periode, avec_fond, sortie):
         ("Sans filtre de tendance (D, H4, H1)", cand["note"].isin(["A", "B"]) & (cand["fond"] != -cand["sens"])
          & (cand["entree_type"] == "ce")),
     ]
+    ce = cand["entree_type"] == "ce"
+    base_sans_fond = (cand["note"].isin(["A", "B"]) & (cand["D"] == cand["sens"]) & (cand["H4"] == cand["sens"])
+                      & (cand["H1"] != -cand["sens"]) & ce)
+    if "fond20" in cand:
+        variantes += [
+            ("Fondamental strict (bloc dans le sens du trade)", base_sans_fond & (cand["fond"] == cand["sens"])),
+            ("Fondamental sur 20 jours", base_sans_fond & (cand["fond20"] != -cand["sens"])),
+            ("Pas de trade les jours de Fed et d'emploi", plan & ce & ~cand["gros_jour"].astype(bool)),
+        ]
     paris_tout = pd.Series(np.nan, index=cand.index)
     paris_tout[ok] = heure_paris(cand.loc[ok, "t_entree"]).to_numpy()
     cand["heure_paris"] = paris_tout
