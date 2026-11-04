@@ -56,28 +56,33 @@ def log(*a):
 # DONNÉES
 # ---------------------------------------------------------------------------
 
+SESSION = requests.Session()
+SESSION.headers.update(UA)
+
+
 def telecharger_jour(j, dossier):
+    """Renvoie (fichier ou None, statut) ; statut : 'cache', 'ok', 'vide' (pas de cotation) ou le dernier message d'erreur."""
     f = dossier / f"{j:%Y%m%d}.bi5"
     if f.exists():
-        return f
+        return f, "cache"
     url = URL_DUKA.format(y=j.year, m=j.month - 1, d=j.day)   # mois numérotés à partir de 0 chez Dukascopy
-    for essai in range(4):
+    ancien = j < date.today() - timedelta(days=3)
+    erreur = "?"
+    for essai in range(3):
         try:
-            r = requests.get(url, timeout=40, headers=UA)
+            r = SESSION.get(url, timeout=(8, 25))
             if r.status_code == 404:
-                if j < date.today() - timedelta(days=3):
+                if ancien:
                     f.write_bytes(b"")
-                return f if f.exists() else None
+                return (f if f.exists() else None), "vide"
             r.raise_for_status()
-            if j < date.today() - timedelta(days=3):
-                f.write_bytes(r.content)
-                return f
-            tmp = dossier / f"recent_{j:%Y%m%d}.bi5"
-            tmp.write_bytes(r.content)
-            return tmp
-        except Exception:
-            time.sleep(2 * (essai + 1))
-    return None
+            cible = f if ancien else dossier / f"recent_{j:%Y%m%d}.bi5"
+            cible.write_bytes(r.content)
+            return cible, "ok"
+        except Exception as e:
+            erreur = f"{type(e).__name__}: {str(e)[:80]}"
+            time.sleep(1.5 * (essai + 1))
+    return None, erreur
 
 
 def lire_jour(f, j):
@@ -98,19 +103,37 @@ def lire_jour(f, j):
     return t, ent[:, 1:5].astype(np.float64), vol.astype(np.float64), base
 
 
-def charger_dukascopy(debut, fin, dossier):
+def telecharger(debut, fin, dossier):
+    """Télécharge les jours manquants avec une progression visible ; s'arrête vite si la source refuse les requêtes."""
     dossier.mkdir(parents=True, exist_ok=True)
     jours = [debut + timedelta(days=i) for i in range((fin - debut).days + 1)]
     jours = [j for j in jours if j.weekday() != 5]   # le samedi, l'or ne cote pas
-    log(f"Téléchargement de {len(jours)} jours de bougies 1 minute (Dukascopy)...")
-    fichiers, rates = {}, 0
-    with cf.ThreadPoolExecutor(8) as ex:
-        for j, f in zip(jours, ex.map(lambda x: telecharger_jour(x, dossier), jours)):
-            if f is None:
-                rates += 1
-            else:
+    deja = sum(1 for j in jours if (dossier / f"{j:%Y%m%d}.bi5").exists())
+    log(f"Dukascopy : {len(jours)} jours, {deja} déjà en cache, {len(jours) - deja} à télécharger")
+    fichiers, echecs, t0 = {}, {}, time.time()
+    with cf.ThreadPoolExecutor(16) as ex:
+        futurs = {ex.submit(telecharger_jour, j, dossier): j for j in jours}
+        for k, fu in enumerate(cf.as_completed(futurs), 1):
+            j = futurs[fu]
+            f, statut = fu.result()
+            if f is None and statut != "vide":
+                echecs[j] = statut
+            elif f is not None:
                 fichiers[j] = f
-    log(f"  {len(fichiers)} fichiers, {rates} échecs de téléchargement")
+            if k == 40 and len(echecs) >= 32:
+                exemple = next(iter(echecs.values()))
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise SystemExit(f"Dukascopy refuse ou ne répond pas ({len(echecs)} échecs sur 40 premiers jours). "
+                                 f"Exemple : {exemple}")
+            if k % 100 == 0 or k == len(jours):
+                log(f"  {k}/{len(jours)} jours · {len(echecs)} échecs · {time.time() - t0:.0f} s")
+    if echecs:
+        log(f"  {len(echecs)} jours en échec, par ex. {next(iter(echecs.values()))}")
+    return fichiers
+
+
+def charger_dukascopy(debut, fin, dossier):
+    fichiers = telecharger(debut, fin, dossier)
     blocs = [b for b in (lire_jour(f, j) for j, f in sorted(fichiers.items())) if b is not None]
     if not blocs:
         raise SystemExit("Aucune donnée Dukascopy lisible.")
@@ -419,9 +442,13 @@ def main():
     ap.add_argument("--sortie", default="resultats")
     ap.add_argument("--donnees", default="backtest/.donnees")
     ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--telecharger-seulement", action="store_true")
     a = ap.parse_args()
     debut = date.fromisoformat(a.debut)
     fin = date.fromisoformat(a.fin) if a.fin else date.today() - timedelta(days=1)
+    if a.telecharger_seulement:
+        telecharger(debut, fin, Path(a.donnees))
+        return
     if a.demo:
         m1u, fond = donnees_demo(), None
     else:
@@ -433,7 +460,7 @@ def main():
     cand = candidats(m1, fond)
     if cand.empty:
         raise SystemExit("Aucun signal candidat : vérifier les données.")
-    log("Simulation minute par minute...")
+    log(f"Simulation minute par minute de {len(cand)} ordres...")
     t = time.time()
     cand = simuler(cand, m1)
     log(f"  terminé en {time.time() - t:.0f} s")

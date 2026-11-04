@@ -1,5 +1,5 @@
 # Backtest du plan de trading sur l'historique de l'or (bougies 1 minute Dukascopy).
-# Lancé automatiquement quand le script change, ou à la main avec « Run workflow ».
+# Lancé à la main avec « Run workflow » (onglet Actions), ou quand le script change sur la branche du backtest.
 # Le rapport s'affiche dans le résumé du run ; les fichiers détaillés sont dans « Artifacts ».
 name: Backtest du plan
 
@@ -11,7 +11,7 @@ on:
         default: "2019-01-01"
   push:
     branches: [claude/backtest-plan]
-    paths: ["backtest/**", ".github/workflows/backtest.yml"]
+    paths: ["backtest/**", "plan.py", ".github/workflows/backtest.yml"]
 
 permissions:
   contents: read
@@ -23,7 +23,9 @@ concurrency:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
+    env:
+      DEBUT: ${{ github.event.inputs.debut || '2019-01-01' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -34,15 +36,28 @@ jobs:
       - name: Installer les modules
         run: pip install pandas numpy requests yfinance
 
+      # L'historique téléchargé est gardé d'un run à l'autre, même si un run échoue ou dépasse le temps.
       - name: Récupérer l'historique déjà téléchargé
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: backtest/.donnees
           key: dukascopy-m1-${{ github.run_id }}
           restore-keys: dukascopy-m1-
 
+      - name: Télécharger les jours manquants
+        timeout-minutes: 200
+        run: python backtest/backtest_plan.py --debut "$DEBUT" --telecharger-seulement
+
+      - name: Sauvegarder l'historique
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: backtest/.donnees
+          key: dukascopy-m1-${{ github.run_id }}
+
       - name: Lancer le backtest
-        run: python backtest/backtest_plan.py --debut "${{ github.event.inputs.debut || '2019-01-01' }}" --sortie resultats
+        timeout-minutes: 60
+        run: python backtest/backtest_plan.py --debut "$DEBUT" --sortie resultats
 
       - name: Afficher le rapport
         if: always()

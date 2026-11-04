@@ -383,7 +383,7 @@ def bloc_fondamental(reel_pb5, dollar_pct5, us2_pb5):
 # SIMULATION D'UN ORDRE (backtest minute par minute, ou suivi en direct sur bougies M15)
 # ---------------------------------------------------------------------------
 
-def suivre_ordre(sig, T, H, L, C, bloque=None):
+def suivre_ordre_lent(sig, T, H, L, C, bloque=None):
     """Suit un ordre limite puis la position. T en nanosecondes (int64, horloge interne), H/L/C prix BID.
     Renvoie (t_entree, t_sortie, R, issue, etat) ; etat = 'attente', 'en cours', 'tp1' (stop au point d'entrée) ou 'fini'."""
     MIN, JOUR = 60 * 10**9, 86400 * 10**9
@@ -434,3 +434,76 @@ def suivre_ordre(sig, T, H, L, C, bloque=None):
             return t_f, pd.Timestamp(T[k]), pnl / sig["risque"], "TP2", "fini"
     return t_f, None, (pnl + pos * ((C[-1] if d > 0 else C[-1] + SPREAD) - e) * d) / sig["risque"], \
         "en cours", ("tp1" if tp1_ok else "en cours")
+
+
+def _premier(masque):
+    """Indice du premier True, ou None."""
+    i = int(np.argmax(masque)) if len(masque) else 0
+    return i if len(masque) and masque[i] else None
+
+
+def suivre_ordre(sig, T, H, L, C, bloque=None):
+    """Même résultat que suivre_ordre_lent(), en cherchant les premiers contacts avec numpy au lieu d'une boucle
+    minute par minute (des centaines de fois plus rapide sur plusieurs années de bougies 1 minute).
+    Ordre de priorité dans une même bougie, comme la version lente : annulation avant exécution, puis stop avant TP1,
+    TP2 possible dans la bougie de TP1, puis stop au point d'entrée avant TP2."""
+    MIN, JOUR = 60 * 10**9, 86400 * 10**9
+    d, e, sl, tp1, tp2 = sig["sens"], sig["entree"], sig["stop"], sig["tp1"], sig["tp2"]
+    t0 = pd.Timestamp(sig["t_sig"]).value
+    N = len(T)
+    i0 = int(np.searchsorted(T, t0))
+    lim = t0 + ORDRE_VIE_MIN * MIN
+    i1 = int(np.searchsorted(T, lim))                    # fenêtre de l'ordre : [i0, i1)
+    h, l = H[i0:i1], L[i0:i1]
+    if d > 0:
+        annul, exe = _premier(h >= tp1), _premier(l + SPREAD <= e)
+    else:
+        annul, exe = _premier(l + SPREAD <= tp1), _premier(h >= e)
+    if annul is not None and (exe is None or annul <= exe):
+        return None, None, None, "annulé (objectif atteint sans nous)", "fini"
+    if exe is None:
+        if i1 >= N and (N == 0 or T[-1] < lim):
+            return None, None, None, "ordre en attente", "attente"
+        return None, None, None, "non exécuté", "fini"
+    rempli = i0 + exe
+    t_f = pd.Timestamp(T[rempli])
+    if bloque is not None and bloque(t_f):
+        return None, None, None, "annonce", "fini"
+    lundi = t_f.normalize() - pd.Timedelta(days=t_f.weekday())
+    fin_max = min(T[rempli] + TENUE_MAX_J * JOUR, (lundi + pd.Timedelta(days=4, hours=23, minutes=45)).value)
+    j = int(np.searchsorted(T, fin_max))                 # première bougie à fin_max ou après : sortie au temps
+    j = max(j, rempli)
+    if d > 0:
+        bas, haut = L[rempli:j], H[rempli:j]
+        stop_a, tp1_a = _premier(bas <= sl), _premier(haut >= tp1)
+    else:
+        bas, haut = L[rempli:j] + SPREAD, H[rempli:j] + SPREAD
+        stop_a, tp1_a = _premier(haut >= sl), _premier(bas <= tp1)
+    R = sig["risque"]
+
+    def sortie_temps(pos, pnl, tp1_fait):
+        if j < N:
+            px = C[j] if d > 0 else C[j] + SPREAD
+            return t_f, pd.Timestamp(T[j]), (pnl + pos * (px - e) * d) / R, "temps", "fini"
+        return t_f, None, (pnl + pos * ((C[-1] if d > 0 else C[-1] + SPREAD) - e) * d) / R, "en cours", \
+            ("tp1" if tp1_fait else "en cours")
+
+    if stop_a is not None and (tp1_a is None or stop_a <= tp1_a):
+        return t_f, pd.Timestamp(T[rempli + stop_a]), (sl - e) * d / R, "stop", "fini"
+    if tp1_a is None:
+        return sortie_temps(1.0, 0.0, False)
+    k1 = tp1_a
+    pnl = 0.5 * (tp1 - e) * d
+    tp2_meme = (haut[k1] >= tp2) if d > 0 else (bas[k1] <= tp2)
+    if tp2_meme:
+        return t_f, pd.Timestamp(T[rempli + k1]), (pnl + 0.5 * (tp2 - e) * d) / R, "TP2", "fini"
+    b2, h2 = bas[k1 + 1:], haut[k1 + 1:]
+    if d > 0:
+        be, t2 = _premier(b2 <= e), _premier(h2 >= tp2)
+    else:
+        be, t2 = _premier(h2 >= e), _premier(b2 <= tp2)
+    if be is not None and (t2 is None or be <= t2):
+        return t_f, pd.Timestamp(T[rempli + k1 + 1 + be]), pnl / R, "TP1 puis BE", "fini"
+    if t2 is not None:
+        return t_f, pd.Timestamp(T[rempli + k1 + 1 + t2]), (pnl + 0.5 * (tp2 - e) * d) / R, "TP2", "fini"
+    return sortie_temps(0.5, pnl, True)
