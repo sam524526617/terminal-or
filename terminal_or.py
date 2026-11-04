@@ -5228,7 +5228,8 @@ function activerOnglet(id){
     var on = b.getAttribute('data-tab') === id; if (on) trouve = true;
     b.setAttribute('aria-selected', on ? 'true' : 'false'); b.classList.toggle('actif', on);
   });
-  if (!trouve){ id = 'synthese'; if (arguments.length < 2) return activerOnglet(id, true); }
+  if (!trouve){ var p1 = document.querySelector('.onglets [role=tab]'); id = p1 ? p1.getAttribute('data-tab') : 'synthese';
+                if (arguments.length < 2) return activerOnglet(id, true); }
   document.querySelectorAll('.tabpanel').forEach(function(p){ p.hidden = p.id !== 'tab-' + id; });
   onglet = id; ecrire('onglet-or', id);
 }
@@ -7277,6 +7278,8 @@ def bloc_strip(a, y, f):
     if a.get("base") is not None:
         it.append(("Écart future-spot", f'{nb(a["base"], 1, True)} $',
                    "mesuré (XAUS)" if (a.get("ecart") or {}).get("mesure") else "estimé (courbe)"))
+    if v7(a):   # v7 : le bandeau ne garde que le contexte, la direction vient de la décision du plan
+        it = [x for x in it if x[0] not in ("Biais fondamental", "Biais technique", "Playbook", "Appétit risque", "Foule OANDA", f"Vue {HORIZON_H} h")]
     corps = "".join(f'<div class="it"><span class="k">{lib}</span><span class="v">{v}</span><span class="s">{sub}</span></div>'
                     for lib, v, sub in it)
     return f'<div class="strip analyst" data-zone="strip">{corps}</div>'
@@ -7375,11 +7378,11 @@ def bloc_cockpit(a, y, f, sans_setup=False):
             + ("" if sans_setup else
                f'<div class="panel" id="p-setup"><div class="ph"><span class="k">Setup A · balayage puis retournement</span>'
                f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))}</small></div><div class="pb" data-zone="setup">{bloc_setup_a(a)}</div></div>')
-            + ''
+            + ('' if sans_setup else
             f'<div class="panel analyst" id="p-vue"><div class="ph"><span class="k">Où va le marché</span>'
             f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))} <a href="#analyse" data-aller="synthese">plan complet</a></small></div>'
-            f'<div class="pb" data-zone="vue">{bloc_vue_cockpit(a)}</div></div>'
-            f'<div class="panel" id="p-ctl"><div class="ph"><span class="k">Contrôle avant l\'entrée</span>'
+            f'<div class="pb" data-zone="vue">{bloc_vue_cockpit(a)}</div></div>')
+            + f'<div class="panel" id="p-ctl"><div class="ph"><span class="k">Contrôle avant l\'entrée</span>'
             f'<small>touches A et V</small></div><div class="pb">{bloc_controle()}</div></div></div>'
             f'<div class="col col-d"><div class="panel" id="p-evt"><div class="ph"><span class="k">Prochaine annonce à fort impact</span>'
             f'<small><a href="#analyse" data-aller="annonces">scénarios</a></small></div>'
@@ -7396,8 +7399,27 @@ ONGLETS = [("synthese", "Synthèse"), ("fondamental", "Fondamental"), ("techniqu
            ("annonces", "Annonces"), ("actus", "Actualités"), ("suivi", "Suivi et méthode")]
 
 
+ONGLETS_V7 = [("technique", "Technique du plan"), ("fondamental", "Fondamental"), ("annonces", "Annonces"),
+              ("actus", "Actualités"), ("suivi", "Suivi et méthode")]
+
+
+def v7(a):
+    dz = a.get("decision")
+    return bool(decision is not None and dz and not dz.get("erreur"))
+
+
 def contenus_onglets(data, a, ia):
     y, f = data["yahoo"], data["fred"]
+    if v7(a):
+        return {
+            "technique": decision.bloc_technique(a["decision"]),
+            "fondamental": (bloc_lecture(a) + bloc_biais_detail(a) + bloc_ia(ia) + bloc_moteurs(a) + bloc_fed(y, f, a) +
+                            bloc_marches(y, f, a) + bloc_flux(a) + bloc_devises(a) + bloc_risque(a) +
+                            f'<section>{bloc_correlations(a)}</section>' + bloc_graphiques(y, f, data["cot"], a)),
+            "annonces": bloc_reactions_evt(a) + bloc_calendrier(data["cal"], a) + bloc_reactions(a) + bloc_adjudications(a),
+            "actus": bloc_actus(data.get("news"), data.get("fed_off"), a),
+            "suivi": bloc_suivi(a) + bloc_methode(),
+        }
     return {
         # 1. Le lien entre les deux : ce qu'il faut faire maintenant
         "synthese": (bloc_synthese_tech(a) + bloc_intermarket(a) + bloc_regimes(a, compact=True) + bloc_plan(a) +
@@ -7416,8 +7438,9 @@ def contenus_onglets(data, a, ia):
 
 def bloc_onglets(data, a, ia):
     contenus = contenus_onglets(data, a, ia)
+    onglets = ONGLETS_V7 if v7(a) else ONGLETS
     nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false">{esc(t)}<kbd>{(k + 1) % 10}</kbd></button>'
-                  for k, (i, t) in enumerate(ONGLETS))
+                  for k, (i, t) in enumerate(onglets))
     ta_tv = tv("embed-widget-technical-analysis.js", {"interval": "15m", "width": "100%", "height": "100%",
                                                         "isTransparent": True, "symbol": TV_OR, "showIntervalTabs": True,
                                                         "displayMode": "multiple", "locale": "fr", "colorTheme": "dark"},
@@ -7426,12 +7449,12 @@ def bloc_onglets(data, a, ia):
                                            "locale": "fr", "importanceFilter": "0,1", "countryFilter": ACTIF["tv_pays"]},
                 "Calendrier économique en direct (TradingView)")
     panneaux = ""
-    for i, t in ONGLETS:
+    for i, t in onglets:
         extra = ""
         if i == "annonces":
             extra = (f'<section><h2>Calendrier en direct</h2><p class="pourquoi">Les chiffres réels s\'affichent ici dès '
                      f'leur publication (TradingView).</p><div class="tv-cal">{cal_tv}</div></section>')
-        if i == "technique":
+        if i == "technique" and not v7(a):
             extra = (f'<section><h2>Consensus technique en direct</h2><p class="pourquoi">Synthèse des moyennes mobiles et '
                      f'oscillateurs sur plusieurs unités de temps (TradingView). À utiliser comme confluence, pas comme '
                      f'signal d\'entrée.</p><div class="tv-cal" style="height:460px">{ta_tv}</div></section>')
@@ -7448,7 +7471,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                       "site": bool(site), "seances": [[n, d, fn] for n, d, fn in SEANCES], **ACTIF["cfg_js"]},
                      ensure_ascii=False)
     ctx_json = json.dumps(contexte_controle(a), ensure_ascii=False).replace("</", "<\\/")
-    dec_html = decision.bloc_html(a.get("decision")) if (decision is not None and a.get("decision")) else bloc_trader(a)
+    dec_html = ((decision.bloc_html(a["decision"]) + decision.bloc_graphique(a["decision"]))
+                if (decision is not None and a.get("decision")) else bloc_trader(a))
     corps = (f'{bloc_barre(a)}{bloc_reglages()}{dec_html}{bloc_bandeau_tv()}{bloc_strip(a, y, f)}{bloc_cockpit(a, y, f, sans_setup=bool(a.get("decision")))}'
              f'{bloc_onglets(data, a, ia)}'
              f'<script type="application/json" id="evts" data-zone="evts">{evenements_json(data, a)}</script>'

@@ -228,6 +228,10 @@ def decider(data, maintenant, ajust, fond_vals, compte):
            "journal": [dict(s, entree=sp(s["entree"]), stop=sp(s["stop"])) for s in pris if s["t_entree"] is not None
                        and pd.Timestamp(s["t_entree"]).normalize() == jour],
            "suivante": suivante}
+    try:
+        out["tech"] = technique(ctx, tf, px, sp, d)
+    except Exception as e:
+        out["tech"] = {"erreur": str(e)[:120]}
     if actif and not (limite and actif["etat"] == "attente"):
         a = actif
         risque = a["risque"]
@@ -242,6 +246,194 @@ def decider(data, maintenant, ajust, fond_vals, compte):
         out.update(verdict=0, note=None, etat=None, ordre=None,
                    debloque=("Limite du jour atteinte (2 trades ou −2 R) : reprise demain." if limite else debloque))
     return out
+
+
+# ---------------------------------------------------------------------------
+# TECHNIQUE DU PLAN (structure par unité de temps, zones actives, momentum)
+# ---------------------------------------------------------------------------
+
+NOMS_UT = {"W": "Weekly", "D": "Daily", "H4": "4 heures", "H1": "1 heure", "M15": "15 min"}
+
+
+def technique(ctx, tf, px, sp, d_plan):
+    st = ctx["st"]
+    lignes = []
+    for k in ("W", "D", "H4", "H1", "M15"):
+        df, s_ = tf[k], st[k]
+        n = len(df)
+        if n == 0:
+            continue
+        idx_bos = [i for i in range(n) if s_["bos_h"][i] or s_["bos_b"][i]]
+        der = None
+        if idx_bos:
+            i = idx_bos[-1]
+            der = {"sens": 1 if s_["bos_h"][i] else -1, "t": df["fin"].iloc[i], "cloture": sp(float(df["close"].iloc[i]))}
+        def niv(x):
+            if x is None:
+                return None
+            return {"prix": sp(float(x[0])), "casse": bool(x[1]), "dist": float(x[0]) - px}
+        lignes.append({"ut": k, "nom": NOMS_UT[k], "tend": int(s_["tend"][-1]) if k == "M15" else int(ctx["tend"][k][-1]),
+                       "der": der, "sommet": niv(s_["der_h"]), "creux": niv(s_["der_l"])})
+    zs, vus = [], set()
+    for z in ctx["vierges"]:
+        sens, rang, typ, bas, haut, niv_, cree = z
+        cle = (sens, rang, typ, round(float(bas), 2), round(float(haut), 2))
+        if cle in vus:      # deux FVG peuvent partager le même OB
+            continue
+        vus.add(cle)
+        if sens > 0 and niv_ >= px or sens < 0 and niv_ <= px:
+            continue          # zone déjà dépassée par le prix : elle n'attend plus de retour
+        zs.append({"sens": sens, "ut": P.RANGS[rang], "rang": rang, "type": typ, "bas": sp(float(bas)), "haut": sp(float(haut)),
+                   "niveau": sp(float(niv_)), "dist": float(niv_) - px, "cree": pd.Timestamp(cree),
+                   "plan": bool(d_plan) and sens == d_plan})
+    zs.sort(key=lambda z: abs(z["dist"]))
+    r_h1 = P.rsi(tf["H1"]["close"].to_numpy()) if len(tf["H1"]) > 20 else None
+    i_der = len(ctx["c"]) - 1
+    return {"lignes": lignes, "zones": zs[:14],
+            "rsi15": float(ctx["r15"][i_der]), "rsi_h1": float(r_h1[-1]) if r_h1 is not None else None,
+            "div_h": P.divergence(ctx, i_der, 1), "div_b": P.divergence(ctx, i_der, -1),
+            "atr15": float(ctx["a15"][i_der]) if np.isfinite(ctx["a15"][i_der]) else None,
+            "atr_h1": float(P.atr(tf["H1"])[-1]) if len(tf["H1"]) > 15 else None,
+            "m15": tf["M15"].tail(160), "h4": tf["H4"].tail(110), "ajust": sp(0.0)}
+
+
+def svg_bougies(df, ajust, niveaux=(), zones=(), w=1000, h=360, titre=""):
+    """Bougies en SVG (le site reste un fichier autonome) avec zones et niveaux horizontaux."""
+    if df is None or len(df) < 5:
+        return ""
+    o, hi, lo, c = (df[x].to_numpy() + ajust for x in ("open", "high", "low", "close"))
+    vals = list(hi) + list(lo) + [v for v, *_ in niveaux if v is not None]
+    vals += [z["haut"] for z in zones] + [z["bas"] for z in zones]
+    top, bot = max(vals), min(vals)
+    pad = (top - bot) * 0.04 or 1
+    top, bot = top + pad, bot - pad
+    g, dr = 8, 86                         # marges gauche et droite (étiquettes de prix)
+    pw, ph = w - g - dr, h - 30
+    y = lambda v: 8 + (top - v) / (top - bot) * (ph - 8)
+    n = len(df)
+    pas = pw / n
+    bw = max(1.0, pas * 0.62)
+    out = [f'<svg viewBox="0 0 {w} {h}" class="dz-svg" role="img" aria-label="{esc(titre)}" preserveAspectRatio="none">']
+    for k in range(5):                    # grille
+        v = bot + (top - bot) * k / 4
+        out.append(f'<line x1="{g}" x2="{g + pw}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="gr"/>'
+                   f'<text x="{w - 4}" y="{y(v) + 4:.1f}" class="ax" text-anchor="end">{fr(v, 0)}</text>')
+    for z in zones:                       # zones OB / FVG
+        y1, y2 = y(z["haut"]), y(z["bas"])
+        x0 = g
+        if "cree" in z and z["cree"] is not None:
+            pos = int(np.searchsorted(df.index.to_numpy(), np.datetime64(z["cree"])))
+            x0 = g + min(max(pos, 0), n - 1) * pas
+        cl = "zu" if z["sens"] > 0 else "zd"
+        out.append(f'<rect x="{x0:.1f}" y="{y1:.1f}" width="{g + pw - x0:.1f}" height="{max(1.5, y2 - y1):.1f}" class="{cl}"/>'
+                   f'<text x="{x0 + 4:.1f}" y="{y1 + 11:.1f}" class="zl">{esc(z["type"])} {esc(z["ut"])}</text>')
+    for i in range(n):                    # bougies
+        x = g + (i + 0.5) * pas
+        cl = "bu" if c[i] >= o[i] else "bd"
+        yb, yh = y(max(o[i], c[i])), y(min(o[i], c[i]))
+        out.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{y(hi[i]):.1f}" y2="{y(lo[i]):.1f}" class="{cl}"/>'
+                   f'<rect x="{x - bw / 2:.1f}" y="{yb:.1f}" width="{bw:.1f}" height="{max(1.0, yh - yb):.1f}" class="{cl}"/>')
+    for v, lib, cl in niveaux:            # niveaux
+        if v is None:
+            continue
+        out.append(f'<line x1="{g}" x2="{g + pw}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="nv {cl}"/>'
+                   f'<rect x="{g + pw + 2}" y="{y(v) - 9:.1f}" width="{dr - 4}" height="18" rx="3" class="tg {cl}"/>'
+                   f'<text x="{g + pw + 6}" y="{y(v) + 4:.1f}" class="tt">{fr(v, 1)} {esc(lib)}</text>')
+    pas_t = max(1, n // 6)                # axe du temps
+    for i in range(0, n, pas_t):
+        t = P.depuis_horloge(df.index[i])
+        out.append(f'<text x="{g + (i + 0.5) * pas:.1f}" y="{h - 8}" class="ax" text-anchor="middle">{t:%d/%m %Hh}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def niveaux_graphique(dec, avec_structure=True):
+    o, t = dec.get("ordre"), dec.get("tech") or {}
+    nv = []
+    if o:
+        nv += [(o["entree"], "Entrée", "ne"), (o["stop"], "Stop", "ns"), (o["tp1"], "TP1", "nt"), (o["tp2"], "TP2", "nt")]
+    if avec_structure:
+        for l in t.get("lignes", []):
+            if l["ut"] in ("H1", "H4"):
+                for cle, lib in (("sommet", "som."), ("creux", "creux")):
+                    x = l[cle]
+                    if x and not x["casse"]:
+                        nv.append((x["prix"], f"{lib} {l['ut']}", "nl"))
+    return nv
+
+
+def bloc_graphique(dec):
+    """Graphique M15 du plan sous la décision : zones dans le sens du plan, ordre et niveaux à casser."""
+    t = (dec or {}).get("tech")
+    if not t or t.get("erreur"):
+        return ""
+    zones = [z for z in t["zones"] if z["ut"] in ("H1", "H4", "M30")][:6]
+    svg = svg_bougies(t["m15"].tail(110), t["ajust"], niveaux_graphique(dec), zones, w=1000, h=340,
+                      titre="Graphique 15 min avec les zones et les niveaux du plan")
+    lig = "".join(f'<tr><td>{esc(l["nom"])}</td><td class="{ {1: "up", -1: "down"}.get(l["tend"], "flat") }">'
+                  f'{FLECHE[l["tend"]]} {({1: "haussier", -1: "baissier", 0: "neutre"})[l["tend"]]}</td></tr>'
+                  for l in t["lignes"])
+    return (f'<section class="dz dz-ligne2" data-zone="dz-graph"><div class="dz-panneau dz-large">'
+            f'<div class="dz-tete"><span class="k">XAU/USD · 15 min · niveaux du plan</span>'
+            f'<span class="dz-leg"><i class="ne"></i>Entrée <i class="ns"></i>Stop <i class="nt"></i>Objectifs '
+            f'<i class="nl"></i>Sommets / creux H1-H4 <i class="zu"></i>Zone achat <i class="zd"></i>Zone vente</span></div>'
+            f'<div class="dz-graph">{svg}</div></div>'
+            f'<div class="dz-panneau dz-etroit"><div class="dz-tete"><span class="k">Structure</span>'
+            f'<a href="#analyse" data-aller="technique" class="dz-lien">détail</a></div>'
+            f'<table class="dz-struct">{lig}</table>'
+            f'<div class="dz-mom"><div><span class="k">RSI 15 min</span><b>{fr(t["rsi15"], 0)}</b></div>'
+            f'<div><span class="k">RSI 1 h</span><b>{fr(t["rsi_h1"], 0)}</b></div>'
+            f'<div><span class="k">ATR 15 min</span><b>{fr(t["atr15"], 1)} $</b></div></div></div></section>')
+
+
+def bloc_technique(dec):
+    """Onglet Technique : uniquement ce que le plan utilise."""
+    t = (dec or {}).get("tech")
+    if not t or t.get("erreur"):
+        return f'<section><h2>Technique du plan</h2><p class="pourquoi">Indisponible : {esc((t or {}).get("erreur", "pas de données"))}.</p></section>'
+    mot = {1: "Haussière", -1: "Baissière", 0: "Neutre"}
+    cl = {1: "up", -1: "down", 0: "flat"}
+
+    def niv(x, sens):
+        if not x:
+            return "<td>—</td><td></td>"
+        etat = "cassé" if x["casse"] else f"{fr(x['dist'], 1, True)} $"
+        return f'<td class="num">{fr(x["prix"], 1)}</td><td class="num {"flat" if x["casse"] else ""}">{etat}</td>'
+    rows = "".join(
+        f'<tr><th scope="row">{esc(l["nom"])}</th><td class="{cl[l["tend"]]}"><b>{FLECHE[l["tend"]]} {mot[l["tend"]]}</b></td>'
+        f'<td>{(("haussière" if l["der"]["sens"] > 0 else "baissière") + " · " + P.depuis_horloge(l["der"]["t"]).strftime("%d/%m %H:%M")) if l["der"] else "—"}</td>'
+        f'{niv(l["sommet"], 1)}{niv(l["creux"], -1)}</tr>' for l in t["lignes"])
+    zrows = "".join(
+        f'<tr class="{"dz-plan" if z["plan"] else ""}"><td class="{cl[z["sens"]]}">{"Achat" if z["sens"] > 0 else "Vente"}</td>'
+        f'<td>{esc(z["type"])} {esc(z["ut"])}</td><td class="num">{fr(z["bas"], 1)} – {fr(z["haut"], 1)}</td>'
+        f'<td class="num">{fr(z["niveau"], 1)}</td><td class="num">{fr(z["dist"], 1, True)} $</td>'
+        f'<td>{P.depuis_horloge(z["cree"]).strftime("%d/%m %H:%M")}</td><td>{"dans le sens du plan" if z["plan"] else ""}</td></tr>'
+        for z in t["zones"]) or '<tr><td colspan="7">Aucune zone intacte.</td></tr>'
+    nv = niveaux_graphique(dec)
+    g15 = svg_bougies(t["m15"], t["ajust"], nv, [z for z in t["zones"] if z["ut"] != "H4"][:8], w=1100, h=380,
+                      titre="Graphique 15 min, zones M30 et H1")
+    g4 = svg_bougies(t["h4"], t["ajust"], niveaux_graphique(dec), [z for z in t["zones"] if z["ut"] == "H4"][:6], w=1100, h=380,
+                     titre="Graphique 4 heures, zones H4")
+    div = ("divergence haussière" if t["div_h"] else "divergence baissière" if t["div_b"] else "pas de divergence")
+    return (f'<section class="dz-tech"><h2>Structure par unité de temps</h2>'
+            f'<p class="pourquoi">Tendance = sens de la dernière cassure de structure (clôture au-delà du dernier sommet ou creux confirmé). '
+            f'Le plan trade seulement quand le Daily et le H4 vont dans le même sens et que le H1 ne les contredit pas. '
+            f'Les niveaux à casser sont les derniers sommets et creux confirmés.</p>'
+            f'<div class="tbl"><table class="dz-tab"><thead><tr><th>Unité</th><th>Tendance</th><th>Dernière cassure</th>'
+            f'<th>Dernier sommet</th><th>Écart</th><th>Dernier creux</th><th>Écart</th></tr></thead><tbody>{rows}</tbody></table></div></section>'
+            f'<section class="dz-tech"><h2>15 minutes : zones M30 / H1 et ordre</h2><div class="dz-graph">{g15}</div></section>'
+            f'<section class="dz-tech"><h2>4 heures : zones H4</h2><div class="dz-graph">{g4}</div></section>'
+            f'<section class="dz-tech"><h2>Zones OB et FVG encore intactes</h2>'
+            f'<p class="pourquoi">Zones M30, H1 et H4 jamais revisitées, de moins de 5 jours, triées par distance au prix. '
+            f'Niveau de contact : le haut de l\'OB, ou le 50 % du FVG. En surbrillance : celles dans le sens du plan.</p>'
+            f'<div class="tbl"><table class="dz-tab"><thead><tr><th>Sens</th><th>Zone</th><th>Bas – haut</th><th>Contact</th>'
+            f'<th>Distance</th><th>Formée le</th><th></th></tr></thead><tbody>{zrows}</tbody></table></div></section>'
+            f'<section class="dz-tech"><h2>Momentum</h2><div class="dz-mom dz-mom-l">'
+            f'<div><span class="k">RSI 15 min</span><b>{fr(t["rsi15"], 0)}</b><small>au-delà de 70 / sous 30 : note abaissée</small></div>'
+            f'<div><span class="k">RSI 1 heure</span><b>{fr(t["rsi_h1"], 0)}</b><small>contexte</small></div>'
+            f'<div><span class="k">Divergence RSI 15 min</span><b>{div}</b><small>bonus de note A</small></div>'
+            f'<div><span class="k">ATR 15 min / 1 h</span><b>{fr(t["atr15"], 1)} / {fr(t["atr_h1"], 1)} $</b><small>volatilité moyenne par bougie</small></div>'
+            f'</div></section>')
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +575,43 @@ CSS = """
 .dz-vide{margin:0;font:600 15px var(--cond)} .dz-pied{margin:0;font-size:13px;color:var(--mute);line-height:1.5}
 .dz-journal{flex:1 1 100%;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px;font-size:13px;color:var(--mute);padding:0 2px}
 .dz-journal ul{display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;padding:0;list-style:none}
-@media (max-width:640px){.dz{padding:8px 8px 0}.dz-verdict>b{font-size:46px}}
+.dz-ligne2 .dz-large{flex:8 1 620px}
+.dz-ligne2 .dz-etroit{flex:2 1 240px}
+.dz-graph{width:100%;overflow:hidden;border-radius:6px;background:#0d151c;border:1px solid var(--band2)}
+.dz-svg{display:block;width:100%;height:auto}
+.dz-svg .gr{stroke:#1d2a36;stroke-width:1}
+.dz-svg .ax{fill:var(--mute);font:500 11px var(--cond)}
+.dz-svg .bu{stroke:var(--up);fill:var(--up)} .dz-svg .bd{stroke:var(--down);fill:var(--down)}
+.dz-svg line.bu,.dz-svg line.bd{stroke-width:1}
+.dz-svg .zu{fill:rgba(79,184,132,.12);stroke:rgba(79,184,132,.35)} .dz-svg .zd{fill:rgba(224,96,90,.12);stroke:rgba(224,96,90,.35)}
+.dz-svg .zl{fill:var(--mute);font:600 10px var(--cond)}
+.dz-svg .nv{stroke-width:1.4;stroke-dasharray:5 4} .dz-svg .nv.ne{stroke:var(--brass);stroke-dasharray:none}
+.dz-svg .nv.ns{stroke:var(--down)} .dz-svg .nv.nt{stroke:var(--up)} .dz-svg .nv.nl{stroke:#6e8bb8;stroke-dasharray:2 4}
+.dz-svg .tg.ne{fill:var(--brass)} .dz-svg .tg.ns{fill:var(--down)} .dz-svg .tg.nt{fill:var(--up)} .dz-svg .tg.nl{fill:#6e8bb8}
+.dz-svg .tt{fill:#0b1117;font:700 10.5px var(--cond)}
+.dz-leg{display:flex;flex-wrap:wrap;gap:4px 12px;font:500 12px var(--cond);color:var(--mute);align-items:center}
+.dz-leg i{display:inline-block;width:14px;height:0;border-top:2px dashed;margin-right:-6px;vertical-align:middle}
+.dz-leg i.ne{border-top:2px solid var(--brass)} .dz-leg i.ns{border-color:var(--down)} .dz-leg i.nt{border-color:var(--up)}
+.dz-leg i.nl{border-color:#6e8bb8;border-top-style:dotted}
+.dz-leg i.zu{height:9px;border:1px solid rgba(79,184,132,.5);background:rgba(79,184,132,.18)}
+.dz-leg i.zd{height:9px;border:1px solid rgba(224,96,90,.5);background:rgba(224,96,90,.18)}
+.dz-lien{font:500 12px var(--cond);color:var(--brass)}
+.dz-struct{width:100%;border-collapse:collapse}
+.dz-struct td{padding:8px 0;border-bottom:1px solid var(--band2);font:500 14px var(--cond)}
+.dz-struct td:last-child{text-align:right;font-weight:600}
+.dz-mom{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding-top:4px}
+.dz-mom div{display:flex;flex-direction:column;gap:2px}
+.dz-mom b{font:600 18px var(--cond);font-variant-numeric:tabular-nums}
+.dz-mom small{font-size:12px;color:var(--mute)}
+.dz-mom-l{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+.dz-tech{margin-bottom:26px}
+.dz-tab{width:100%;border-collapse:collapse;font-size:14px}
+.dz-tab th{text-align:left;font:600 11px var(--cond);letter-spacing:.07em;text-transform:uppercase;color:var(--mute);padding:8px 10px;border-bottom:1px solid var(--line)}
+.dz-tab tbody th{font:600 14px var(--cond);letter-spacing:0;text-transform:none;color:var(--ink)}
+.dz-tab td{padding:9px 10px;border-bottom:1px solid var(--band2)}
+.dz-tab td.num{font-family:var(--cond);font-variant-numeric:tabular-nums}
+.dz-tab tr.dz-plan td{background:rgba(207,165,75,.07)} .dz-tab tr.dz-plan td:last-child{color:var(--brass);font-weight:600}
+@media (max-width:640px){.dz-graph{overflow-x:auto}.dz-svg{min-width:760px}.dz-leg{display:none}.dz{padding:8px 8px 0}.dz-verdict>b{font-size:46px}.dz-mom{grid-template-columns:repeat(3,minmax(0,1fr))}}
 """
 
 JS = r"""
