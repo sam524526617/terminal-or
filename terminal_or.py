@@ -7653,6 +7653,18 @@ def resume_terminal(a):
         e = a["annonce"]
         zone = couleur("  ZONE NEWS", "1;33") if a["zone_news"] else ""
         print(f"Prochaine annonce forte : {e['titre']}, {date_fr(e['date'], True)}{zone}")
+    dz = a.get("decision")
+    if dz:
+        if dz.get("erreur"):
+            print(couleur(f"Décision du plan : indisponible ({dz['erreur']})", "33"))
+        else:
+            o_ = dz.get("ordre")
+            mot = ("ACHAT" if o_["sens"] > 0 else "VENTE") if o_ else "RIEN"
+            print("Décision du plan :", couleur(mot, "1;" + ({"ACHAT": "32", "VENTE": "31"}.get(mot, "37"))),
+                  (f"note {dz['note']}, {dz['etat']}, entrée {nb(o_['entree'], 2)}, stop {nb(o_['stop'], 2)}, "
+                   f"TP1 {nb(o_['tp1'], 2)}, TP2 {nb(o_['tp2'], 2)}" if o_ else (dz.get("debloque") or "")))
+            for f_ in dz["filtres"]:
+                print(f"  {({'ok': '✓', 'ko': '✗'}).get(f_[2], '–')} {f_[0]:<12} {f_[1]}")
     ko = [n for n, s in STATUT.items() if not s["ok"]]
     if ko:
         print(couleur("Sources en panne : " + ", ".join(ko), "33"))
