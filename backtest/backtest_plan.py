@@ -204,8 +204,15 @@ def charger_fred(debut):
     cols = {}
     for nom, code in series.items():
         try:
-            r = requests.get(URL_FRED.format(code=code), timeout=40, headers=UA)
-            r.raise_for_status()
+            for essai in range(3):
+                try:
+                    r = requests.get(URL_FRED.format(code=code), timeout=90, headers=UA)
+                    r.raise_for_status()
+                    break
+                except Exception:
+                    if essai == 2:
+                        raise
+                    time.sleep(10 * (essai + 1))
             d = pd.read_csv(io.StringIO(r.text))
             d.columns = ["date", "v"]
             d["date"] = pd.to_datetime(d["date"])
@@ -256,6 +263,12 @@ def candidats(m1, fond):
     log(f"  {len(ctx['zones'])} zones")
     if fond is not None:
         f_dates, f5, f20 = fond.index.to_numpy(), fond["f5"].to_numpy(), fond["f20"].to_numpy()
+    # Décision 1 (sens du trade) : deux alternatives à la structure D + H4, lues sur les bougies TERMINÉES
+    e50 = tf["D"]["close"].ewm(span=50, adjust=False).mean().to_numpy()
+    ema_d = P.etat_a(tf["D"], e50, ctx["fins"]).astype(float)
+    sens_ema = np.where(ema_d > 0, np.sign(ctx["c"] - ema_d), 0).astype(int)
+    roc4 = (tf["H4"]["close"] / tf["H4"]["close"].shift(10) - 1).fillna(0).to_numpy()
+    sens_mom = np.sign(P.etat_a(tf["H4"], roc4, ctx["fins"])).astype(int)
     out = []
     for i in range(30, len(tf["M15"])):
         for d in (1, -1):
@@ -266,6 +279,7 @@ def candidats(m1, fond):
                 fv, fv20 = (int(f5[p]), int(f20[p])) if p >= 0 else (0, 0)
             for sg in P.signal(ctx, i, d, fv) or []:
                 sg["fond20"] = fv20
+                sg["ema50d"], sg["mom_h4"] = int(sens_ema[i]), int(sens_mom[i])
                 ny = pd.Timestamp(sg["t_sig"]) - DECALAGE
                 sg["gros_jour"] = ny.date() in FOMC or (ny.weekday() == 4 and ny.day <= 7)   # Fed ou emploi (1er vendredi)
                 out.append(sg)
@@ -380,12 +394,29 @@ def rapport(cand, periode, avec_fond, sortie):
 
     pris = {nom: portefeuille(cand[masque & ok]) for nom, masque in variantes}
     base = pris[variantes[0][0]]
+    decision1 = []
+    if "ema50d" in cand:
+        commun = cand["note"].isin(["A", "B"]) & (cand["fond"] != -cand["sens"]) & ce & ok
+        sens_regles = [("Structure D + H4, H1 sans contradiction (actuel)",
+                        (cand["D"] == cand["sens"]) & (cand["H4"] == cand["sens"]) & (cand["H1"] != -cand["sens"])),
+                       ("EMA 50 Daily", cand["ema50d"] == cand["sens"]),
+                       ("Momentum H4 (10 bougies)", cand["mom_h4"] == cand["sens"])]
+        t_sig = pd.to_datetime(cand["t_sig"])
+        for nom_p, m_p in (("2019-2024 (choix)", t_sig < "2025-01-01"), ("2025-2026 (vérification)", t_sig >= "2025-01-01")):
+            for nom_r, m_r in sens_regles:
+                decision1.append((f"{nom_r} · {nom_p}", portefeuille(cand[commun & m_r & m_p])))
     L = [f"# Backtest du plan : or (XAU/USD)", "",
          f"Période : **{periode}**. Données 1 minute Dukascopy, écart achat-vente de {SPREAD:.2f} $ compté.",
          f"Règles de compte appliquées : une position à la fois, {MAX_TRADES_JOUR} trades par jour au plus, "
          f"arrêt de la journée à {PERTE_MAX_JOUR_R:.0f} R. Avec 1 % de risque par trade, 1 R = 1 % du compte.", ""]
     if not avec_fond:
         L += ["> ⚠️ Données FRED indisponibles : le filtre fondamental n'a pas été appliqué.", ""]
+    if decision1:
+        L += ["## Décision 1 : le sens du trade", "",
+              "Tout le reste du plan est identique (zones, déclencheur, entrée au 50 % du FVG, stop sous l'OB, TP1 2R puis "
+              "liquidité H1, notes A et B, fondamental). On choisit sur 2019-2024, on vérifie sur 2025-2026.", "", ENTETE]
+        L += [ligne(nom, stats(t)) for nom, t in decision1]
+        L.append("")
     L += ["## Résultat du plan et des variantes", "", ENTETE]
     L += [ligne(nom, stats(t)) for nom, t in pris.items()]
     s = stats(base)
