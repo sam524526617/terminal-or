@@ -295,6 +295,9 @@ def candidats(m1, fond):
             liq = P.liquidite_h1(tf["H1"], ctx["st"]["H1"], sg["t_sig"], d, tp1)
             tp2 = liq if (liq is not None and abs(liq - e) <= P.TP2_MAX_R * risque) else e + d * P.TP2_DEFAUT_R * risque
             out_.append(dict(sg, entree_type=nom, stop=float(st_), risque=float(risque), tp1=float(tp1), tp2=float(tp2)))
+            if nom == "ce_atr":   # décision 3 : 50 % à 1 R, stop au point d'entrée, reste sur la liquidité H1 (2 R minimum)
+                tp1b = e + d * 1.0 * risque
+                out_.append(dict(sg, entree_type="ce_atr_1r", stop=float(st_), risque=float(risque), tp1=float(tp1b), tp2=float(tp2)))
         return out_
     out = []
     for i in range(30, len(tf["M15"])):
@@ -447,6 +450,22 @@ def rapport(cand, periode, avec_fond, sortie):
             for nom_s, typ in (("Stop sous l'OB (actuel)", "ce"), ("Stop sous le dernier creux M15", "ce_creux"),
                                ("Stop à 1,5 ATR H1", "ce_atr")):
                 decision2.append((f"{nom_s} · {nom_p}", portefeuille(cand[base2 & (cand["entree_type"] == typ) & m_p])))
+    decision3 = []
+    if "ema50d" in cand:
+        for nom_p, m_p in (("2019-2024 (choix)", t_sig < "2025-01-01"), ("2025-2026 (vérification)", t_sig >= "2025-01-01")):
+            for nom_o, typ in (("50 % à 2 R, reste liquidité (actuel)", "ce_atr"), ("50 % à 1 R, reste liquidité", "ce_atr_1r")):
+                decision3.append((f"{nom_o} · {nom_p}", portefeuille(cand[base2 & (cand["entree_type"] == typ) & m_p])))
+    if decision3:
+        L += ["## Décision 3 : l'objectif", "",
+              "Sens du trade : momentum H4. Stop : 1,5 ATR H1 (retenus aux décisions 1 et 2). Après TP1, le stop passe au "
+              "point d'entrée. On choisit sur 2019-2024, on vérifie sur 2025-2026.", "", ENTETE]
+        L += [ligne(nom, stats(t)) for nom, t in decision3]
+        for typ, nom_o in (("ce_atr", "TP1 à 2 R"), ("ce_atr_1r", "TP1 à 1 R")):
+            t_ = portefeuille(cand[base2 & (cand["entree_type"] == typ)])
+            if len(t_):
+                iss = t_["issue"].value_counts(normalize=True) * 100
+                L.append(f"- {nom_o}, toute la période : " + ", ".join(f"{k} {v:.0f} %" for k, v in iss.items()))
+        L.append("")
     if decision2:
         L += ["## Décision 2 : le stop", "",
               "Sens du trade : momentum H4 (retenu à la décision 1). Entrée au 50 % du FVG, TP1 à 2 R puis liquidité H1 : "
