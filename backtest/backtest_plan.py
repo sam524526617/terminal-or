@@ -269,6 +269,33 @@ def candidats(m1, fond):
     sens_ema = np.where(ema_d > 0, np.sign(ctx["c"] - ema_d), 0).astype(int)
     roc4 = (tf["H4"]["close"] / tf["H4"]["close"].shift(10) - 1).fillna(0).to_numpy()
     sens_mom = np.sign(P.etat_a(tf["H4"], roc4, ctx["fins"])).astype(int)
+    # Décision 2 (stop) : ATR H1 de la dernière bougie terminée, pour le stop à 1,5 ATR H1
+    atr_h1 = P.etat_a(tf["H1"], np.nan_to_num(P.atr(tf["H1"])), ctx["fins"]).astype(float)
+    s15 = ctx["st"]["M15"]
+
+    def autres_stops(sg, i):
+        """Copies du signal (entrée au 50 % du FVG) avec les stops de la décision 2."""
+        d, e, a15 = sg["sens"], sg["entree"], sg["atr15"]
+        stops = {}
+        pts, conf = (s15["creux"], ctx["creux_conf"]) if d > 0 else (s15["sommets"], ctx["sommets_conf"])
+        k0 = int(np.searchsorted(conf, i, side="right")) - 1
+        for k in range(k0, max(k0 - 12, -1), -1):
+            p = pts[k][2]
+            if (p < e) if d > 0 else (p > e):
+                stops["ce_creux"] = p - d * P.STOP_MARGE_ATR * a15
+                break
+        if atr_h1[i] > 0:
+            stops["ce_atr"] = e - d * 1.5 * atr_h1[i]
+        out_ = []
+        for nom, st_ in stops.items():
+            risque = abs(e - st_)
+            if not (P.R_MIN_ATR * a15 <= risque <= 8 * a15):
+                continue
+            tp1 = e + d * P.TP1_R * risque
+            liq = P.liquidite_h1(tf["H1"], ctx["st"]["H1"], sg["t_sig"], d, tp1)
+            tp2 = liq if (liq is not None and abs(liq - e) <= P.TP2_MAX_R * risque) else e + d * P.TP2_DEFAUT_R * risque
+            out_.append(dict(sg, entree_type=nom, stop=float(st_), risque=float(risque), tp1=float(tp1), tp2=float(tp2)))
+        return out_
     out = []
     for i in range(30, len(tf["M15"])):
         for d in (1, -1):
@@ -283,6 +310,8 @@ def candidats(m1, fond):
                 ny = pd.Timestamp(sg["t_sig"]) - DECALAGE
                 sg["gros_jour"] = ny.date() in FOMC or (ny.weekday() == 4 and ny.day <= 7)   # Fed ou emploi (1er vendredi)
                 out.append(sg)
+                if sg["entree_type"] == "ce":
+                    out.extend(autres_stops(sg, i))
     log(f"  {len(out)} signaux candidats (avant filtres)")
     return pd.DataFrame(out)
 
@@ -411,6 +440,25 @@ def rapport(cand, periode, avec_fond, sortie):
          f"arrêt de la journée à {PERTE_MAX_JOUR_R:.0f} R. Avec 1 % de risque par trade, 1 R = 1 % du compte.", ""]
     if not avec_fond:
         L += ["> ⚠️ Données FRED indisponibles : le filtre fondamental n'a pas été appliqué.", ""]
+    decision2 = []
+    if "ema50d" in cand:
+        base2 = cand["note"].isin(["A", "B"]) & (cand["fond"] != -cand["sens"]) & (cand["mom_h4"] == cand["sens"]) & ok
+        for nom_p, m_p in (("2019-2024 (choix)", t_sig < "2025-01-01"), ("2025-2026 (vérification)", t_sig >= "2025-01-01")):
+            for nom_s, typ in (("Stop sous l'OB (actuel)", "ce"), ("Stop sous le dernier creux M15", "ce_creux"),
+                               ("Stop à 1,5 ATR H1", "ce_atr")):
+                decision2.append((f"{nom_s} · {nom_p}", portefeuille(cand[base2 & (cand["entree_type"] == typ) & m_p])))
+    if decision2:
+        L += ["## Décision 2 : le stop", "",
+              "Sens du trade : momentum H4 (retenu à la décision 1). Entrée au 50 % du FVG, TP1 à 2 R puis liquidité H1 : "
+              "1 R étant la distance au stop, les objectifs bougent avec lui. On choisit sur 2019-2024, on vérifie sur 2025-2026.",
+              "", ENTETE]
+        L += [ligne(nom, stats(t)) for nom, t in decision2]
+        for typ, nom_s in (("ce", "OB"), ("ce_creux", "creux M15"), ("ce_atr", "1,5 ATR H1")):
+            t_ = portefeuille(cand[base2 & (cand["entree_type"] == typ)])
+            if len(t_):
+                iss = t_["issue"].value_counts(normalize=True) * 100
+                L.append(f"- Stop {nom_s}, toute la période : " + ", ".join(f"{k} {v:.0f} %" for k, v in iss.items()))
+        L.append("")
     if decision1:
         L += ["## Décision 1 : le sens du trade", "",
               "Tout le reste du plan est identique (zones, déclencheur, entrée au 50 % du FVG, stop sous l'OB, TP1 2R puis "
