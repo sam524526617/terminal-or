@@ -8054,7 +8054,7 @@ def generer(demo=False, watch_min=None, site_dir=None):
         (site_dir / "index.html").write_text(page, encoding="utf-8")
         (site_dir / "brief_claude.txt").write_text(brief, encoding="utf-8")
     if not demo:
-        alerte_telephone(a, data["hist"])
+        alerte_telephone(a, data["hist"], data)
         sauver_historique(data["hist"], site_dir)
     else:
         FICHIER_HTML.write_text(page, encoding="utf-8")
@@ -8071,35 +8071,77 @@ def heure_paris_plan(t):
         return "?"
 
 
-def alerte_telephone(a, hist):
-    """Notification ntfy (application gratuite, sans compte) quand un nouvel ordre du plan est à placer.
-    Ne fait rien tant que le secret GitHub NTFY_TOPIC n'est pas défini. Une seule alerte par signal."""
-    sujet = os.environ.get("NTFY_TOPIC", "").strip()
+def alertes_a_envoyer(a, data, maintenant_):
+    """Liste des alertes du moment : (clé unique, titre, message, priorité 1-5, étiquettes). Une clé n'est envoyée qu'une fois.
+    1. Nouvel ordre du plan · 2. TP1 ou stop touché sur la position du plan · 3. Annonce forte dans 35 min ou moins
+    4. Setup en préparation : tendance et fondamental validés, prix revenu dans une zone, il ne manque que la cassure M15."""
+    out = []
     dz = a.get("decision") or {}
-    o_ = dz.get("ordre")
-    if not sujet or not o_ or dz.get("etat") != "attente":
-        return
-    cle = f"{o_['t_sig']}|{o_['sens']}"
-    if hist.get("derniere_alerte") == cle:
-        return
-    sens = "ACHAT" if o_["sens"] > 0 else "VENTE"
-    statut = ""
-    lab = labo.charger() if labo else None
-    s_ = labo.strategie_en_direct(lab) if labo else None
+    if not dz or dz.get("erreur"):
+        return out
+    demo = ""
+    s_ = labo.strategie_en_direct(labo.charger()) if labo else None
     if s_ and s_.get("statut") != "validée":
-        statut = f"\nDEMO UNIQUEMENT : stratégie {s_['statut']} au backtest."
-    msg = (f"{sens} LIMITE XAU/USD {nb(o_['entree'], 2)} (note {dz.get('note')})\n"
-           f"Stop {nb(o_['stop'], 2)} · TP1 {nb(o_['tp1'], 2)} (50 %) · TP2 {nb(o_['tp2'], 2)}\n"
-           f"Taille {nb(o_['lots'], 2)} lot · ordre annulé s'il n'est pas exécuté avant {heure_paris_plan(o_['expire'])} (Paris){statut}")
-    try:
-        r = requests.post("https://ntfy.sh/", json={
-            "topic": sujet, "title": f"Terminal or : {sens} {nb(o_['entree'], 2)}", "message": msg,
-            "priority": 4, "tags": ["chart_with_upwards_trend" if o_["sens"] > 0 else "chart_with_downwards_trend"]}, timeout=15)
-        r.raise_for_status()
-        hist["derniere_alerte"] = cle
-        noter("Alerte téléphone (ntfy)", True, f"{sens} envoyée")
-    except Exception as e:
-        noter("Alerte téléphone (ntfy)", False, str(e)[:100])
+        demo = f"\nDÉMO UNIQUEMENT : stratégie {s_['statut']} au backtest."
+    o_ = dz.get("ordre")
+    if o_:
+        sens = "ACHAT" if o_["sens"] > 0 else "VENTE"
+        base = f"{o_['t_sig']}|{o_['sens']}"
+        if dz.get("etat") == "attente":
+            out.append((f"ordre|{base}", f"{sens} {nb(o_['entree'], 2)} · ordre à placer",
+                        f"{sens} LIMITE XAU/USD {nb(o_['entree'], 2)} (note {dz.get('note')})\n"
+                        f"Stop {nb(o_['stop'], 2)} · TP1 {nb(o_['tp1'], 2)} (50 %) · TP2 {nb(o_['tp2'], 2)}\n"
+                        f"Taille {nb(o_['lots'], 2)} lot · annulé s'il n'est pas exécuté avant {heure_paris_plan(o_['expire'])}{demo}",
+                        5, ["chart_with_upwards_trend" if o_["sens"] > 0 else "chart_with_downwards_trend"]))
+        elif dz.get("etat") == "tp1":
+            out.append((f"tp1|{base}", f"TP1 touché · {sens} {nb(o_['entree'], 2)}",
+                        f"La moitié est encaissée à {nb(o_['tp1'], 2)}. Remonte le stop au point d'entrée ({nb(o_['entree'], 2)}). "
+                        f"Le reste vise {nb(o_['tp2'], 2)}.{demo}", 4, ["white_check_mark"]))
+    for t in dz.get("journal") or []:
+        if t.get("etat") == "fini" and t.get("issue") == "stop":
+            out.append((f"stop|{t['t_sig']}|{t['sens']}", "Stop touché",
+                        f"{'Achat' if t['sens'] > 0 else 'Vente'} {nb(t['entree'], 2)} sorti au stop ({nb(t['stop'], 2)}) : -1 R. "
+                        f"Aujourd'hui : {dz.get('nb_jour')} trade(s), {nb(dz.get('r_jour'), 1, True)} R.{demo}", 4, ["x"]))
+    for e in data.get("cal") or []:
+        if e.get("impact") != "High":
+            continue
+        m = (e["date"] - maintenant_).total_seconds() / 60
+        if 0 < m <= 35:
+            out.append((f"annonce|{e['titre']}|{e['date'].isoformat()}", f"Annonce forte dans {int(m)} min",
+                        f"{e['titre']} à {e['date']:%H:%M} (prévu {e.get('prevision') or '?'}, précédent {e.get('precedent') or '?'}). "
+                        f"Pas d'entrée de {(e['date'] - timedelta(minutes=30)):%H:%M} à {(e['date'] + timedelta(minutes=30)):%H:%M}.",
+                        4, ["warning"]))
+    f_ = {x[0]: x[2] for x in dz.get("filtres") or []}
+    if not o_ and f_.get("Annonces") == "ok" and f_.get("Fondamental") == "ok" and f_.get("Tendance") == "ok" and f_.get("Zone") == "ok":
+        texte_zone = next((x[1] for x in dz["filtres"] if x[0] == "Zone"), "")
+        out.append((f"prepa|{maintenant_:%Y-%m-%d}|{texte_zone}", "Setup en préparation",
+                    f"Tendance et fondamental validés, {texte_zone[:1].lower() + texte_zone[1:]}. Il ne manque que la cassure M15 qui laisse un FVG. "
+                    f"{' '.join(dz.get('debloque') or [])}{demo}", 3, ["eyes"]))
+    return out
+
+
+def alerte_telephone(a, hist, data=None):
+    """Notifications ntfy (application gratuite, sans compte). Ne fait rien tant que le secret GitHub NTFY_TOPIC
+    n'est pas défini. Chaque alerte n'est envoyée qu'une fois (clés gardées 7 jours dans l'historique)."""
+    sujet = os.environ.get("NTFY_TOPIC", "").strip()
+    if not sujet:
+        return
+    now = maintenant()
+    envoyees = hist.setdefault("alertes", {})
+    for cle in [k for k, t in envoyees.items() if t < (now - timedelta(days=7)).isoformat()]:
+        del envoyees[cle]
+    for cle, titre, msg, prio, tags in alertes_a_envoyer(a, data or {}, now):
+        if cle in envoyees:
+            continue
+        try:
+            r = requests.post("https://ntfy.sh/", json={"topic": sujet, "title": f"Terminal or · {titre}", "message": msg,
+                                                       "priority": prio, "tags": tags}, timeout=15)
+            r.raise_for_status()
+            envoyees[cle] = now.isoformat()
+            noter("Alerte téléphone (ntfy)", True, titre)
+        except Exception as e:
+            noter("Alerte téléphone (ntfy)", False, str(e)[:100])
+            break
 
 
 def page_eurusd(site, demo=False):
