@@ -1,0 +1,48 @@
+# Recherche d'une stratégie or qui gagne vraiment (4 familles, choix 2019-2023, contrôle 2024, test 2025-2026).
+name: Recherche de stratégie
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recherche
+  cancel-in-progress: true
+
+jobs:
+  recherche:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Installer les modules
+        run: pip install pandas numpy requests
+
+      - name: Récupérer l'historique de l'or
+        uses: actions/cache/restore@v6
+        with:
+          path: backtest/.donnees
+          key: dukascopy-m1-${{ github.run_id }}
+          restore-keys: dukascopy-m1-
+
+      - name: Lancer la recherche
+        timeout-minutes: 90
+        run: python backtest/recherche.py --sortie resultats_recherche
+
+      - name: Afficher le rapport
+        if: always()
+        run: test -f resultats_recherche/recherche.md && cat resultats_recherche/recherche.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resultats-recherche
+          path: resultats_recherche/
+          if-no-files-found: ignore
