@@ -298,6 +298,14 @@ def candidats(m1, fond):
             if nom == "ce_atr":   # décision 3 : 50 % à 1 R, stop au point d'entrée, reste sur la liquidité H1 (2 R minimum)
                 tp1b = e + d * 1.0 * risque
                 out_.append(dict(sg, entree_type="ce_atr_1r", stop=float(st_), risque=float(risque), tp1=float(tp1b), tp2=float(tp2)))
+                # décision 4 : entrée au marché à la clôture de la bougie de cassure (au prix demandé pour un achat)
+                em = float(ctx["c"][i]) + (P.SPREAD if d > 0 else 0.0)
+                rm = 1.5 * atr_h1[i]
+                stm = em - d * rm
+                liq_m = P.liquidite_h1(tf["H1"], ctx["st"]["H1"], sg["t_sig"], d, em + d * 2 * rm)
+                tp2m = liq_m if (liq_m is not None and abs(liq_m - em) <= P.TP2_MAX_R * rm) else em + d * P.TP2_DEFAUT_R * rm
+                out_.append(dict(sg, entree_type="marche_atr_1r", entree=em, stop=float(stm), risque=float(rm),
+                                 tp1=float(em + d * rm), tp2=float(tp2m)))
         return out_
     out = []
     for i in range(30, len(tf["M15"])):
@@ -455,6 +463,19 @@ def rapport(cand, periode, avec_fond, sortie):
         for nom_p, m_p in (("2019-2024 (choix)", t_sig < "2025-01-01"), ("2025-2026 (vérification)", t_sig >= "2025-01-01")):
             for nom_o, typ in (("50 % à 2 R, reste liquidité (actuel)", "ce_atr"), ("50 % à 1 R, reste liquidité", "ce_atr_1r")):
                 decision3.append((f"{nom_o} · {nom_p}", portefeuille(cand[base2 & (cand["entree_type"] == typ) & m_p])))
+    decision4 = []
+    if "ema50d" in cand:
+        for nom_p, m_p in (("2019-2024 (choix)", t_sig < "2025-01-01"), ("2025-2026 (vérification)", t_sig >= "2025-01-01")):
+            for nom_e, m_e in (("Ordre limite au 50 % du FVG (actuel)", cand["entree_type"] == "ce_atr_1r"),
+                               ("Au marché, à la cassure", cand["entree_type"] == "marche_atr_1r"),
+                               ("50 % du FVG, zones M30 seulement", (cand["entree_type"] == "ce_atr_1r") & (cand["rang_zone"] == 1))):
+                decision4.append((f"{nom_e} · {nom_p}", portefeuille(cand[base2 & m_e & m_p])))
+    if decision4:
+        L += ["## Décision 4 : l'entrée", "",
+              "Sens du trade : momentum H4. Stop : 1,5 ATR H1. Objectif : 50 % à 1 R, stop au point d'entrée, reste sur la "
+              "liquidité H1 (retenus aux décisions 1 à 3). On choisit sur 2019-2024, on vérifie sur 2025-2026.", "", ENTETE]
+        L += [ligne(nom, stats(t)) for nom, t in decision4]
+        L.append("")
     if decision3:
         L += ["## Décision 3 : l'objectif", "",
               "Sens du trade : momentum H4. Stop : 1,5 ATR H1 (retenus aux décisions 1 et 2). Après TP1, le stop passe au "
