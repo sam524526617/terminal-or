@@ -14,8 +14,8 @@ POLICES = ('<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;
 CSS = """
 /* ===================== Thème professionnel v8 ===================== */
 :root{
-  --bg:#0a0d12; --panel:#10141b; --band:#151a22; --band2:#1b212b; --line:#232b36; --ink:#e7eaf0; --mute:#8d97a8;
-  --brass:#d6a94a; --steel:#a3adbb; --up:#34c38f; --down:#f0616d; --amber:#f5a623;
+  --bg:#000000; --panel:#0b0b0d; --band:#141418; --band2:#1c1c21; --line:#2a2a31; --ink:#f1f1f3; --mute:#9b9ba3;
+  --brass:#ff9f1a; --steel:#b4b4bc; --up:#2fd27d; --down:#ff5a5f; --amber:#ffb340;
   --cond:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --text:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
   --mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
 }
@@ -66,6 +66,18 @@ button.or{background:var(--brass);border-color:var(--brass);color:#14100a;font-w
 .onglets button:hover{color:var(--ink);background:none}
 .onglets button.actif,.onglets button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--brass)}
 .onglets kbd{display:none}
+.onglets .fc{font:700 10.5px var(--mono);color:var(--brass);background:rgba(255,159,26,.1);border:1px solid rgba(255,159,26,.35);
+  border-radius:4px;padding:1px 5px;margin-right:8px;letter-spacing:.04em}
+.onglets button.actif .fc,.onglets button[aria-selected=true] .fc{background:var(--brass);color:#000;border-color:var(--brass)}
+.cmd{margin-left:auto;display:flex;align-items:center;gap:8px;padding:8px 0}
+.cmd label{font:700 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--brass)}
+.cmd input{width:230px;background:#000;border:1px solid var(--line);border-radius:6px;color:var(--brass);font:600 13px var(--mono);
+  padding:7px 10px;text-transform:uppercase}
+.cmd input:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(255,159,26,.25)}
+.cmd input.err{border-color:var(--down)}
+.cmd-aide{font-size:11.5px;color:var(--mute);white-space:nowrap}
+/* Titres de panneaux en ambre, comme sur un terminal Bloomberg */
+.ps-tete .k,.ph .k,.mk-tete,.dz-tete .k,.lb-tete small,.ps-titre{color:var(--brass)}
 .contenu{max-width:1600px;padding:0 20px 48px}
 .tabpanel{padding-top:16px}
 #tab-accueil .dz{padding:0 0 12px}
@@ -122,7 +134,9 @@ table th{font-family:var(--text)}
 ::selection{background:rgba(214,169,74,.35)}
 
 @media (max-width:1100px){.cockpit{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+@media (max-width:1100px){.cmd-aide{display:none}.cmd input{width:150px}}
 @media (max-width:760px){
+  .cmd{display:none}
   .barre .ligne{gap:10px 14px;padding:8px 12px;flex-wrap:wrap}
   .horloges,.fraicheur,.marche{display:none}
   .prix-live{padding-left:0;border-left:0}
@@ -147,6 +161,26 @@ try {
     localStorage.setItem('or-v8', '1');
   }
 } catch(e){}
+/* Barre de commande : un code de fonction puis Entrée ; « / » pour y aller depuis n'importe où */
+var CODES = {GO:'accueil', ACCUEIL:'accueil', MKT:'marches', MARCHES:'marches', TECH:'technique', FA:'fondamental', FONDA:'fondamental',
+  ECO:'annonces', CAL:'annonces', NEWS:'actus', N:'actus', LAB:'labo', JRN:'suivi', JOURNAL:'suivi'};
+var cmd = document.getElementById('cmd');
+function aller(code){
+  var id = CODES[(code || '').trim().toUpperCase()];
+  var b = id && document.querySelector('.onglets [data-tab="' + id + '"]');
+  if (!b) return false;
+  b.click(); window.scrollTo({top: 0}); return true;
+}
+if (cmd){
+  cmd.addEventListener('keydown', function(e){
+    if (e.key === 'Enter'){ e.preventDefault(); var ok = aller(cmd.value); cmd.classList.toggle('err', !ok); if (ok){ cmd.value = ''; cmd.blur(); } }
+    if (e.key === 'Escape'){ cmd.value = ''; cmd.blur(); }
+  });
+  document.addEventListener('keydown', function(e){
+    var tg = (e.target.tagName || '');
+    if (e.key === '/' && tg !== 'INPUT' && tg !== 'TEXTAREA'){ e.preventDefault(); cmd.focus(); cmd.select(); }
+  });
+}
 /* Hauteur réelle de la barre, pour coller les onglets dessous */
 function hb(){ var b = document.querySelector('.barre'); if (b) document.documentElement.style.setProperty('--haut-barre', b.offsetHeight + 'px'); }
 hb(); window.addEventListener('resize', hb);
