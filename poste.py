@@ -87,16 +87,38 @@ def col_decision(dz, statut, compte):
                   f'<button type="button" class="dz-copier ps-copier {cls}" data-texte="{esc(texte)}">Copier l\'ordre</button>')
     else:
         ko = [f for f in dz["filtres"] if f[2] == "ko"]
-        bloq = ko or [f for f in dz["filtres"] if f[2] == "wait"][:1]
-        pourquoi = (" · ".join(f"{f[0]} : {f[1]}" for f in bloq) if bloq else "Tous les filtres sont verts : en attente du signal.")
         deb = dz.get("debloque") or []
         if isinstance(deb, str):
             deb = [deb]
-        corps = (f'<div class="ps-verdict"><b>RIEN</b><div><span class="ps-note">Pas de setup</span>'
-                 f'<small>Aucun ordre à placer</small></div></div>'
-                 f'<p class="ps-pourquoi"><span class="k">Bloqué par</span>{esc(pourquoi)}</p>'
-                 f'<div class="ps-deb"><span class="k">Ce qui débloque{" (tout est nécessaire)" if len(deb) > 1 else ""}</span>'
-                 f'<ol>{"".join(f"<li>{esc(x)}</li>" for x in deb) or "<li>—</li>"}</ol></div>')
+        t = dz.get("tend") or {}
+        sens = t.get("D", 0) if (t.get("D") and t.get("D") == t.get("H4") and t.get("H1") != -t.get("D")) else 0
+        nb_ok = sum(1 for f in dz["filtres"] if f[2] == "ok")
+        jauge = "".join(f'<i class="{"on" if k < nb_ok else ""}"></i>' for k in range(5))
+        if not ko and sens:
+            # Les filtres de fond sont validés : on attend la zone et / ou le déclencheur dans un sens connu
+            mot = "ACHAT" if sens > 0 else "VENTE"
+            cls = "ps-prep-a" if sens > 0 else "ps-prep-v"
+            corps = (f'<div class="ps-verdict"><b>{"ACHAT" if sens > 0 else "VENTE"}<span class="ps-prep">en préparation</span></b></div>'
+                     f'<p class="ps-sous">Tendance et fondamental validés : on ne cherche <b>que des {mot.lower()}s</b>. '
+                     f'Pas d\'ordre tant que les étapes ci-dessous ne sont pas faites.</p>'
+                     f'<div class="ps-etapes"><div class="ps-jauge" title="{nb_ok} filtres sur 5">{jauge}<span>{nb_ok} / 5</span></div>'
+                     f'<span class="k">À surveiller, dans l\'ordre</span><ol>{"".join(f"<li>{esc(x)}</li>" for x in deb) or "<li>Attendre la cassure M15.</li>"}</ol></div>')
+        else:
+            bloq = ko or [f for f in dz["filtres"] if f[2] == "wait"][:1]
+            pourquoi = (" · ".join(f"{f[0]} : {f[1]}" for f in bloq) if bloq else "Tous les filtres sont verts : en attente du signal.")
+            corps = (f'<div class="ps-verdict"><b>RIEN</b><div><span class="ps-note">Pas de trade</span>'
+                     f'<small>Le contexte interdit d\'entrer</small></div></div>'
+                     f'<div class="ps-jauge" title="{nb_ok} filtres sur 5">{jauge}<span>{nb_ok} / 5</span></div>'
+                     f'<p class="ps-pourquoi"><span class="k">Bloqué par</span>{esc(pourquoi)}</p>'
+                     f'<div class="ps-deb"><span class="k">Ce qui débloque{" (tout est nécessaire)" if len(deb) > 1 else ""}</span>'
+                     f'<ol>{"".join(f"<li>{esc(x)}</li>" for x in deb) or "<li>—</li>"}</ol></div>')
+        trades = ((dz.get("histo") or {}).get("trades") or [])
+        if trades:
+            der = P.depuis_horloge(trades[0]["t_sig"])
+            age = (dz["maj"] - der).days if dz.get("maj") is not None else None
+            corps += (f'<p class="ps-freq">Ce plan donne en moyenne un signal tous les {max(1, round(60 / max(1, len(trades))))} jours '
+                      f'({len(trades)} sur les 60 derniers jours) · dernier signal : {der:%d/%m}'
+                      + (f', il y a {age} jour{"s" if age > 1 else ""}' if age else "") + '.</p>')
     jour = (f'<div class="ps-jour"><div><span class="k">Aujourd\'hui</span><b>{dz["nb_jour"]} / {P.MAX_TRADES_JOUR} trades</b></div>'
             f'<div><span class="k">Résultat</span><b class="{COUL[int(np.sign(round(dz["r_jour"], 2)))]}">{fr(dz["r_jour"], 1, True)} R</b></div>'
             f'<div><span class="k">Risque / trade</span><b>{fr(compte.get("risque_pct", 1), 1)} %</b></div>'
@@ -375,6 +397,16 @@ p.ps-mini{margin:6px 0 0}
 .ps-verdict>b{font:800 54px/1 var(--text);letter-spacing:-.03em}
 .ps-achat .ps-verdict>b,.ps-achat .ps-note{color:var(--up)} .ps-vente .ps-verdict>b,.ps-vente .ps-note{color:var(--down)}
 .ps-rien .ps-verdict>b{color:var(--steel)}
+.ps-prep-a .ps-verdict>b{color:var(--up)} .ps-prep-v .ps-verdict>b{color:var(--down)}
+.ps-prep-a .ps-verdict>b,.ps-prep-v .ps-verdict>b{font-size:40px;opacity:.85}
+.ps-dec.ps-prep-a{border-color:rgba(47,210,125,.35)} .ps-dec.ps-prep-v{border-color:rgba(255,90,95,.35)}
+.ps-prep{display:block;font:700 13px var(--text);letter-spacing:.12em;text-transform:uppercase;color:var(--ink);margin-top:6px}
+.ps-sous{margin:0;font-size:14px;line-height:1.5}
+.ps-etapes ol{margin:4px 0 0;padding-left:18px;font-size:14px;line-height:1.5;display:flex;flex-direction:column;gap:3px}
+.ps-jauge{display:flex;align-items:center;gap:4px;margin-bottom:6px}
+.ps-jauge i{width:26px;height:6px;border-radius:3px;background:var(--band2)} .ps-jauge i.on{background:var(--brass)}
+.ps-jauge span{font:600 12px var(--mono);color:var(--mute);margin-left:6px}
+.ps-freq{margin:0;font-size:12.5px;color:var(--mute);line-height:1.45}
 .ps-verdict div{display:flex;flex-direction:column;gap:3px}
 .ps-verdict small{font-size:13px;color:var(--ink)}
 .ps-note{align-self:flex-start;font:700 11px var(--text);border:1px solid currentColor;border-radius:5px;padding:2px 8px;color:var(--mute)}
