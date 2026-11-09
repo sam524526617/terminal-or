@@ -244,7 +244,11 @@ def main():
     ap.add_argument("--debut", default="2018-06-01")
     ap.add_argument("--sortie", default="resultats_recherche")
     ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--telecharger-seulement", action="store_true")
     a = ap.parse_args()
+    if a.telecharger_seulement:
+        bt.telecharger(date.fromisoformat(a.debut), date.today() - timedelta(days=1), Path("backtest/.donnees"))
+        return
     if a.demo:
         m1u = bt.donnees_demo(jours=900, graine=4)
     else:
@@ -295,6 +299,31 @@ def main():
             ann = pd.DataFrame(tr).assign(an=lambda x: pd.to_datetime(x["t"]).dt.year).groupby("an")["R"].agg(["count", "sum"])
             L.append("Par année (R) : " + ", ".join(f"{int(k)} : {v['sum']:+.1f} ({int(v['count'])} tr)" for k, v in ann.iterrows()))
         L.append("")
+    # Hors échantillon : 2010-2018, jamais utilisé pour choisir quoi que ce soit. Candidate fixée AVANT le test.
+    if D.index[0] < pd.Timestamp("2011-01-01"):
+        CANDIDATE = "cassure 55 jours, achats et ventes"
+        L += ["## Hors échantillon 2010-2018 (années jamais vues)", "",
+              f"Candidate fixée avant le test : **A · Tendance Daily · {CANDIDATE}**. Critère : gain moyen positif, profit "
+              "factor d'au moins 1,1, et toujours positif avec des coûts doublés. Les autres lignes sont données pour information.", "",
+              "| Variante | 2010-2018 | 2010-2018, coûts doublés |", "|---|---|---|"]
+        for fam in ("A · Tendance Daily", "B · Dérive de nuit"):
+            for nom, fn in familles[fam]:
+                tr, tr2 = decouper(fn(1.0), "2010-01-01", "2019-01-01"), decouper(fn(2.0), "2010-01-01", "2019-01-01")
+                L.append(f"| {fam} · {nom} | {cellule(stats(tr))} | {cellule(stats(tr2))} |")
+                if fam.startswith("A") and nom == CANDIDATE:
+                    s1, s2 = stats(tr), stats(tr2)
+                    ok = bool(s1 and s2 and s1["moy"] > 0 and s1["pf"] >= 1.1 and s2["moy"] > 0)
+                    ann = pd.DataFrame(tr).assign(an=lambda x: pd.to_datetime(x["t"]).dt.year).groupby("an")["R"].agg(["count", "sum"]) if tr else None
+                    verdict_hors = (f"**{'VALIDÉE' if ok else 'REJETÉE'}** sur 2010-2018 : "
+                                    + (f"{s1['n']} trades, {s1['moy']:+.3f} R par trade, {s1['total']:+.1f} R, PF {s1['pf']:.2f}, "
+                                       f"pire baisse {s1['dd']:.1f} R." if s1 else "aucun trade."))
+                    if ann is not None:
+                        verdict_hors += " Par année : " + ", ".join(f"{int(k)} : {v['sum']:+.1f} ({int(v['count'])})" for k, v in ann.iterrows())
+                    tout = stats(fn(1.0))
+                    if tout:
+                        verdict_hors += (f" Sur tout l'historique ({D.index[0]:%Y}-{D.index[-1]:%Y}) : {tout['n']} trades, "
+                                         f"{tout['moy']:+.3f} R par trade, {tout['total']:+.1f} R, pire baisse {tout['dd']:.1f} R.")
+        L += ["", verdict_hors, ""]
     L += ["## Verdict", ""]
     if candidats:
         for fam, nom, par, test2, tr in candidats:

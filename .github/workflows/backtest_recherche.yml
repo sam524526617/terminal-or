@@ -1,8 +1,13 @@
-# Recherche d'une stratégie or qui gagne vraiment (4 familles, choix 2019-2023, contrôle 2024, test 2025-2026).
+# Recherche d'une stratégie or qui gagne vraiment (choix 2019-2023, contrôle 2024, test 2025-2026,
+# et hors échantillon 2010-2018 si le début demandé est antérieur à 2011).
 name: Recherche de stratégie
 
 on:
   workflow_dispatch:
+    inputs:
+      debut:
+        description: "Début des données (AAAA-MM-JJ) ; 2009-06-01 pour le test hors échantillon 2010-2018"
+        default: "2018-06-01"
 
 permissions:
   contents: read
@@ -14,7 +19,9 @@ concurrency:
 jobs:
   recherche:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
+    env:
+      DEBUT: ${{ github.event.inputs.debut || '2018-06-01' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -32,9 +39,20 @@ jobs:
           key: dukascopy-m1-${{ github.run_id }}
           restore-keys: dukascopy-m1-
 
+      - name: Télécharger les jours manquants
+        timeout-minutes: 200
+        run: python backtest/recherche.py --debut "$DEBUT" --telecharger-seulement
+
+      - name: Sauvegarder l'historique
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: backtest/.donnees
+          key: dukascopy-m1-${{ github.run_id }}
+
       - name: Lancer la recherche
-        timeout-minutes: 90
-        run: python backtest/recherche.py --sortie resultats_recherche
+        timeout-minutes: 60
+        run: python backtest/recherche.py --debut "$DEBUT" --sortie resultats_recherche
 
       - name: Afficher le rapport
         if: always()
