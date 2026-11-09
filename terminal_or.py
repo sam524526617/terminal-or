@@ -57,6 +57,11 @@ import pandas as pd
 import requests
 
 try:
+    import theme  # thème professionnel v8 (police, grille, navigation en haut)
+except Exception:
+    theme = None
+
+try:
     import labo  # labo des stratégies : résultats de backtest et statut
 except Exception:
     labo = None
@@ -82,7 +87,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "7.0"
+VERSION = "8.0"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -7478,9 +7483,12 @@ def contenus_onglets(data, a, ia):
     }
 
 
-def bloc_onglets(data, a, ia):
+def bloc_onglets(data, a, ia, accueil=None):
     contenus = contenus_onglets(data, a, ia)
     onglets = ONGLETS_V7 if v7(a) else ONGLETS
+    if accueil is not None:   # v8 : la vue d'ensemble (décision, graphique, cockpit) devient le premier onglet
+        onglets = [("accueil", "Vue d'ensemble")] + list(onglets)
+        contenus["accueil"] = accueil
     nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false">{esc(t)}<kbd>{(k + 1) % 10}</kbd></button>'
                   for k, (i, t) in enumerate(onglets))
     ta_tv = tv("embed-widget-technical-analysis.js", {"interval": "15m", "width": "100%", "height": "100%",
@@ -7505,8 +7513,9 @@ def bloc_onglets(data, a, ia):
                      f'signal d\'entrée.</p><div class="tv-cal" style="height:460px">{ta_tv}</div></section>')
         panneaux += (f'<div class="tabpanel" id="tab-{i}" role="tabpanel" aria-label="{esc(t)}">'
                      f'<div data-zone="t-{i}">{contenus[i]}</div>{extra}</div>')
-    return (f'<nav class="onglets analyst" id="analyse" role="tablist" aria-label="Analyse approfondie">{nav}</nav>'
-            f'<div class="contenu analyst">{panneaux}<div data-zone="sources">{bloc_sources()}</div></div>')
+    cl = "" if accueil is not None else " analyst"
+    return (f'<nav class="onglets{cl}" id="analyse" role="tablist" aria-label="Navigation">{nav}</nav>'
+            f'<div class="contenu{cl}">{panneaux}<div data-zone="sources">{bloc_sources()}</div></div>')
 
 
 def titre_verdict(a):
@@ -7525,8 +7534,14 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
     ctx_json = json.dumps(contexte_controle(a), ensure_ascii=False).replace("</", "<\\/")
     dec_html = (((labo.bandeau(labo.charger()) if labo else "") + decision.bloc_html(a["decision"]) + decision.bloc_graphique(a["decision"]))
                 if (decision is not None and a.get("decision")) else bloc_trader(a))
-    corps = (f'{bloc_barre(a)}{bloc_reglages()}{dec_html}{bloc_bandeau_tv()}{bloc_strip(a, y, f)}{bloc_cockpit(a, y, f, sans_setup=bool(a.get("decision")))}'
-             f'{bloc_onglets(data, a, ia)}'
+    pro = theme is not None and v7(a)
+    if pro:
+        accueil = dec_html + bloc_strip(a, y, f) + bloc_cockpit(a, y, f, sans_setup=True)
+        haut = f'{bloc_barre(a)}{bloc_reglages()}{bloc_bandeau_tv()}{bloc_onglets(data, a, ia, accueil=accueil)}'
+    else:
+        haut = (f'{bloc_barre(a)}{bloc_reglages()}{dec_html}{bloc_bandeau_tv()}{bloc_strip(a, y, f)}'
+                f'{bloc_cockpit(a, y, f, sans_setup=bool(a.get("decision")))}{bloc_onglets(data, a, ia)}')
+    corps = (f'{haut}'
              f'<script type="application/json" id="evts" data-zone="evts">{evenements_json(data, a)}</script>'
              f'<script type="application/json" id="ctx" data-zone="ctx">{ctx_json}</script>'
              f'<div data-zone="brief" hidden><textarea id="brief" style="display:none" aria-hidden="true">'
@@ -7536,13 +7551,16 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             f'<title>{esc(ACTIF["court"])} {fp(a["or"]["prix"], 0)} · {titre_verdict(a)} · {esc(ACTIF["page"])}</title>'
             f'<link rel="preconnect" href="https://fonts.googleapis.com">'
             f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-            f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
-            f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">'
+            + (theme.POLICES if pro else
+               f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
+               f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
-            f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}</style></head><body>{corps}'
+            f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
+            f'{theme.CSS if pro else ""}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
-            f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}</body></html>')
+            f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
+            f'{"<script>" + theme.JS + "</script>" if pro else ""}</body></html>')
 
 
 # ---------------------------------------------------------------------------
