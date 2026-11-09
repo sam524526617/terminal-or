@@ -57,6 +57,11 @@ import pandas as pd
 import requests
 
 try:
+    import eco  # fonction ECO : agenda de la semaine, surprises et réactions de l'or
+except Exception:
+    eco = None
+
+try:
     import donnees  # fonction DATA : positionnement, volatilité, ratios, corrélations, surprise macro
 except Exception:
     donnees = None
@@ -7465,6 +7470,17 @@ def fondamental_jour_par_jour(y, f):
         return None
 
 
+def eco_html(data, a):
+    evt = next((e for e in (data.get("cal") or []) if e["impact"] == "High" and e["date"] >= maintenant() - timedelta(minutes=30)), None)
+    fiche = None
+    if evt:
+        fiche = fiche_annonce(evt, a)
+        fiche["type_nom"] = type_annonce(evt["titre"])
+    intra = data.get("intraday") or {}
+    return eco.bloc_eco(data.get("cal") or [], intra.get("barres"), AJUST, fiche, a.get("reactions"), maintenant(), type_annonce,
+                        plus='<details class="on-plus"><summary>Adjudications du Trésor américain</summary>' + bloc_adjudications(a) + '</details>')
+
+
 ONGLETS_V7 = [("marches", "Marchés"), ("data", "Données"), ("technique", "Technique"), ("fondamental", "Fondamental"), ("annonces", "Agenda éco"),
               ("actus", "Actualités"), ("labo", "Labo"), ("suivi", "Journal")]
 # Codes de fonction, à la Bloomberg : on les tape dans la barre de commande (touche « / ») puis Entrée
@@ -7489,7 +7505,7 @@ def contenus_onglets(data, a, ia):
                             + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
                             + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
                             + bloc_devises(a) + '</details>'),
-            "annonces": (onglets.bloc_annonces(
+            "annonces": (eco_html(data, a) if eco else onglets.bloc_annonces(
                 [fiche_annonce(e, a) for e in (data["cal"] or []) if e["impact"] == "High"
                  and e["date"] >= maintenant() - timedelta(minutes=30)][:4],
                 data["cal"], a.get("reactions_evt"), a.get("reactions"), maintenant(), bloc_adjudications(a))
@@ -7607,7 +7623,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'

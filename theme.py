@@ -184,6 +184,9 @@ if (cmd){
     if (e.key === '/' && tg !== 'INPUT' && tg !== 'TEXTAREA'){ e.preventDefault(); cmd.focus(); cmd.select(); }
   });
 }
+/* Prix en direct recopié dans la carte « Prix et séance » */
+setInterval(function(){ var a = document.getElementById('px-live'), b = document.getElementById('ps-px-live');
+  if (a && b && a.textContent && a.textContent !== b.textContent) b.textContent = a.textContent; }, 2000);
 /* Hauteur réelle de la barre, pour coller les onglets dessous */
 function hb(){ var b = document.querySelector('.barre'); if (b) document.documentElement.style.setProperty('--haut-barre', b.offsetHeight + 'px'); }
 hb(); window.addEventListener('resize', hb);

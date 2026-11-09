@@ -251,14 +251,89 @@ def col_surveiller(dz, a, data, ajust, fiche, mots, now):
     else:
         h.append('<div class="ps-carte ps-evt"><div class="ps-tete"><span class="k">Prochaine annonce forte</span></div>'
                  '<b class="ps-evt-nom">Aucune cette semaine</b></div>')
+    ag = agenda_jour(data.get("cal"), now)
+    if ag:
+        h[-1] = h[-1][:-len("</div>")] + ag + "</div>"
     nv = niveaux_cles(dz, a.get("seance"), ajust)
     h.append(f'<div class="ps-carte"><div class="ps-tete"><span class="k">Niveaux clés</span><span class="ps-mini">écart au prix</span></div>'
              f'<table class="ps-niv">{nv}</table></div>')
-    ac = actus(data.get("news"), mots, now)
-    if ac:
-        h.append(f'<div class="ps-carte"><div class="ps-tete"><span class="k">Dernières actualités</span>'
-                 f'<a href="#analyse" data-aller="actus" class="ps-lien">tout voir</a></div><ul class="ps-actus">{ac}</ul></div>')
     return "".join(h)
+
+
+def agenda_jour(cal, now):
+    """Toutes les annonces USD d'aujourd'hui et de demain (fortes et moyennes), en lignes compactes."""
+    lst = [e for e in cal or [] if e.get("date") is not None and now.date() <= e["date"].date() <= (now + timedelta(days=1)).date()]
+    if not lst:
+        return '<p class="ps-mini ps-ag-vide">Rien d\'autre aujourd\'hui ni demain.</p>'
+    lig = ""
+    for e in lst[:8]:
+        passe = e["date"] <= now
+        jour = "auj." if e["date"].date() == now.date() else "dem."
+        lig += (f'<tr class="{"ps-ag-passe" if passe else ""}"><td class="num">{jour} {e["date"]:%H:%M}</td>'
+                f'<td><i class="ps-imp {"fort" if e["impact"] == "High" else ""}"></i>{esc(e["titre"])}</td>'
+                f'<td class="num">{esc(e.get("reel") or e.get("prevision") or "—")}</td></tr>')
+    return (f'<div class="ps-ag"><span class="k">Agenda aujourd\'hui et demain</span>'
+            f'<table class="ps-agt">{lig}</table><a href="#analyse" data-aller="annonces" class="ps-lien">agenda complet</a></div>')
+
+
+def col_marche(a, data, ajust, mots, now):
+    """Colonne 4 : prix et séance, positionnement, marchés, actualités."""
+    h = [carte_seance(a, ajust), carte_position(a), carte_marches(data)]
+    return "".join(x for x in h if x)
+
+
+def carte_actus(data, mots, now):
+    ac = actus(data.get("news"), mots, now)
+    if not ac:
+        return ""
+    return (f'<div class="ps-carte"><div class="ps-tete"><span class="k">Dernières actualités</span>'
+            f'<a href="#analyse" data-aller="actus" class="ps-lien">tout voir</a></div><ul class="ps-actus">{ac}</ul></div>')
+
+
+def carte_seance(a, ajust):
+    s = a.get("seance")
+    if not s:
+        return ""
+    px = s["prix"] + ajust
+    pdc = s.get("pdc")
+    ch = (s["prix"] - pdc) if pdc else None
+    chp = (ch / pdc * 100) if pdc else None
+    haut, bas = s["haut"] + ajust, s["bas"] + ajust
+    pos = (px - bas) / (haut - bas) * 100 if haut > bas else 50
+    ses = ""
+    for x in s.get("seances") or []:
+        if x.get("haut") is None:
+            ses += f'<tr><td>{esc(x["nom"])}</td><td class="num" colspan="2">à venir</td></tr>'
+        else:
+            ses += (f'<tr class="{"ps-cours" if x.get("en_cours") else ""}"><td>{esc(x["nom"])}{" ●" if x.get("en_cours") else ""}</td>'
+                    f'<td class="num">{fr(x["bas"] + ajust, 1)} – {fr(x["haut"] + ajust, 1)}</td>'
+                    f'<td class="num">{fr(x["haut"] - x["bas"], 1)} $</td></tr>')
+    return (f'<div class="ps-carte"><div class="ps-tete"><span class="k">Prix et séance</span><span class="ps-mini">spot, référence de l\'analyse</span></div>'
+            f'<div class="ps-prix"><b id="ps-px-live">{fr(px, 2)}</b><span class="{"up" if (ch or 0) > 0 else "down" if (ch or 0) < 0 else ""}">'
+            f'{fr(ch, 2, True)} ({fr(chp, 2, True, " %")})</span></div>'
+            f'<div class="ps-range"><span>{fr(bas, 1)}</span><div class="ps-rb"><i style="left:{pos:.0f}%"></i></div><span>{fr(haut, 1)}</span></div>'
+            f'<p class="ps-mini">Fourchette du jour · ATR {fr(s.get("atr"), 1)} $ · {fr(s.get("pct_atr"), 0)} % consommé</p>'
+            f'{f"<table class=ps-ses>{ses}</table>" if ses else ""}</div>')
+
+
+def carte_position(a):
+    lig = []
+    c = a.get("cot")
+    if c:
+        lig.append(("Fonds (COT)", f'percentile {fr(c["pct3a"], 0)} · {fr(c["chg"], 0, True)}/sem.', "down" if c["pct3a"] >= 85 else "up" if c["pct3a"] <= 15 else ""))
+    cn = a.get("carnets")
+    if cn and cn.get("part_acheteurs") is not None:
+        pa = cn["part_acheteurs"]
+        lig.append(("Particuliers (OANDA)", f'{fr(pa, 0)} % acheteurs', "down" if pa >= 65 else "up" if pa <= 35 else ""))
+    g = a.get("gld")
+    if g:
+        lig.append(("ETF GLD, 5 jours", f'{fr(g["d5"], 1, True)} t', "up" if (g["d5"] or 0) >= 5 else "down" if (g["d5"] or 0) <= -5 else ""))
+    if not lig:
+        return ""
+    rows = "".join(f'<tr><td>{esc(k)}</td><td class="num {c_}">{v}</td></tr>' for k, v, c_ in lig)
+    return (f'<div class="ps-carte"><div class="ps-tete"><span class="k">Positionnement</span>'
+            f'<a href="#analyse" data-aller="data" class="ps-lien">détail</a></div><table class="ps-mk">{rows}</table>'
+            f'<p class="ps-mini">vert : signal contrarien plutôt haussier · rouge : plutôt baissier</p></div>')
 
 
 def bloc_poste(a, data, ajust, compte, statut, fiche, mots, now):
@@ -266,14 +341,25 @@ def bloc_poste(a, data, ajust, compte, statut, fiche, mots, now):
     if not dz or dz.get("erreur"):
         return ""
     return (f'<section class="ps" data-zone="poste" aria-label="Poste de pilotage">'
-            f'<div class="ps-col">{col_decision(dz, statut, compte)}{carte_marches(data)}</div>'
+            f'<div class="ps-col">{col_decision(dz, statut, compte)}{carte_actus(data, mots, now)}</div>'
             f'<div class="ps-col">{col_contexte(dz, a.get("fonda"))}</div>'
-            f'<div class="ps-col">{col_surveiller(dz, a, data, ajust, fiche, mots, now)}</div></section>')
+            f'<div class="ps-col">{col_surveiller(dz, a, data, ajust, fiche, mots, now)}</div>'
+            f'<div class="ps-col">{col_marche(a, data, ajust, mots, now)}</div></section>')
 
 
 CSS = """
 /* Poste de pilotage : le premier écran */
-.ps{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr);gap:12px;margin:0 0 12px;align-items:start}
+.ps{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:12px;margin:0 0 12px;align-items:start}
+.ps-prix{display:flex;align-items:baseline;gap:10px} .ps-prix b{font:700 26px var(--mono);letter-spacing:-.02em} .ps-prix span{font:600 13px var(--mono)}
+.ps-range{display:flex;align-items:center;gap:8px;margin:8px 0 2px;font:500 11.5px var(--mono);color:var(--mute)}
+.ps-rb{flex:1;position:relative;height:6px;border-radius:3px;background:linear-gradient(90deg,rgba(255,90,95,.45),#3a3a42,rgba(47,210,125,.45))}
+.ps-rb i{position:absolute;top:-4px;width:3px;height:14px;margin-left:-1px;background:var(--ink);border-radius:1px}
+.ps-ses,.ps-agt{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px}
+.ps-ses td,.ps-agt td{padding:4px 0;border-bottom:1px solid var(--band2)} .ps-ses td.num,.ps-agt td.num{text-align:right;font-family:var(--mono)}
+.ps-ses tr.ps-cours td:first-child{color:var(--brass)}
+.ps-ag{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)} .ps-ag .k{display:block}
+.ps-agt td:nth-child(2){padding-left:8px} .ps-agt tr.ps-ag-passe td{color:var(--mute)}
+.ps-imp{display:inline-block;width:7px;height:7px;border-radius:50%;background:#55555e;margin-right:6px;vertical-align:1px} .ps-imp.fort{background:var(--amber)}
 #tab-accueil{padding-top:12px} #tab-accueil>div>.ps:first-child,#tab-accueil .ps{margin-top:0}
 .ps-col{display:flex;flex-direction:column;gap:12px;min-width:0}
 .ps-carte{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
@@ -346,7 +432,8 @@ p.ps-mini{margin:6px 0 0}
 .ps-tvbox .tv{position:absolute;inset:0}
 .ps-titre{font:600 10.5px var(--text);letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin:6px 0 8px}
 @media (max-width:760px){.ps-tvbox{height:420px}}
-@media (max-width:1180px){.ps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-  .ps-col:last-child{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start}}
+@media (max-width:1500px){.ps{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1fr)}
+  .ps-col:nth-child(4){grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));align-items:start}}
+@media (max-width:1100px){.ps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 @media (max-width:760px){.ps{grid-template-columns:minmax(0,1fr)}.ps-verdict>b{font-size:44px}.ps-jour{grid-template-columns:repeat(2,minmax(0,1fr))}}
 """
