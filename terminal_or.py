@@ -57,6 +57,11 @@ import pandas as pd
 import requests
 
 try:
+    import donnees  # fonction DATA : positionnement, volatilité, ratios, corrélations, surprise macro
+except Exception:
+    donnees = None
+
+try:
     import marches  # fonction MKT : tableau de tous les marchés et courbe des taux
 except Exception:
     marches = None
@@ -7460,10 +7465,10 @@ def fondamental_jour_par_jour(y, f):
         return None
 
 
-ONGLETS_V7 = [("marches", "Marchés"), ("technique", "Technique"), ("fondamental", "Fondamental"), ("annonces", "Agenda éco"),
+ONGLETS_V7 = [("marches", "Marchés"), ("data", "Données"), ("technique", "Technique"), ("fondamental", "Fondamental"), ("annonces", "Agenda éco"),
               ("actus", "Actualités"), ("labo", "Labo"), ("suivi", "Journal")]
 # Codes de fonction, à la Bloomberg : on les tape dans la barre de commande (touche « / ») puis Entrée
-CODES = {"accueil": "GO", "marches": "MKT", "technique": "TECH", "fondamental": "FA", "annonces": "ECO",
+CODES = {"accueil": "GO", "marches": "MKT", "data": "DATA", "technique": "TECH", "fondamental": "FA", "annonces": "ECO",
          "actus": "NEWS", "labo": "LAB", "suivi": "JRN"}
 
 
@@ -7495,6 +7500,7 @@ def contenus_onglets(data, a, ia):
                       if onglets else bloc_suivi(a) + bloc_methode()),
             "labo": labo.bloc_labo(labo.charger()) if labo else "",
             "marches": marches.bloc_marches(y, f) if marches else "",
+            "data": donnees.bloc_donnees(a, AJUST) if donnees else "",
         }
     return {
         # 1. Le lien entre les deux : ce qu'il faut faire maintenant
@@ -7547,7 +7553,7 @@ def bloc_onglets(data, a, ia, accueil=None):
         nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false"><span class="fc">{CODES.get(i, "")}</span>'
                       f'{esc(t)}</button>' for i, t in onglets)
         nav += ('<form class="cmd" role="search" onsubmit="return false"><label for="cmd">Fonction</label>'
-                '<input id="cmd" autocomplete="off" spellcheck="false" placeholder="GO, MKT, TECH, FA, ECO, NEWS, LAB, JRN" '
+                '<input id="cmd" autocomplete="off" spellcheck="false" placeholder="GO, MKT, DATA, TECH, FA, ECO, NEWS" '
                 'aria-describedby="cmd-aide"><span id="cmd-aide" class="cmd-aide">touche / puis Entrée</span></form>')
     return (f'<nav class="onglets{cl}" id="analyse" role="tablist" aria-label="Navigation">{nav}</nav>'
             f'<div class="contenu{cl}">{panneaux}<div data-zone="sources">{bloc_sources()}</div></div>')
@@ -7601,7 +7607,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'

@@ -62,7 +62,7 @@ button.or{background:var(--brass);border-color:var(--brass);color:#14100a;font-w
 .onglets{position:sticky;top:var(--haut-barre,57px);z-index:25;background:rgba(10,13,18,.95);backdrop-filter:blur(8px);
   -webkit-backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:0 20px;gap:4px;scrollbar-width:none}
 .onglets::-webkit-scrollbar{display:none}
-.onglets button{font:600 13.5px var(--text);color:var(--mute);padding:14px 14px 12px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none}
+.onglets button{font:600 13px var(--text);color:var(--mute);padding:14px 10px 12px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;white-space:nowrap;flex:none}
 .onglets button:hover{color:var(--ink);background:none}
 .onglets button.actif,.onglets button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--brass)}
 .onglets kbd{display:none}
@@ -71,7 +71,7 @@ button.or{background:var(--brass);border-color:var(--brass);color:#14100a;font-w
 .onglets button.actif .fc,.onglets button[aria-selected=true] .fc{background:var(--brass);color:#000;border-color:var(--brass)}
 .cmd{margin-left:auto;display:flex;align-items:center;gap:8px;padding:8px 0}
 .cmd label{font:700 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--brass)}
-.cmd input{width:230px;background:#000;border:1px solid var(--line);border-radius:6px;color:var(--brass);font:600 13px var(--mono);
+.cmd input{width:190px;background:#000;border:1px solid var(--line);border-radius:6px;color:var(--brass);font:600 13px var(--mono);
   padding:7px 10px;text-transform:uppercase}
 .cmd input:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(255,159,26,.25)}
 .cmd input.err{border-color:var(--down)}
@@ -134,7 +134,10 @@ table th{font-family:var(--text)}
 ::selection{background:rgba(214,169,74,.35)}
 
 @media (max-width:1100px){.cockpit{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
-@media (max-width:1100px){.cmd-aide{display:none}.cmd input{width:150px}}
+@media (max-width:1700px){.cmd-aide{display:none}}
+@media (max-width:1600px){.cmd label{display:none}}
+@media (max-width:1380px){.onglets .fc{display:none}.cmd label{display:none}}
+@media (max-width:1100px){.cmd input{width:130px}}
 @media (max-width:760px){
   .cmd{display:none}
   .barre .ligne{gap:10px 14px;padding:8px 12px;flex-wrap:wrap}
@@ -162,7 +165,7 @@ try {
   }
 } catch(e){}
 /* Barre de commande : un code de fonction puis Entrée ; « / » pour y aller depuis n'importe où */
-var CODES = {GO:'accueil', ACCUEIL:'accueil', MKT:'marches', MARCHES:'marches', TECH:'technique', FA:'fondamental', FONDA:'fondamental',
+var CODES = {GO:'accueil', ACCUEIL:'accueil', MKT:'marches', MARCHES:'marches', DATA:'data', DONNEES:'data', TECH:'technique', FA:'fondamental', FONDA:'fondamental',
   ECO:'annonces', CAL:'annonces', NEWS:'actus', N:'actus', LAB:'labo', JRN:'suivi', JOURNAL:'suivi'};
 var cmd = document.getElementById('cmd');
 function aller(code){
