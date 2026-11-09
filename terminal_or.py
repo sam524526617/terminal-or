@@ -57,6 +57,11 @@ import pandas as pd
 import requests
 
 try:
+    import poste  # poste de pilotage : tout l'essentiel sur le premier écran
+except Exception:
+    poste = None
+
+try:
     import theme  # thème professionnel v8 (police, grille, navigation en haut)
 except Exception:
     theme = None
@@ -7536,8 +7541,18 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                 if (decision is not None and a.get("decision")) else bloc_trader(a))
     pro = theme is not None and v7(a)
     if pro:
-        accueil = dec_html + bloc_strip(a, y, f) + bloc_cockpit(a, y, f, sans_setup=True)
-        haut = f'{bloc_barre(a)}{bloc_reglages()}{bloc_bandeau_tv()}{bloc_onglets(data, a, ia, accueil=accueil)}'
+        ps = ""
+        if poste is not None:
+            evt = next((e for e in (data.get("cal") or []) if e["impact"] == "High"
+                        and e["date"] >= maintenant() - timedelta(minutes=30)), None)
+            ps = poste.bloc_poste(a, data, AJUST, COMPTE, labo.strategie_en_direct(labo.charger()) if labo else None,
+                                  fiche_annonce(evt, a) if evt else None, MOTS_BAROMETRE, maintenant())
+        if ps:   # le poste de pilotage remplace les trois cartes de décision
+            accueil = (ps + decision.bloc_graphique(a["decision"]) + bloc_bandeau_tv()
+                       + bloc_cockpit(a, y, f, sans_setup=True) + bloc_strip(a, y, f))
+        else:
+            accueil = dec_html + bloc_strip(a, y, f) + bloc_bandeau_tv() + bloc_cockpit(a, y, f, sans_setup=True)
+        haut = f'{bloc_barre(a)}{bloc_reglages()}{bloc_onglets(data, a, ia, accueil=accueil)}'
     else:
         haut = (f'{bloc_barre(a)}{bloc_reglages()}{dec_html}{bloc_bandeau_tv()}{bloc_strip(a, y, f)}'
                 f'{bloc_cockpit(a, y, f, sans_setup=bool(a.get("decision")))}{bloc_onglets(data, a, ia)}')
@@ -7556,7 +7571,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
