@@ -48,6 +48,9 @@ button.or{background:var(--brass);border-color:var(--brass);color:#14100a;font-w
 .horloges b{font-size:14px}
 .marche,.fraicheur{padding-left:16px;border-left:1px solid var(--line)}
 @media (max-width:1560px){.fraicheur:not(.prochaine){display:none}}
+@media (max-width:1380px){.horloges{display:none}}
+@media (max-width:1180px){.marche{display:none} .actions button{padding:6px 8px}}
+@media (max-width:980px){.prochaine{display:none}}
 .marche b,.fraicheur b{font:500 13.5px var(--text)}
 .prochaine b{font-family:var(--mono)}
 .actions{gap:6px;flex-wrap:nowrap}

@@ -341,6 +341,12 @@ p.ps-mini{margin:6px 0 0}
 .ps-actus em{font:600 10.5px var(--text);font-style:normal;margin-left:6px;padding:1px 6px;border-radius:4px;border:1px solid currentColor}
 .ps-actus em.up{color:var(--up)} .ps-actus em.down{color:var(--down)}
 .ps-lien{font-size:12px;color:var(--brass)}
-@media (max-width:1180px){.ps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.ps-col:first-child{grid-column:1/-1}}
+.ps-tv{margin:0 0 12px;padding-bottom:14px}
+.ps-tvbox{position:relative;height:620px;overflow:hidden;border-radius:8px;border:1px solid var(--band2);background:#10141b}
+.ps-tvbox .tv{position:absolute;inset:0}
+.ps-titre{font:600 10.5px var(--text);letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin:6px 0 8px}
+@media (max-width:760px){.ps-tvbox{height:420px}}
+@media (max-width:1180px){.ps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .ps-col:last-child{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start}}
 @media (max-width:760px){.ps{grid-template-columns:minmax(0,1fr)}.ps-verdict>b{font-size:44px}.ps-jour{grid-template-columns:repeat(2,minmax(0,1fr))}}
 """

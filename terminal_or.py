@@ -7210,6 +7210,18 @@ def tv(script, config, lib, style=""):
             f'{json.dumps(config, ensure_ascii=False)}</script></div>')
 
 
+def bloc_graphique_direct():
+    """Graphique TradingView en direct, dans un cadre de hauteur fixe (il ne déborde plus sur les blocs voisins)."""
+    chart = tv("embed-widget-advanced-chart.js", {
+        "autosize": True, "symbol": TV_OR, "interval": "15", "timezone": FUSEAU, "theme": "dark", "style": "1",
+        "locale": "fr", "allow_symbol_change": True, "calendar": False, "hide_volume": True, "hide_side_toolbar": False,
+        "backgroundColor": "#10141b", "gridColor": "rgba(35,43,54,0.6)", "support_host": "https://www.tradingview.com"},
+        f"Graphique {ACTIF['sym']} en direct (TradingView)", "height:100%;width:100%")
+    return (f'<section class="ps-carte ps-tv" aria-label="Graphique en direct"><div class="ps-tete"><span class="k">'
+            f'{esc(ACTIF["sym"])} en direct</span><span class="ps-mini">{esc(TV_OR)} · TradingView · le prix de ton broker '
+            f'peut différer de quelques centimes</span></div><div class="ps-tvbox">{chart}</div></section>')
+
+
 def bloc_barre(a):
     maj = maintenant()
     horl = "".join(f'<div><span class="k">{v}</span><b id="{i}">--:--</b></div>'
@@ -7456,7 +7468,10 @@ def contenus_onglets(data, a, ia):
     y, f = data["yahoo"], data["fred"]
     if v7(a):
         return {
-            "technique": decision.bloc_technique(a["decision"]),
+            "technique": decision.bloc_technique(a["decision"])
+                         + ('<section><h2>Contrôle avant l\'entrée</h2><p class="pourquoi">Pour un trade que tu prends toi-même : '
+                            'choisis Achat ou Vente (touches A et V), tape le prix de ta plateforme ; le terminal propose stop et '
+                            'objectif et calcule la taille avec tes réglages.</p>' + f'<div class="panel" id="p-ctl"><div class="pb">{bloc_controle()}</div></div></section>'),
             "fondamental": ((fondamental.bloc_html(a["fonda"], bloc_ia(ia)) if a.get("fonda") else bloc_ia(ia))
                             + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
                             + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
@@ -7547,9 +7562,9 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                         and e["date"] >= maintenant() - timedelta(minutes=30)), None)
             ps = poste.bloc_poste(a, data, AJUST, COMPTE, labo.strategie_en_direct(labo.charger()) if labo else None,
                                   fiche_annonce(evt, a) if evt else None, MOTS_BAROMETRE, maintenant())
-        if ps:   # le poste de pilotage remplace les trois cartes de décision
-            accueil = (ps + decision.bloc_graphique(a["decision"]) + bloc_bandeau_tv()
-                       + bloc_cockpit(a, y, f, sans_setup=True) + bloc_strip(a, y, f))
+        if ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
+            accueil = (ps + decision.bloc_graphique(a["decision"]) + bloc_graphique_direct()
+                       + f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}')
         else:
             accueil = dec_html + bloc_strip(a, y, f) + bloc_bandeau_tv() + bloc_cockpit(a, y, f, sans_setup=True)
         haut = f'{bloc_barre(a)}{bloc_reglages()}{bloc_onglets(data, a, ia, accueil=accueil)}'
