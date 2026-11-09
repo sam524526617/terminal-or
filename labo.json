@@ -1,0 +1,82 @@
+{
+  "maj": "2026-11-09",
+  "criteres": [
+    "Positive sur 2019-2024 (période de choix)",
+    "Positive sur 2025-2026 (période de vérification, jamais vue pendant le choix)",
+    "Profit factor d'au moins 1,15 sur chaque période",
+    "Encore positive avec des coûts doublés",
+    "Au moins 100 trades par période"
+  ],
+  "strategies": [
+    {
+      "nom": "Ton plan (v1)",
+      "actif": "XAU/USD",
+      "regles": "Structure D + H4, H1 sans contradiction ; zone OB / FVG / S-R M30-H4 ; cassure M15 + FVG ; ordre limite au 50 % du FVG ; stop sous l'OB ; 50 % à 2 R puis liquidité H1.",
+      "statut": "rejetée",
+      "en_direct": true,
+      "periodes": {
+        "2019-2024": {"trades": 178, "reussite": 27, "r_moyen": -0.21, "total": -39.1, "pf": 0.70},
+        "2025-2026": {"trades": 80, "reussite": 25, "r_moyen": -0.23, "total": -18.3, "pf": 0.69}
+      },
+      "note": "Perd sur les deux périodes. Pire série : 16 pertes d'affilée. Les signaux du terminal en direct viennent de cette version : démo uniquement."
+    },
+    {
+      "nom": "Plan révisé · ordre au 50 % du FVG",
+      "actif": "XAU/USD",
+      "regles": "Sens : momentum H4 ; mêmes zones et même déclencheur ; stop 1,5 ATR H1 ; 50 % à 1 R puis stop au point d'entrée, reste sur la liquidité H1.",
+      "statut": "à l'étude",
+      "en_direct": false,
+      "periodes": {
+        "2019-2024": {"trades": 554, "reussite": 45, "r_moyen": -0.11, "total": -59.8, "pf": 0.80},
+        "2025-2026": {"trades": 197, "reussite": 52, "r_moyen": 0.02, "total": 3.1, "pf": 1.03}
+      },
+      "note": "Pertes divisées par deux par rapport à la v1, mais toujours négative sur 2019-2024."
+    },
+    {
+      "nom": "Plan révisé · entrée au marché",
+      "actif": "XAU/USD",
+      "regles": "Comme ci-dessus, mais entrée dès la clôture de la bougie M15 de cassure.",
+      "statut": "à l'étude",
+      "en_direct": false,
+      "periodes": {
+        "2019-2024": {"trades": 1052, "reussite": 46, "r_moyen": -0.07, "total": -74.9, "pf": 0.86},
+        "2025-2026": {"trades": 341, "reussite": 49, "r_moyen": 0.03, "total": 8.6, "pf": 1.05}
+      },
+      "note": "Meilleur gain moyen des versions révisées, mais pas d'avantage net sur 2019-2024."
+    },
+    {
+      "nom": "XAU 3 · momentum M15 + H4 (amie)",
+      "actif": "XAU/USD",
+      "regles": "Momentum 10 bougies positif en M15 et sur la dernière bougie H4 terminée, volatilité H4 haute ; stop 3 ATR H1, objectif 4 ATR H1, 12 h max.",
+      "statut": "à l'étude",
+      "en_direct": false,
+      "periodes": {
+        "2019-2024": {"trades": 1380, "reussite": null, "r_moyen": 0.012, "total": 17.0, "pf": null, "source": "ses chiffres"},
+        "2025-2026": {"trades": 521, "reussite": 50, "r_moyen": 0.024, "total": 12.3, "pf": 1.09}
+      },
+      "note": "Seule piste positive et honnête sur l'or, mais très mince : +6,7 R seulement avec des coûts doublés, et tout le gain vient des achats. 2019-2024 : ses propres chiffres, pas encore revérifiés."
+    },
+    {
+      "nom": "BTC 1 · repli dans la tendance (amie)",
+      "actif": "BTC/USD",
+      "regles": "Stochastique M15 < 20 (> 80), prix au-dessus (sous) de l'EMA 50 H1, H1 directionnel ; stop 2 ATR H1, objectif 1,5 ATR H1.",
+      "statut": "rejetée",
+      "en_direct": false,
+      "periodes": {
+        "2025-2026": {"trades": 568, "reussite": 50, "r_moyen": -0.04, "total": -22.9, "pf": 0.89}
+      },
+      "note": "Ses bons chiffres ne se reproduisent pas en version honnête (réglages exacts inconnus sans ses fichiers .pine)."
+    },
+    {
+      "nom": "BTC 2 · cassure M15 (amie)",
+      "actif": "BTC/USD",
+      "regles": "ADX M15 > 25, cassure du plus haut 20 bougies, EMA 200 M15 qui monte ; stop 2 ATR H1, objectif 3 ATR H1.",
+      "statut": "rejetée",
+      "en_direct": false,
+      "periodes": {
+        "2025-2026": {"trades": 780, "reussite": 41, "r_moyen": -0.03, "total": -26.4, "pf": 0.93}
+      },
+      "note": "Usure nette depuis 2019 dans ses propres chiffres, négative en version honnête."
+    }
+  ]
+}

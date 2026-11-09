@@ -57,6 +57,11 @@ import pandas as pd
 import requests
 
 try:
+    import labo  # labo des stratégies : résultats de backtest et statut
+except Exception:
+    labo = None
+
+try:
     import onglets  # onglets Annonces, Actualités et Suivi (v7)
 except Exception:
     onglets = None
@@ -7429,7 +7434,7 @@ def fondamental_jour_par_jour(y, f):
 
 
 ONGLETS_V7 = [("technique", "Technique du plan"), ("fondamental", "Fondamental"), ("annonces", "Annonces"),
-              ("actus", "Actualités"), ("suivi", "Suivi et méthode")]
+              ("actus", "Actualités"), ("labo", "Labo"), ("suivi", "Suivi et méthode")]
 
 
 def v7(a):
@@ -7455,6 +7460,7 @@ def contenus_onglets(data, a, ia):
                       if onglets else bloc_actus(data.get("news"), data.get("fed_off"), a)),
             "suivi": (onglets.bloc_suivi(a["decision"].get("histo"), COMPTE, onglets.bloc_methode())
                       if onglets else bloc_suivi(a) + bloc_methode()),
+            "labo": labo.bloc_labo(labo.charger()) if labo else "",
         }
     return {
         # 1. Le lien entre les deux : ce qu'il faut faire maintenant
@@ -7517,7 +7523,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                       "site": bool(site), "seances": [[n, d, fn] for n, d, fn in SEANCES], **ACTIF["cfg_js"]},
                      ensure_ascii=False)
     ctx_json = json.dumps(contexte_controle(a), ensure_ascii=False).replace("</", "<\\/")
-    dec_html = ((decision.bloc_html(a["decision"]) + decision.bloc_graphique(a["decision"]))
+    dec_html = (((labo.bandeau(labo.charger()) if labo else "") + decision.bloc_html(a["decision"]) + decision.bloc_graphique(a["decision"]))
                 if (decision is not None and a.get("decision")) else bloc_trader(a))
     corps = (f'{bloc_barre(a)}{bloc_reglages()}{dec_html}{bloc_bandeau_tv()}{bloc_strip(a, y, f)}{bloc_cockpit(a, y, f, sans_setup=bool(a.get("decision")))}'
              f'{bloc_onglets(data, a, ia)}'
@@ -7532,7 +7538,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
             f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
             f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">'
-            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}'
+            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
@@ -7985,12 +7991,52 @@ def generer(demo=False, watch_min=None, site_dir=None):
         (site_dir / "index.html").write_text(page, encoding="utf-8")
         (site_dir / "brief_claude.txt").write_text(brief, encoding="utf-8")
     if not demo:
+        alerte_telephone(a, data["hist"])
         sauver_historique(data["hist"], site_dir)
     else:
         FICHIER_HTML.write_text(page, encoding="utf-8")
         FICHIER_BRIEF.write_text(brief, encoding="utf-8")
     resume_terminal(a)
     return a
+
+
+def heure_paris_plan(t):
+    try:
+        import plan as P_
+        return P_.depuis_horloge(t).strftime("%H:%M")
+    except Exception:
+        return "?"
+
+
+def alerte_telephone(a, hist):
+    """Notification ntfy (application gratuite, sans compte) quand un nouvel ordre du plan est à placer.
+    Ne fait rien tant que le secret GitHub NTFY_TOPIC n'est pas défini. Une seule alerte par signal."""
+    sujet = os.environ.get("NTFY_TOPIC", "").strip()
+    dz = a.get("decision") or {}
+    o_ = dz.get("ordre")
+    if not sujet or not o_ or dz.get("etat") != "attente":
+        return
+    cle = f"{o_['t_sig']}|{o_['sens']}"
+    if hist.get("derniere_alerte") == cle:
+        return
+    sens = "ACHAT" if o_["sens"] > 0 else "VENTE"
+    statut = ""
+    lab = labo.charger() if labo else None
+    s_ = labo.strategie_en_direct(lab) if labo else None
+    if s_ and s_.get("statut") != "validée":
+        statut = f"\nDEMO UNIQUEMENT : stratégie {s_['statut']} au backtest."
+    msg = (f"{sens} LIMITE XAU/USD {nb(o_['entree'], 2)} (note {dz.get('note')})\n"
+           f"Stop {nb(o_['stop'], 2)} · TP1 {nb(o_['tp1'], 2)} (50 %) · TP2 {nb(o_['tp2'], 2)}\n"
+           f"Taille {nb(o_['lots'], 2)} lot · ordre annulé s'il n'est pas exécuté avant {heure_paris_plan(o_['expire'])} (Paris){statut}")
+    try:
+        r = requests.post("https://ntfy.sh/", json={
+            "topic": sujet, "title": f"Terminal or : {sens} {nb(o_['entree'], 2)}", "message": msg,
+            "priority": 4, "tags": ["chart_with_upwards_trend" if o_["sens"] > 0 else "chart_with_downwards_trend"]}, timeout=15)
+        r.raise_for_status()
+        hist["derniere_alerte"] = cle
+        noter("Alerte téléphone (ntfy)", True, f"{sens} envoyée")
+    except Exception as e:
+        noter("Alerte téléphone (ntfy)", False, str(e)[:100])
 
 
 def page_eurusd(site, demo=False):
