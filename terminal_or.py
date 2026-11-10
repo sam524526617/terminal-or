@@ -57,6 +57,26 @@ import pandas as pd
 import requests
 
 try:
+    import contrat  # série de prix continue : correction du changement de contrat du future
+except ImportError:
+    contrat = None
+
+try:
+    import direct  # couche temps réel : échelle des niveaux, alertes de prix, calculateur, commandes
+except ImportError:
+    direct = None
+
+try:
+    import stats  # fonction STAT : statistiques de séance (probabilités de base)
+except ImportError:
+    stats = None
+
+try:
+    import journal  # fonction JRN : journal des vrais trades, statistiques, verrou de risque
+except ImportError:
+    journal = None
+
+try:
     import eco  # fonction ECO : agenda de la semaine, surprises et réactions de l'or
 except Exception:
     eco = None
@@ -544,6 +564,16 @@ def charger_intraday():
     if ib.empty:
         noter("Yahoo intraday", False, "bougies 15 min indisponibles")
         return None
+    info_contrat = None
+    if contrat is not None and not hb.empty:
+        # GC=F saute de 20 à 60 $ quand il change d'échéance : on rend la série continue avant toute analyse
+        ib, hb, jb, info_contrat = contrat.corriger(
+            lambda tk, per, itv: extraire_ohlcv(telecharger_yahoo(tk, per, itv), tk), ib, hb, jb, maintenant().date())
+        if info_contrat.get("erreur"):
+            noter("Contrat du future", False, info_contrat["erreur"])
+        else:
+            nb_s = len(info_contrat.get("sauts") or [])
+            noter("Contrat du future", True, f"échéance {info_contrat['libelle']}, {nb_s} changement{'s' if nb_s > 1 else ''} corrigé{'s' if nb_s > 1 else ''}")
     idx = pd.to_datetime(ib.index)
     if idx.tz is None:
         idx = idx.tz_localize("UTC")
@@ -557,7 +587,7 @@ def charger_intraday():
             hidx = hidx.tz_localize("UTC")
         hb.index = hidx.tz_convert(tz) if tz else hidx
     noter("Yahoo intraday", True, f"{len(ib)} bougies 15 min, {len(hb)} bougies horaires")
-    return {"barres": ib, "jours": jb, "heures": hb}
+    return {"barres": ib, "jours": jb, "heures": hb, "contrat": info_contrat}
 
 
 CODES_MOIS = "FGHJKMNQUVXZ"

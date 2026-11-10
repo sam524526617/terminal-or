@@ -59,23 +59,28 @@ if len(gj) and len(aj):
           f"dernière {float(gj['close'].iloc[-1]):.1f} -> {float(aj['close'].iloc[-1]):.1f}")
 
 def autour(brut, corr, t, heures=30):
-    """Plus gros écart clôture -> ouverture dans les heures qui entourent un changement, avant et après correction."""
+    """Autour d'un changement : plus gros trou (clôture -> ouverture) et plus gros corps de bougie, brut puis corrigé."""
     t = pd.Timestamp(t).tz_localize("UTC") if pd.Timestamp(t).tzinfo is None else pd.Timestamp(t)
     out = []
     for df in (brut, corr):
-        e = (df["open"] - df["close"].shift(1))
-        e = e[(e.index >= t - pd.Timedelta(hours=heures)) & (e.index <= t + pd.Timedelta(hours=heures))]
-        out.append(float(e.abs().max()) if len(e) else float("nan"))
+        m = (df.index >= t - pd.Timedelta(hours=heures)) & (df.index <= t + pd.Timedelta(hours=heures))
+        trou = (df["open"] - df["close"].shift(1))[m].abs().max()
+        corps = (df["close"] - df["open"])[m].abs().max()
+        meche = (df["high"] - df["low"])[m].max()
+        out.append(f"trou {trou:5.1f} corps {corps:5.1f} amplitude {meche:5.1f}")
     return out
 
 
-print("=== Chaque changement : plus gros écart autour (brut -> corrigé)")
+print("=== Chaque changement : bougies autour, brut -> corrigé (en $)")
 for t, sv in info.get("sauts") or []:
     b, c = autour(g1h, a1h, t)
-    print(f"  1 h   {t:%Y-%m-%d %H:%M}  saut {sv:+6.1f} $ : {b:6.1f} $ -> {c:6.1f} $")
+    print(f"  1 h    {t:%Y-%m-%d %H:%M}  saut {sv:+6.1f} : {b}  ->  {c}")
 for t, sv in info.get("sauts_15") or []:
     b, c = autour(g15, a15, t)
-    print(f"  15 min {t:%Y-%m-%d %H:%M}  saut {sv:+6.1f} $ : {b:6.1f} $ -> {c:6.1f} $")
+    print(f"  15 min {t:%Y-%m-%d %H:%M}  saut {sv:+6.1f} : {b}  ->  {c}")
+ok = all((df["high"] >= df[["open", "close"]].max(axis=1) - 1e-6).all() and (df["low"] <= df[["open", "close"]].min(axis=1) + 1e-6).all()
+         for df in (a15, a1h))
+print("  cohérence des bougies corrigées (haut >= ouverture et clôture >= bas) :", "ok" if ok else "PROBLÈME")
 
 if info.get("actif"):
     x1h = charge(info["actif"], "730d", "1h")
@@ -89,6 +94,6 @@ if info.get("actif"):
             if not len(fin):
                 continue
             gg, xx = g1h[g1h.index <= fin[-1]], x1h[x1h.index <= fin[-1]]
-            l, cl = K.changements(gg, xx, n=12)
+            l = K.changements(gg, xx, n=12)
             trouve = [r for r in l if abs((r["t"].tz_localize("UTC") - t).total_seconds()) < 36 * 3600]
             print(f"  {t:%Y-%m-%d %H:%M} + {nb:2d} bougie(s) : " + (f"repéré, saut {trouve[0]['saut']:+.1f} $" if trouve else "PAS repéré"))

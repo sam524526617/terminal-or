@@ -95,19 +95,17 @@ SEUIL = 0.003        # marche minimale de l'écart relatif (0,3 % du prix, soit 
 
 def changements(g, x, n=24, garde=True):
     """Changements de contrat de GC=F, repérés en le comparant au contrat x (même unité de temps).
-    Renvoie (liste, classes) :
-      liste   : [{"t": instant UTC de la première bougie du nouveau contrat, "saut": hausse artificielle en $}]
-      classes : {instant: True si la bougie est encore sur l'ancien contrat} pour les bougies proches d'un changement
-                (le jour du changement, Yahoo alterne parfois entre les deux contrats d'une bougie à l'autre).
+    Renvoie [{"t": instant UTC de la première bougie touchée, "saut": hausse artificielle en $,
+              "avant" / "apres": niveau du rapport contrat / GC=F avant et après}].
     On travaille sur le rapport contrat / GC=F : il ne dépend pas du niveau des prix, donc un krach ne crée pas de
     fausse marche (l'écart en dollars, lui, bouge avec le prix)."""
     g, x = _utc(g), _utc(x)
     if g is None or x is None:
-        return [], {}
+        return []
     c = pd.concat({"g": g["close"], "x": x["close"]}, axis=1, join="inner").dropna()
     N = len(c)
     if N < 12:
-        return [], {}
+        return []
     t, gc = c.index, c["g"].to_numpy(dtype=float)
     lr = np.log(c["x"].to_numpy(dtype=float) / gc)
     tol = tolerance(float(gc[-1])) / float(gc[-1])
@@ -156,7 +154,7 @@ def changements(g, x, n=24, garde=True):
                 retenus[-1] = r
         else:
             retenus.append(r)
-    liste, classes = [], {}
+    liste = []
     gi = g.index
     for r in retenus:
         k = r["k"]
@@ -165,69 +163,110 @@ def changements(g, x, n=24, garde=True):
         entre = gi[(gi > t[k - 1]) & (gi <= t[k])]          # bougies de GC=F entre les deux bougies communes
         if len(entre) > 1:
             # contrat peu traité : le moment exact est inconnu, on cherche dans GC=F la bougie qui fait le saut
+            # (entre deux bougies, ou à l'intérieur d'une bougie qui ouvre sur l'ancien contrat et clôture sur le nouveau)
             pos = gi.get_indexer(entre)
-            sauts_g = g["open"].to_numpy(dtype=float)[pos] - g["close"].to_numpy(dtype=float)[pos - 1]
-            q = int(np.argmin(np.abs(sauts_g - saut)))
-            if abs(sauts_g[q] - saut) > 0.4 * abs(saut):
+            o_, c_ = g["open"].to_numpy(dtype=float), g["close"].to_numpy(dtype=float)
+            ecarts = np.maximum.reduce([np.where(np.abs(o_[pos] - c_[pos - 1] - saut) <= 0.4 * abs(saut), 1.0, 0.0),
+                                        np.where(np.abs(c_[pos] - o_[pos] - saut) <= 0.4 * abs(saut), 1.0, 0.0)])
+            if not ecarts.any():
                 continue                                  # introuvable : on ne corrige pas ce changement-là
-            t_roll = entre[q]
-        liste.append({"t": pd.Timestamp(t_roll), "saut": saut})
-        # bougies proches : chacune est rangée sur l'ancien ou le nouveau contrat selon son propre écart
-        amp = abs(r["avant"] - r["apres"])
-        for q in np.where((t >= t_roll - pd.Timedelta(hours=30)) & (t <= t_roll + pd.Timedelta(hours=30)))[0]:
-            if abs(lr[q] - r["avant"]) < 0.35 * amp:
-                classes[t[q]] = True
-            elif abs(lr[q] - r["apres"]) < 0.35 * amp:
-                classes[t[q]] = False
-    return liste, classes
+            dist = np.minimum(np.abs(o_[pos] - c_[pos - 1] - saut), np.abs(c_[pos] - o_[pos] - saut))
+            t_roll = entre[int(np.argmin(dist))]
+        liste.append({"t": pd.Timestamp(t_roll), "saut": saut, "avant": r["avant"], "apres": r["apres"]})
+    return liste
 
 
-def decalages(g, liste, classes):
-    """Montant à ajouter à chaque bougie de g pour la ramener sur le contrat actuel."""
-    idx = pd.DatetimeIndex(g.index)
+def appliquer(g, x, liste):
+    """Série continue : ramène chaque bougie de g sur le contrat actuel.
+    Règle générale : tout ce qui précède un changement est relevé du saut. Autour du changement (30 h), bougie par
+    bougie : ce jour-là Yahoo mélange les deux contrats (une bougie ouvre sur l'ancien et clôture sur le nouveau, ou
+    revient un moment sur l'ancien). L'ouverture et la clôture sont donc rangées séparément, en les comparant au
+    contrat x quand il a coté à ce moment-là, sinon par continuité avec la bougie précédente."""
+    if g is None or len(g) == 0 or not liste:
+        return g
+    out = g.copy()
+    idx = pd.DatetimeIndex(out.index)
     if idx.tz is not None:
         idx = idx.tz_convert("UTC").tz_localize(None)
-    dec = np.zeros(len(idx))
-    for r in liste:                               # règle générale : tout ce qui précède un changement est décalé
-        dec[np.asarray(idx < r["t"])] += r["saut"]
-    for k, r in enumerate(liste):                 # autour du changement : bougie par bougie
-        suivants = sum(x["saut"] for x in liste[k + 1:])
+    O, H, L, C = (np.array(out[c].to_numpy(dtype=float), copy=True) for c in COLS)
+    o0, h0, l0, c0 = O.copy(), H.copy(), L.copy(), C.copy()      # valeurs d'origine
+    for r in liste:
+        avant = np.asarray(idx < r["t"])
+        for arr in (O, H, L, C):
+            arr[avant] += r["saut"]
+    xu = _utc(x)
+    if xu is not None:
+        xu = xu.reindex(idx)
+        XO, XH, XL, XC = (xu[c].to_numpy(dtype=float) for c in COLS)
+    else:
+        XO = XH = XL = XC = np.full(len(idx), np.nan)
+    for k, r in enumerate(liste):
+        suivants = sum(v["saut"] for v in liste[k + 1:])
+        amp, saut = abs(r["avant"] - r["apres"]), r["saut"]
+
+        def classe(val_x, val_g):                     # True : ancien contrat, False : nouveau, None : inconnu
+            if not (np.isfinite(val_x) and val_x > 0 and val_g > 0):
+                return None
+            lr = np.log(val_x / val_g)
+            if abs(lr - r["avant"]) < 0.35 * amp:
+                return True
+            if abs(lr - r["apres"]) < 0.35 * amp:
+                return False
+            return None
         zone = np.where(np.asarray((idx >= r["t"] - pd.Timedelta(hours=30)) & (idx <= r["t"] + pd.Timedelta(hours=30))))[0]
-        etat, age = None, 99
+        prec = True                                   # la zone commence sur l'ancien contrat
         for q in zone:
-            cl = classes.get(idx[q])
-            if cl is None:                        # pas de comparaison : contrat de la bougie précédente si elle est proche
-                age += 1
-                cl = etat if (etat is not None and age <= 3) else bool(idx[q] < r["t"])
-            else:
-                etat, age = cl, 0
-            dec[q] = suivants + (r["saut"] if cl else 0.0)
-    return dec
+            co = classe(XO[q], o0[q])
+            if co is None:                            # par continuité : l'ouverture suit la clôture précédente
+                ecart_o = o0[q] - c0[q - 1] if q > 0 else 0.0
+                co = False if abs(ecart_o - saut) < 0.35 * abs(saut) else (True if abs(ecart_o + saut) < 0.35 * abs(saut) else prec)
+            cc = classe(XC[q], c0[q])
+            if cc is None:                            # la bougie du changement clôture, par définition, sur le nouveau
+                cc = False if idx[q] == r["t"] else co
+            do, dc = suivants + (saut if co else 0.0), suivants + (saut if cc else 0.0)
+            O[q], C[q] = o0[q] + do, c0[q] + dc
+            if co == cc:
+                H[q], L[q] = h0[q] + do, l0[q] + do
+            else:                                     # bougie à cheval sur les deux contrats : mèches du contrat x
+                conv = np.exp(-r["apres"])
+                xh = XH[q] * conv + suivants if np.isfinite(XH[q]) else -np.inf
+                xl = XL[q] * conv + suivants if np.isfinite(XL[q]) else np.inf
+                H[q], L[q] = max(O[q], C[q], xh), min(O[q], C[q], xl)
+            prec = cc
+    out["open"], out["high"], out["low"], out["close"] = O, H, L, C
+    return out
 
 
 def reperer(g, x, n=24, garde=True):
     """[(instant UTC, saut en $)] : forme simple de changements()."""
-    return [(r["t"], r["saut"]) for r in changements(g, x, n, garde)[0]]
+    return [(r["t"], r["saut"]) for r in changements(g, x, n, garde)]
 
 
-def ajuster(df, sauts, par_jour=False, classes=None):
-    """Rend la série continue : ajoute aux bougies d'avant chaque changement de contrat le saut correspondant.
-    sauts : [(instant, saut)] ; par_jour : série quotidienne, on compare les dates."""
-    if df is None or len(df) == 0 or not sauts:
+def ajuster_jours(df, liste):
+    """Bougies quotidiennes : les jours d'avant un changement sont relevés du saut ; le jour même, la bougie ouvre
+    sur l'ancien contrat et clôture sur le nouveau, on relève son ouverture et son plus bas."""
+    if df is None or len(df) == 0 or not liste:
         return df
     out = df.copy()
+    idx = pd.DatetimeIndex(out.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    jours = idx.normalize()
     cols = [c for c in COLS if c in out.columns]
-    vals = np.array(out[cols].to_numpy(dtype=float), copy=True)
-    if par_jour:
-        idx = pd.DatetimeIndex(out.index)
-        if idx.tz is not None:
-            idx = idx.tz_localize(None)
-        for t, s in sauts:
-            vals[np.asarray(idx.normalize() < pd.Timestamp(t).normalize())] += s
-    else:
-        liste = [{"t": pd.Timestamp(t), "saut": float(s)} for t, s in sorted(sauts)]
-        vals += decalages(out, liste, classes or {})[:, None]
-    out[cols] = vals
+    vals = {c: np.array(out[c].to_numpy(dtype=float), copy=True) for c in cols}
+    for r in liste:
+        j = pd.Timestamp(r["t"]).normalize()
+        avant, meme = np.asarray(jours < j), np.asarray(jours == j)
+        for c in cols:
+            vals[c][avant] += r["saut"]
+        if meme.any() and {"open", "low", "high", "close"} <= set(cols):
+            vals["open"][meme] += r["saut"]
+            bas, haut = ("low", "high") if r["saut"] > 0 else ("high", "low")
+            vals[bas][meme] += r["saut"]
+            vals["low"][meme] = np.minimum.reduce([vals["low"][meme], vals["open"][meme], vals["close"][meme]])
+            vals["high"][meme] = np.maximum.reduce([vals["high"][meme], vals["open"][meme], vals["close"][meme]])
+    for c in cols:
+        out[c] = vals[c]
     return out
 
 
@@ -255,17 +294,16 @@ def corriger(charger, g15, g1h, gj, aujourdhui):
             d2, _ = ecart(g15, x15[tk2])
             if len(d2) >= 8:
                 info.update(suivant=libelle(a2, m2), ecart_suivant=float(np.median(d2.to_numpy()[-40:])))
-        l15, c15 = changements(g15, x15[tk], n=24)
-        l1h, c1h = changements(g1h, charger(tk, "730d", "1h"), n=12)
-        s15, s1h = [(r["t"], r["saut"]) for r in l15], [(r["t"], r["saut"]) for r in l1h]
+        x1h = charger(tk, "730d", "1h")
+        l15, l1h = changements(g15, x15[tk], n=24), changements(g1h, x1h, n=12)
         # un changement vu en 15 min mais pas encore en 1 h (tout récent) est appliqué aux deux séries
-        for t, sv in s15:
-            if not any(abs((t - u).total_seconds()) < 36 * 3600 for u, _ in s1h):
-                s1h.append((t, sv))
-        s1h.sort()
-        info["sauts"] = [(pd.Timestamp(t), float(sv)) for t, sv in s1h]
-        info["sauts_15"] = [(pd.Timestamp(t), float(sv)) for t, sv in s15]
-        return (ajuster(g15, s15, classes=c15), ajuster(g1h, s1h, classes=c1h), ajuster(gj, s1h, par_jour=True), info)
+        for r in l15:
+            if not any(abs((r["t"] - u["t"]).total_seconds()) < 36 * 3600 for u in l1h):
+                l1h.append(dict(r, t=r["t"].floor("h")))
+        l1h.sort(key=lambda r: r["t"])
+        info["sauts"] = [(r["t"], float(r["saut"])) for r in l1h]
+        info["sauts_15"] = [(r["t"], float(r["saut"])) for r in l15]
+        return appliquer(g15, x15[tk], l15), appliquer(g1h, x1h, l1h), ajuster_jours(gj, l1h), info
     except Exception as e:      # une donnée manquante ne doit jamais arrêter le terminal
         info["erreur"] = f"correction impossible ({str(e)[:80]})"
         return g15, g1h, gj, info

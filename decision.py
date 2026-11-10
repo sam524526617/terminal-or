@@ -19,7 +19,13 @@ import pandas as pd
 
 import plan as P
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
+
 FLECHE = {1: "▲", -1: "▼", 0: "–"}
+RETARD_MAX_MIN = 50      # bougie 15 min terminée depuis plus longtemps alors que le marché est ouvert : données en retard
 MOT_SENS = {1: "ACHAT", -1: "VENTE", 0: "RIEN"}
 
 
@@ -41,6 +47,24 @@ def heure(t_horloge):
 # ---------------------------------------------------------------------------
 # DONNÉES
 # ---------------------------------------------------------------------------
+
+def etat_marche(maintenant):
+    """L'or cote du dimanche 18 h au vendredi 17 h (heure de New York), avec une pause chaque jour de 17 h à 18 h."""
+    try:
+        ny = maintenant.astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        return {"ouvert": True, "raison": None, "reouverture": None}
+    j, h = ny.weekday(), ny.hour + ny.minute / 60
+    weekend = (j == 4 and h >= 17) or j == 5 or (j == 6 and h < 18)
+    pause = not weekend and 17 <= h < 18
+    if not weekend and not pause:
+        return {"ouvert": True, "raison": None, "reouverture": None}
+    r = ny.replace(hour=18, minute=0, second=0, microsecond=0)
+    if weekend:
+        r += timedelta(days=(6 - j) % 7)
+    return {"ouvert": False, "raison": "week-end" if weekend else "pause quotidienne",
+            "reouverture": r.astimezone(maintenant.tzinfo)}
+
 
 def unites_de_temps(intra, maintenant_utc):
     """Bougies du terminal (15 min sur 60 jours, 1 h sur 2 ans) -> unités de temps du plan, sur l'horloge interne.
@@ -176,6 +200,11 @@ def decider(data, maintenant, ajust, fond_vals, compte, fond_hist=None):
                 s.update(t_entree=t_e, t_sortie=t_s, R=r, issue=issue, etat=etat)
                 vus.append(s)
     vus.sort(key=lambda s: s["t_sig"])
+    # Un ordre encore « en attente » est périmé si son délai est dépassé à l'heure réelle, même sans nouvelle bougie
+    # (week-end, pause, données en retard) : on ne propose jamais un ordre qui n'est plus valable.
+    for s in vus:
+        if s["etat"] == "attente" and now > pd.Timestamp(s["t_sig"]) + pd.Timedelta(minutes=P.ORDRE_VIE_MIN):
+            s.update(etat="fini", issue="non exécuté", R=None)
     pris, occupe, nb_jour, r_jour = [], None, 0, 0.0
     for s in vus:
         if not s["filtres"]:
@@ -286,6 +315,10 @@ def decider(data, maintenant, ajust, fond_vals, compte, fond_hist=None):
            "journal": [dict(s, entree=sp(s["entree"]), stop=sp(s["stop"])) for s in pris if s["t_entree"] is not None
                        and pd.Timestamp(s["t_entree"]).normalize() == jour],
            "suivante": suivante}
+    marche = etat_marche(maintenant)
+    retard = max(0.0, (pd.Timestamp(now) - pd.Timestamp(ctx["fins"][i_der])).total_seconds() / 60)
+    out.update(marche=marche, retard_min=retard, en_retard=bool(marche["ouvert"] and retard > RETARD_MAX_MIN),
+               contrat=intra.get("contrat"))
     try:
         out["tech"] = technique(ctx, tf, px, sp, d)
     except Exception as e:
