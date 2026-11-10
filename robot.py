@@ -18,8 +18,8 @@ Quatre stratégies, chacune sur son propre compte papier (règles reprises telle
        H4 haute ; stop 3 ATR H1, objectif 4 ATR H1, 12 h maximum.
 
 La stratégie du robot lui-même : il engage ses stratégies selon leurs résultats EN DIRECT, jamais selon le backtest.
-  - moins de 10 trades clos : phase d'observation, un quart du risque (0,25 %) ;
-  - ensuite : gain moyen réduit par prudence (× n / (n + 20)) ; risque plein (1 %) à partir de +0,10 R par trade,
+  - moins de 10 trades clos : phase d'observation, un quart du risque plein ;
+  - ensuite : gain moyen réduit par prudence (× n / (n + 20)) ; risque plein (5 %) à partir de +0,10 R par trade,
     proportionnel en dessous, et zéro si la stratégie perd. Une stratégie qui perd est donc coupée automatiquement.
 
 Coûts comptés comme au backtest : 0,40 $ d'écart achat-vente et de glissement par aller-retour, financement de nuit
@@ -40,7 +40,7 @@ VERSION = 1
 COUT_FIXE = 0.40
 FINANCEMENT = 0.05
 SPREAD_MOM = 0.30
-RISQUE_PCT = 1.0
+RISQUE_PCT = 5.0            # risque plein par trade, en % du solde (demandé : 5 %)
 OBSERVATION = 10          # trades clos avant de juger une stratégie
 PRUDENCE = 20             # réduction du gain moyen : × n / (n + PRUDENCE)
 CIBLE_R = 0.10            # gain moyen (réduit) qui vaut le risque plein
@@ -909,7 +909,7 @@ def bloc_robot(vue):
     marches = (f'<div class="rx-p"><div class="rx-h"><span>Marchés · les plus prometteurs en tête</span><i>prix · 24 h · tendance 20 j</i></div>'
                f'<div class="rx-scroll rx-mks"><table class="rx-tab rx-mk">{lm}</table></div>'
                f'<p class="rx-note">Classés par force de tendance (barre verte : hausse, rouge : baisse). Le robot lit les {len(MARCHES)} marchés '
-               f'à chaque passage. Memecoins (étiquette rose) : risque plafonné à 0,25 %, très volatils et manipulables.</p></div>')
+               f'à chaque passage. Memecoins (étiquette rose) : risque plafonné à {fr(RISQUE_PCT / 4, 2)} %, très volatils et manipulables.</p></div>')
 
     # ---- agents (stratégies)
     ag = ""
@@ -958,7 +958,7 @@ def bloc_robot(vue):
         gr += '</tr>'
     grille = (f'<div class="rx-p"><div class="rx-h"><span>Grille marchés × stratégies</span><i>résultat en direct (R) · risque engagé</i></div>'
               f'<table class="rx-grille"><thead><tr><th></th>{tete}</tr></thead><tbody>{gr}</tbody></table>'
-              f'<div class="rx-leg"><span><i class="obs"></i>observation (0,25 %)</span><span><i class="eng"></i>engagée</span>'
+              f'<div class="rx-leg"><span><i class="obs"></i>observation ({fr(RISQUE_PCT / 4, 2)} %)</span><span><i class="eng"></i>engagée</span>'
               f'<span><i class="off"></i>coupée (0 %)</span><span><i class="hl"></i>hors ligne</span></div></div>')
 
     # ---- journal
@@ -1025,8 +1025,8 @@ def bloc_robot(vue):
                f'<th>Stop</th><th>Objectif</th><th>Mise risquée</th><th>Taille (unités)</th><th>Latent</th></tr></thead><tbody>{lig}</tbody></table></div>'
                if lig else '<p class="vide">Aucune position ouverte et aucun ordre en attente.</p>') + '</section>'
             + f'<section><h2>Comment le robot décide</h2><p class="pourquoi">Cinq stratégies aux règles écrites à l\'avance, dont un scalp M15, sur {len(MARCHES)} marchés (l\'or, 8 cryptos majeures, 6 memecoins) : '
-              f'{len(cel)} cellules. Chaque cellule commence en observation (un quart du risque, 0,25 %). Après {OBSERVATION} trades clos, '
-              f'le robot lui donne plus de risque si elle gagne en direct, et la coupe si elle perd. Les memecoins restent plafonnés à 0,25 %. '
+              f'{len(cel)} cellules. Chaque cellule commence en observation (un quart du risque plein, {fr(RISQUE_PCT / 4, 2)} %). Après {OBSERVATION} trades clos, '
+              f'le robot lui donne plus de risque si elle gagne en direct, et la coupe si elle perd. Les memecoins restent plafonnés à {fr(RISQUE_PCT / 4, 2)} %. '
               f'Frais comptés : 0,40 $ par aller-retour sur l\'or, 0,10 % sur BTC et ETH, 0,30 % sur les memecoins, plus le financement de nuit. '
               f'Le rejeu applique les mêmes règles aux {REJEU_JOURS} derniers jours : c\'est une simulation, elle ne compte pas dans le registre.</p>'
               f'<div class="rb-strats">{regles}</div>'
