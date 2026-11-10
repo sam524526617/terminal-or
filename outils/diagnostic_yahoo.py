@@ -66,6 +66,59 @@ if gc15 is not None:
 if gc1h is not None:
     ecarts(gc1h, "1 h", 30)
 
+def sauts(df, nom, n=10):
+    """Plus gros écarts entre deux bougies CONSÉCUTIVES (sans pause) : un changement de contrat en pleine séance."""
+    dt = df.index.to_series().diff().dt.total_seconds() / 60
+    pas = float(dt.median())
+    g = pd.DataFrame({"dt": dt, "ecart": df["open"] - df["close"].shift(1), "prix": df["close"].shift(1),
+                      "amp": (df["high"] - df["low"]).rolling(20).median().shift(1)})
+    g = g[g["dt"] <= 1.5 * pas].dropna()
+    g["ratio"] = g["ecart"].abs() / g["amp"]
+    gros = g.sort_values("ratio", ascending=False).head(n).sort_index()
+    print(f"  {nom} : plus gros écarts entre bougies consécutives (en multiples de l'amplitude médiane)")
+    for t, r in gros.iterrows():
+        print(f"    {t:%Y-%m-%d %a %H:%M} UTC  écart {r['ecart']:+8.2f} $  = {r['ratio']:.1f} x l'amplitude médiane")
+
+
+if gc15 is not None:
+    sauts(gc15, "15 min")
+if gc1h is not None:
+    sauts(gc1h, "1 h")
+
+print("\n=== Contrats individuels (échéances)")
+CODES = "FGHJKMNQUVXZ"
+now = datetime.now(timezone.utc)
+contrats = []
+a_, m_ = now.year, now.month - 3
+if m_ < 1:
+    m_, a_ = m_ + 12, a_ - 1
+while len(contrats) < 6:
+    if m_ > 12:
+        m_, a_ = 1, a_ + 1
+    if m_ in (2, 4, 6, 8, 10, 12):
+        contrats.append(f"GC{CODES[m_ - 1]}{str(a_)[2:]}.CMX")
+    m_ += 1
+for t in contrats:
+    for period, interval, fut in (("60d", "15m", gc15), ("730d", "1h", gc1h)):
+        df = charge(t, period, interval)
+        resume(f"{t} {interval}", df)
+        if df is None or fut is None:
+            continue
+        j = pd.concat({"g": fut["close"], "c": df["close"]}, axis=1, join="inner").dropna()
+        if len(j) < 20:
+            print(f"    trop peu de bougies communes avec GC=F ({len(j)})")
+            continue
+        d = (j["g"] - j["c"])
+        pj = d.groupby(d.index.date).median()
+        suivi = pj[pj.abs() < 0.6]
+        print(f"    {len(j)} bougies communes avec GC=F ; GC=F = ce contrat (écart < 0,6 $) "
+              + (f"du {suivi.index[0]} au {suivi.index[-1]} ({len(suivi)} jours)" if len(suivi) else "jamais")
+              + f" ; écart médian sinon {float(pj[pj.abs() >= 0.6].median()) if (pj.abs() >= 0.6).any() else 0:+.1f} $")
+        if interval == "15m":
+            par_jour = df["close"].groupby(df.index.date).count()
+            print(f"    bougies 15 min par jour : médiane {int(par_jour.median())}, minimum {int(par_jour.min())} ; "
+                  f"10 premiers jours : {' '.join(str(int(x)) for x in par_jour.head(10))}")
+
 print("\n=== Or spot sur Yahoo")
 spots = {}
 for t in ("XAUUSD=X", "XAU=X", "XAUUSD", "GC=F"):
