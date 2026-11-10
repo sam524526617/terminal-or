@@ -2546,6 +2546,7 @@ def faire_tourner_robot(data, a, demo=False):
         noter("Robot papier", False, str(e)[:100])
         a["robot"] = {"erreur": str(e)[:100]}
         return None
+    vue["ajust_or"] = AJUST          # future -> spot, pour suivre l'or en direct dans la page
     a["robot"], a["robot_alertes"] = vue, alertes
     if not vue.get("erreur"):
         noter("Robot papier", True, f"{len(nouveau.get('trades', {}))} trades clos, {len(vue['ouverts'])} position(s) ouverte(s)")

@@ -61,6 +61,8 @@ MARCHES = {
     "PEPE": {"nom": "Pepe", "sym": "PEPE/USD", "yahoo": "PEPE24478-USD", "classe": "meme", "weekend": True, "plafond": 0.25,
              "cout": lambda px: px * 0.0030, "ecart": lambda px: px * 0.0015, "pas": lambda px: px * 0.0005, "fin": 0.15},
 }
+CAPITAL = 500.0           # capital de départ du compte papier, en $
+COINBASE = {"BTC": "BTC-USD", "ETH": "ETH-USD", "DOGE": "DOGE-USD", "SHIB": "SHIB-USD", "PEPE": "PEPE-USD"}   # prix en direct
 REJEU_JOURS = 55          # rejeu : ce que le robot aurait fait sur les 55 derniers jours (simulation, hors registre)
 
 STRATS = {
@@ -428,6 +430,57 @@ def ponderer(clos, autres=()):
     return clos
 
 
+def diagnostic(X, M):
+    """Ce que chaque stratégie voit en ce moment sur un marché : {strat: (texte, 'signal' | 'proche' | 'rien')}."""
+    out = {}
+    D, m, h4, now = X["D"], X["m15"], X["h4"], X["now"]
+    Df = D[D["fini"]]
+    pc = lambda a, b: fr((a / b - 1) * 100, 2, True, " %")
+    try:
+        c, hh = float(Df["close"].iloc[-1]), float(Df["high"].iloc[-21:-1].max())
+        out["T20"] = ((f"clôture {fpx(c)} au-dessus du plus haut 20 jours {fpx(hh)} : achat à l'ouverture", "signal") if c > hh else
+                      (f"clôture {fpx(c)} · plus haut 20 jours {fpx(hh)} · manque {pc(hh, c)}", "proche" if hh / c - 1 < 0.01 else "rien"))
+    except Exception:
+        out["T20"] = ("historique insuffisant", "rien")
+    try:
+        r2, s200, c = float(rsi(Df["close"], 2).iloc[-1]), float(Df["close"].iloc[-200:].mean()), float(Df["close"].iloc[-1])
+        fond = c > s200
+        out["RSI2"] = ((f"RSI(2) {r2:.0f} sous 10 en tendance haussière : achat à l'ouverture", "signal") if (fond and r2 < 10) else
+                       (f"RSI(2) {r2:.0f} (seuil 10) · prix {'au-dessus' if fond else 'sous'} la moyenne 200 jours"
+                        + ("" if fond else " : pas d'achat"), "proche" if (fond and r2 < 25) else "rien"))
+    except Exception:
+        out["RSI2"] = ("historique insuffisant", "rien")
+    try:
+        jour = D.index[-1]
+        ema = Df["close"].ewm(span=50, adjust=False).mean()
+        d = 1 if Df["close"].iloc[-1] > ema.iloc[-1] else -1
+        sens = "achats" if d > 0 else "ventes"
+        if now < jour + pd.Timedelta(hours=10):
+            out["ASIE"] = (f"range de la nuit en formation jusqu'à {P.depuis_horloge(jour + pd.Timedelta(hours=10)):%H:%M} · sens du jour : {sens}", "rien")
+        else:
+            r = m[(m.index >= jour + pd.Timedelta(hours=1)) & (m.index < jour + pd.Timedelta(hours=10))]
+            hi, lo = float(r["high"].max()), float(r["low"].min())
+            if now < jour + pd.Timedelta(hours=15):
+                out["ASIE"] = (f"range {fpx(lo)} – {fpx(hi)} · ordre {'achat' if d > 0 else 'vente'} à {fpx(hi + M['pas'](hi) if d > 0 else lo - M['pas'](lo))} "
+                               f"jusqu'à {P.depuis_horloge(jour + pd.Timedelta(hours=15)):%H:%M}", "proche")
+            else:
+                out["ASIE"] = (f"range {fpx(lo)} – {fpx(hi)} · fenêtre d'ordres fermée pour aujourd'hui", "rien")
+    except Exception:
+        out["ASIE"] = ("range indisponible", "rien")
+    try:
+        c = m["close"]
+        r15 = float(c.iloc[-1] / c.iloc[-11] - 1)
+        a4 = atr(h4)
+        r4 = float(h4["close"].iloc[-1] / h4["close"].iloc[-11] - 1)
+        vol = bool(a4.iloc[-1] > a4.rolling(100).median().iloc[-1])
+        sig = vol and (r15 > 0) == (r4 > 0)
+        out["MOM"] = (f"M15 {fr(r15 * 100, 2, True, ' %')} · H4 {fr(r4 * 100, 2, True, ' %')} · volatilité H4 {'haute' if vol else 'basse'}"
+                      + (f" : {'achat' if r15 > 0 else 'vente'}" if sig else (" : pas d'accord" if vol else " : pas de trade")), "signal" if sig else "rien")
+    except Exception:
+        out["MOM"] = ("historique insuffisant", "rien")
+    return out
+
+
 def calculer(X, debut, M, cle):
     """Toutes les stratégies sur un marché. Renvoie (trades, ordres en attente, pannes)."""
     out, attentes, pannes = [], [], {}
@@ -469,7 +522,7 @@ def avancer(etat, marches, maintenant, compte, rejeu=True):
         debut = pd.Timestamp(debuts[cle])
         px = float(X["m15"]["close"].iloc[-1])
         c = X["m15"]["close"]
-        infos[cle] = {"ok": True, "px": px, "var": float(px / c.iloc[-97] - 1) if len(c) > 97 else None,
+        infos[cle] = {"ok": True, "px": px, "diag": diagnostic(X, M), "nb": len(X["m15"]) + len(X["h1"]), "var": float(px / c.iloc[-97] - 1) if len(c) > 97 else None,
                       "spark": [float(v) for v in c.iloc[-96::4]], "debut": P.depuis_horloge(debut)}
         tr, at, pn = calculer(X, debut, M, cle)
         attentes += at
@@ -513,13 +566,17 @@ def avancer(etat, marches, maintenant, compte, rejeu=True):
     vus = {k: v for k, v in vus.items() if v >= limite}
     etat.update(version=2, debuts=debuts, trades={k: vers_json(v) for k, v in registre.items()}, vus=vus, maj=maintenant.isoformat())
     etat.pop("pannes", None)
-    capital = compte.get("capital", 50000)
+    capital = float(compte.get("capital_robot", CAPITAL))
 
     def compte_de(liste, titre_):
         pond = sorted([dict(t, R=t["R"] * t["poids"]) for t in liste], key=lambda t: t["t_sortie"])
+        solde, soldes = capital, []
+        for t in pond:                               # 1 % du solde du moment risqué à chaque trade (intérêts composés)
+            solde += solde * RISQUE_PCT / 100 * t["R"]
+            soldes.append(solde)
         par_m = {m: stats([t for t in pond if t["marche"] == m]) for m in MARCHES}
         par_s = {k: stats([t for t in pond if t["strat"] == k]) for k in STRATS}
-        return {"titre": titre_, "stats": stats(pond), "dollars": sum(t["R"] for t in pond) * capital * RISQUE_PCT / 100,
+        return {"titre": titre_, "stats": stats(pond), "dollars": solde - capital, "solde": solde, "soldes": soldes,
                 "par_marche": par_m, "par_strat": par_s, "R": [t["R"] for t in pond],
                 "trades": sorted(liste, key=lambda t: t["t_sortie"], reverse=True)}
     cellules = {}
@@ -531,7 +588,48 @@ def avancer(etat, marches, maintenant, compte, rejeu=True):
                                 "ouvert": next((t for t in ouverts if cle_cellule(t) == (m, k)), None)}
     direct = compte_de(clos, "en direct")
     d0 = min((pd.Timestamp(v) for v in debuts.values()), default=None)
-    vue = {"debut": P.depuis_horloge(d0) if d0 is not None else maintenant, "cellules": cellules, "marches": infos,
+    for t in ouverts:                                # mise et taille de chaque position sur le compte de 500 $
+        t["mise"] = direct["solde"] * RISQUE_PCT / 100 * t["poids"]
+        t["taille"] = t["mise"] / t["risque"] if t["risque"] > 0 else 0.0
+    hm = f"{maintenant:%H:%M}"
+    act = [{"t": f"{hm}  PASSAGE DU ROBOT · {maintenant:%d/%m/%Y}", "c": "h", "e": 0},
+           {"t": f"{hm}  prix chargés : {sum(1 for i in infos.values() if i.get('ok'))} marchés sur {len(MARCHES)}, "
+                 f"{sum(i.get('nb', 0) for i in infos.values()):,} bougies".replace(",", " "), "c": "ok", "e": 1}]
+    for m, M in MARCHES.items():
+        i = infos[m]
+        if not i.get("ok"):
+            act.append({"t": f"{hm}  {M['sym']:<9} hors ligne : prix indisponibles, marché ignoré ce passage", "c": "ko"})
+            continue
+        act.append({"t": f"{hm}  {M['sym']:<9} {fpx(i['px'])}" + (f"  ({fr(i['var'] * 100, 2, True, ' %')} sur 24 h)" if i.get("var") is not None else ""), "c": "m"})
+        for k in STRATS:
+            c_ = cellules[(m, k)]
+            txt, niv = i["diag"].get(k, ("—", "rien"))
+            if c_["ouvert"]:
+                t = c_["ouvert"]
+                act.append({"t": f"         {k:<4} POSITION {'achat' if t['sens'] > 0 else 'vente'} {fpx(t['entree'])} · stop {fpx(t['stop'])} · "
+                                 f"latent {fr(t.get('latent'), 2, True)} R · mise {fr(t['mise'], 2)} $", "c": "pos"})
+            else:
+                act.append({"t": f"         {k:<4} {txt}" + ("  [cellule coupée : suivie sans risque]" if c_["statut"] == "coupée" else ""),
+                            "c": {"signal": "sig", "proche": "pr", "rien": "dim"}[niv]})
+    act.append({"t": f"{hm}  {len(cellules)} cellules contrôlées", "c": "ok", "e": 2})
+    nouveaux = [a_ for a_ in alertes if "|in|" in a_[0]]
+    sortis = [a_ for a_ in alertes if "|out|" in a_[0]]
+    for a_ in nouveaux + sortis:
+        act.append({"t": f"{hm}  >> {a_[1].replace('Robot · ', '')} : {a_[2]}", "c": "sig"})
+    act.append({"t": f"{hm}  positions : {len(ouverts)} ouverte(s), {len(attentes)} ordre(s) en attente"
+                     + ("" if (nouveaux or sortis) else " · aucune action nécessaire"), "c": "ok", "e": 3})
+    act.append({"t": f"{hm}  registre enregistré : {len(registre)} trade(s) clos · solde {fr(direct['solde'], 2)} $", "c": "ok", "e": 4})
+    suivi = []
+    for m, M in MARCHES.items():
+        if not infos[m].get("ok"):
+            continue
+        suivi.append({"m": m, "sym": M["sym"], "cb": COINBASE.get(m), "px": infos[m]["px"],
+                      "pos": [{"k": t["strat"], "s": t["sens"], "e": t["entree"], "st": t["stop"], "o": t.get("objectif"),
+                               "r": t["risque"], "f": t.get("frais", 0.0) if t["strat"] != "MOM" else 0.0, "mise": t["mise"]}
+                              for t in ouverts if t["marche"] == m],
+                      "ord": [{"s": a_["sens"], "n": a_["niveau"]} for a_ in attentes if a_["marche"] == m]})
+    vue = {"activite": {"run": maintenant.isoformat(), "lignes": act, "suivi": suivi},
+           "debut": P.depuis_horloge(d0) if d0 is not None else maintenant, "cellules": cellules, "marches": infos,
            "ouverts": ouverts, "attentes": attentes, "attente": attentes[0] if attentes else None,
            "direct": direct, "robot": direct["stats"], "dollars": direct["dollars"], "capital": capital,
            "historique": direct["trades"][:80], "pannes": pannes,
@@ -680,17 +778,19 @@ def bloc_robot(vue):
 
     # ---- portefeuille
     wallet = (f'<div class="rx-p rx-wallet"><div class="rx-h"><span>Compte papier · en direct</span><i>depuis le {vue["debut"]:%d/%m %H:%M}</i></div>'
-              f'<div class="rx-big {cl(vue["dollars"]) or "zero"}">{fr(vue["dollars"], 0, True)} $</div>'
+              f'<div class="rx-big {cl(vue["dollars"]) or "zero"}" id="rx-solde">{fr(D["solde"], 2)} $</div>'
+              f'<p class="rx-dep">Départ {fr(vue["capital"], 0)} $ · <b class="{cl(vue["dollars"])}">{fr(vue["dollars"], 2, True)} $ '
+              f'({fr(vue["dollars"] / vue["capital"] * 100, 2, True)} %)</b></p>'
               f'<div class="rx-kv"><div><span>Résultat</span><b class="{cl(R.get("total"))}">{fr(R.get("total", 0.0), 2, True)} R</b></div>'
               f'<div><span>Trades clos</span><b>{R.get("n", 0)}</b></div>'
               f'<div><span>Réussite</span><b>{(str(round(R["reussite"] * 100)) + " %") if R.get("n") else "—"}</b></div>'
               f'<div><span>Positions</span><b>{len(vue["ouverts"])}</b></div></div>'
               + (f'<div class="rx-rejeu"><div class="rx-h"><span>Rejeu {REJEU_JOURS} jours · simulation</span><i>hors registre</i></div>'
-                 f'<div class="rx-big2 {cl(J["dollars"])}">{fr(J["dollars"], 0, True)} $</div>'
+                 f'<div class="rx-big2 {cl(J["dollars"])}">{fr(J["solde"], 2)} $ <small>({fr(J["dollars"], 2, True)} $)</small></div>'
                  f'<p>{J["stats"]["n"]} trades · {fr(J["stats"]["total"], 1, True)} R · réussite {J["stats"]["reussite"] * 100:.0f} % · '
                  f'pire baisse {fr(J["stats"]["dd"], 1, True)} R. Ce que les mêmes règles auraient donné sur le passé récent : '
                  f'un repère, pas un résultat.</p></div>' if J and J["stats"].get("n") else "")
-              + f'<p class="rx-note">Compte de référence {fr(vue["capital"], 0)} $, {fr(RISQUE_PCT, 0)} % de risque plein. Aucun argent réel.</p></div>')
+              + f'<p class="rx-note">Compte papier de {fr(vue["capital"], 0)} $ : {fr(RISQUE_PCT, 0)} % du solde au maximum par trade. Aucun argent réel.</p></div>')
 
     # ---- courbe
     src = D if R.get("n", 0) >= 2 else J
@@ -707,7 +807,7 @@ def bloc_robot(vue):
         etat = (f'<b class="{cl(sum(t.get("latent") or 0 for t in pos))}">{len(pos)} pos.</b>' if pos else
                 ('<i>veille</i>' if i.get("ok") else '<i class="down">hors ligne</i>'))
         lm += (f'<tr><td><span class="rx-tag {M["classe"]}">{esc(m)}</span>{esc(M["nom"])}</td>'
-               f'<td class="num">{fpx(i.get("px")) if i.get("ok") else "—"}</td>'
+               f'<td class="num" id="rx-px-{m}">{fpx(i.get("px")) if i.get("ok") else "—"}</td>'
                f'<td class="num {cl(i.get("var"))}">{fr((i.get("var") or 0) * 100, 2, True, " %") if i.get("var") is not None else "—"}</td>'
                f'<td class="rx-sp">{mini(i.get("spark") or [], 90, 22)}</td><td class="num">{etat}</td></tr>')
     marches = (f'<div class="rx-p"><div class="rx-h"><span>Marchés</span><i>prix · 24 h</i></div>'
@@ -790,7 +890,19 @@ def bloc_robot(vue):
         fan = ('<div class="rx-p"><div class="rx-h"><span>Éventail Monte Carlo</span></div>'
                '<p class="rx-vide">Disponible à partir de 15 trades.</p></div>')
 
-    centre = (f'<div class="rx" id="rx">{tape}<div class="rx-r1">{wallet}{graph}{marches}</div>'
+    act = dict(vue.get("activite") or {}, ajust=vue.get("ajust_or", 0.0), solde=D["solde"])
+    etapes = ["Charger les prix des 6 marchés", "Contrôler les 24 cellules", "Gérer positions et ordres", "Enregistrer le registre",
+              "Surveiller les prix en direct"]
+    travail = (f'<div class="rx-r0"><div class="rx-p rx-term"><div class="rx-h"><span>Le robot au travail</span>'
+               f'<i id="rx-run">dernier passage : {vue["activite"]["lignes"][0]["t"][:5] if vue.get("activite") else "—"}</i></div>'
+               f'<div class="rx-console" id="rx-console" role="log" aria-live="off" aria-label="Journal d\'activité du robot"></div>'
+               f'<script type="application/json" id="rx-act">{json.dumps(act, ensure_ascii=False).replace("</", "<\\/")}</script></div>'
+               f'<div class="rx-p rx-taches"><div class="rx-h"><span>Tâches du passage</span><i>toutes les 15 min</i></div>'
+               f'<ol id="rx-taches">{"".join(f"<li><i></i>{esc(e)}</li>" for e in etapes)}</ol>'
+               f'<div class="rx-cd"><span>Prochain passage dans</span><b id="rx-cd">--:--</b><div class="rx-barre"><i id="rx-cd-b"></i></div></div>'
+               f'<div class="rx-h rx-h2"><span>En direct maintenant</span><i id="rx-live-age">connexion…</i></div>'
+               f'<ul id="rx-live" class="rx-livel"><li class="rx-vide">En attente du premier prix en direct.</li></ul></div></div>')
+    centre = (f'<div class="rx" id="rx">{tape}{travail}<div class="rx-r1">{wallet}{graph}{marches}</div>'
               f'<div class="rx-r2"><div class="rx-agents"><div class="rx-h"><span>Stratégies</span><i>courbe du rejeu · état par marché</i></div>{ag}</div>'
               f'{sphere}{fills}</div><div class="rx-r3">{grille}{journal}{fan}</div></div>')
 
@@ -800,19 +912,20 @@ def bloc_robot(vue):
         lig += (f'<tr><td>{esc(MARCHES[t["marche"]]["sym"])}</td><td>{esc(STRATS[t["strat"]]["nom"])}</td>'
                 f'<td class="{"up" if t["sens"] > 0 else "down"}">{"Achat" if t["sens"] > 0 else "Vente"}</td>'
                 f'<td>{heure(t["t_entree"])}</td><td class="num">{fpx(t["entree"])}</td><td class="num">{fpx(t["stop"])}</td>'
-                f'<td class="num">{fpx(t.get("objectif"))}</td><td class="num">{fr(t["poids"] * RISQUE_PCT, 2)} %</td>'
+                f'<td class="num">{fpx(t.get("objectif"))}</td><td class="num">{fr(t.get("mise"), 2)} $</td>'
+                f'<td class="num">{fpx(t.get("taille"))}</td>'
                 f'<td class="num {cl(t.get("latent"))}">{fr(t.get("latent"), 2, True)} R</td></tr>')
     for at in vue["attentes"]:
         lig += (f'<tr class="rb-att"><td>{esc(MARCHES[at["marche"]]["sym"])}</td><td>{esc(STRATS["ASIE"]["nom"])}</td>'
                 f'<td>Ordre {"achat" if at["sens"] > 0 else "vente"}</td><td>jusqu\'à {P.depuis_horloge(at["expire"]):%H:%M}</td>'
-                f'<td class="num">{fpx(at["niveau"])}</td><td class="num">{fpx(at["stop"])}</td><td class="num">{fpx(at["objectif"])}</td><td></td><td>en attente</td></tr>')
+                f'<td class="num">{fpx(at["niveau"])}</td><td class="num">{fpx(at["stop"])}</td><td class="num">{fpx(at["objectif"])}</td><td></td><td></td><td>en attente</td></tr>')
     regles = "".join(f'<div class="rb-strat"><div class="rb-st-tete"><b>{esc(k)} · {esc(d["nom"])}</b></div><p>{esc(d["court"])}</p>'
                      f'<p class="ps-mini">{esc(d["ut"])} · {esc(d["horizon"])}</p></div>' for k, d in STRATS.items())
     pannes = "".join(f'<li>{esc(k)} : {esc(v)}</li>' for k, v in vue.get("pannes", {}).items())
     return (centre
             + '<section><h2>Positions et ordres en attente</h2>'
             + (f'<div class="tbl"><table class="rb-tab"><thead><tr><th>Marché</th><th>Stratégie</th><th>Sens</th><th>Entrée le</th><th>Entrée</th>'
-               f'<th>Stop</th><th>Objectif</th><th>Risque</th><th>Latent</th></tr></thead><tbody>{lig}</tbody></table></div>'
+               f'<th>Stop</th><th>Objectif</th><th>Mise risquée</th><th>Taille (unités)</th><th>Latent</th></tr></thead><tbody>{lig}</tbody></table></div>'
                if lig else '<p class="vide">Aucune position ouverte et aucun ordre en attente.</p>') + '</section>'
             + f'<section><h2>Comment le robot décide</h2><p class="pourquoi">Quatre stratégies aux règles écrites à l\'avance, sur six marchés : '
               f'{len(cel)} cellules. Chaque cellule commence en observation (un quart du risque, 0,25 %). Après {OBSERVATION} trades clos, '
@@ -822,7 +935,7 @@ def bloc_robot(vue):
               f'<div class="rb-strats">{regles}</div>'
               + (f'<ul class="rb-panne">{pannes}</ul>' if pannes else "") + '</section>'
             + '<section><h2>Ce que ce robot n\'est pas</h2><p class="pourquoi">Il ne passe aucun ordre réel et ne garantit aucun gain. '
-              'Moins de 50 trades en direct, le résultat dépend surtout du hasard. Le brancher sur un compte MetaTrader 5 ne se fera que si '
+              'Moins de 50 trades en direct, le résultat dépend surtout du hasard. Avec 500 $ réels, la taille minimale d\'un broker (0,01 lot d\'or) dépasserait souvent la mise calculée ici : seul le compte papier peut prendre des tailles aussi petites. Le brancher sur un compte MetaTrader 5 ne se fera que si '
               'tu le décides, après des résultats en direct positifs, avec des garde-fous (taille maximale, arrêt si les données sont en retard, '
               'coupure d\'urgence). Les memecoins ne sont presque jamais proposés par les brokers MT5.</p></section>')
 
@@ -840,6 +953,28 @@ CSS = """
 .rx-defil>div{display:inline-block;animation:rx-defil 60s linear infinite}
 .rx-defil span{font:500 11.5px var(--mono);color:#9fb4d4;margin-right:28px} .rx-defil span::before{content:"◆ ";color:var(--rx)}
 @keyframes rx-defil{to{transform:translateX(-50%)}}
+.rx-r0{display:grid;grid-template-columns:minmax(0,2.1fr) minmax(0,1fr);gap:10px}
+.rx-console{height:380px;overflow-y:auto;background:#03060c;border:1px solid #131d30;border-radius:8px;padding:10px 12px;font:500 12.5px/1.55 var(--mono);color:#9fb4d4;white-space:pre-wrap;word-break:break-word}
+.rx-console .l.h{color:var(--rx);font-weight:700;margin-top:4px} .rx-console .l.ok{color:#2fd27d} .rx-console .l.m{color:#fff;font-weight:600;margin-top:4px}
+.rx-console .l.dim{color:#5f6f8a} .rx-console .l.pr{color:#ffb340} .rx-console .l.sig{color:#fff;background:rgba(47,210,125,.16)} .rx-console .l.pos{color:#57c7ff}
+.rx-console .l.ko{color:var(--down)} .rx-console .l.v{color:#c9d6ea} .rx-console .l.al{color:#000;background:#ffb340;font-weight:700}
+.rx-console .l:last-child::after{content:"▌";color:var(--rx);animation:rx-clign 1s steps(1) infinite;margin-left:2px}
+@keyframes rx-clign{50%{opacity:0}}
+.rx-taches ol{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:7px;font-size:13px}
+.rx-taches li{display:flex;align-items:center;gap:9px;color:var(--mute)}
+.rx-taches li i{flex:none;width:16px;height:16px;border-radius:50%;border:2px solid #2b3c5c}
+.rx-taches li.fait{color:var(--ink)} .rx-taches li.fait i{background:var(--up);border-color:var(--up);box-shadow:inset 0 0 0 3px #070b14}
+.rx-taches li.cours{color:#fff;font-weight:600} .rx-taches li.cours i{border-color:var(--rx);border-top-color:transparent;animation:rx-tour .8s linear infinite}
+@keyframes rx-tour{to{transform:rotate(360deg)}}
+.rx-cd{border-top:1px solid var(--rxl);border-bottom:1px solid var(--rxl);padding:9px 0;margin-bottom:10px;display:grid;grid-template-columns:1fr auto;gap:4px 8px;align-items:baseline}
+.rx-cd span{font-size:12px;color:var(--mute)} .rx-cd b{font:700 20px var(--mono);color:var(--rx)}
+.rx-barre{grid-column:1/-1;height:4px;border-radius:2px;background:#131d30;overflow:hidden} .rx-barre i{display:block;height:100%;width:0;background:var(--rx);transition:width 1s linear}
+.rx-h2{margin-bottom:6px}
+.rx-livel{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font:500 12px var(--mono)}
+.rx-livel li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:baseline}
+.rx-livel b{color:var(--ink)} .rx-livel small{color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rx-dep{margin:4px 0 0;font:500 13px var(--mono);color:var(--mute)} .rx-big2 small{font-size:13px;color:var(--mute)}
+.rx-flash{animation:rx-flash .8s} @keyframes rx-flash{from{background:rgba(87,199,255,.35)}}
 .rx-r1{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) minmax(0,1.15fr);gap:10px}
 .rx-r2{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.7fr) minmax(0,1fr);gap:10px}
 .rx-r3{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) minmax(0,1.3fr);gap:10px}
@@ -898,7 +1033,8 @@ CSS = """
 .rb-carte td:nth-child(2){white-space:nowrap}
 @media (max-width:1250px){.rx-r1,.rx-r3{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.rx-r1>:first-child{grid-column:1/-1}.rx-r3>:last-child{grid-column:1/-1}
   .rx-r2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.rx-sphere{grid-column:1/-1;order:-1}}
-@media (max-width:760px){.rx-r1,.rx-r2,.rx-r3{grid-template-columns:minmax(0,1fr)}.rx-r1>*,.rx-r2>*,.rx-r3>*{grid-column:auto}
+@media (max-width:1000px){.rx-r0{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:760px){.rx-console{height:320px;font-size:11.5px}.rx-r1,.rx-r2,.rx-r3{grid-template-columns:minmax(0,1fr)}.rx-r1>*,.rx-r2>*,.rx-r3>*{grid-column:auto}
   #rx-canvas{height:340px}.rx-big{font-size:36px}.rx-kv4{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (prefers-reduced-motion:reduce){.rx-defil>div{animation:none}}
 """
@@ -963,5 +1099,98 @@ function dessiner(now){
   P.filter(function(p){ return p.z > 0; }).sort(function(u, v){ return u.z - v.z; }).forEach(disque);
 }
 requestAnimationFrame(dessiner);
+})();
+"""
+
+JS += r"""
+(function(){
+/* Le robot au travail : la console rejoue les tâches du dernier passage, puis suit les prix en direct. */
+var T = window.terminalOr || {}, A = null, brut = null, E = {i: 0, fin: false, live: {}, vus: {}};
+var calme = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function nb(x, d){ return Number(x).toLocaleString('fr-FR', {minimumFractionDigits: d, maximumFractionDigits: d}); }
+function px(x){ var a = Math.abs(x), d = a >= 100 ? 2 : (a >= 1 ? 3 : Math.min(10, 3 - Math.floor(Math.log10(a || 1e-12)))); return nb(x, d); }
+function sg(x, d){ return (x > 0 ? '+' : (x < 0 ? '−' : '')) + nb(Math.abs(x), d); }
+function hms(){ var d = new Date(), p = function(n){ return ('0' + n).slice(-2); }; return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); }
+function lire(){
+  var el = document.getElementById('rx-act'); if (!el) return null;
+  if (el.textContent !== brut){ brut = el.textContent; try { A = JSON.parse(brut); } catch(e){ A = null; } }
+  return A;
+}
+function ligne(txt, cls){
+  var c = document.getElementById('rx-console'); if (!c) return;
+  var bas = c.scrollHeight - c.scrollTop - c.clientHeight < 40;
+  var d = document.createElement('div'); d.className = 'l ' + (cls || ''); d.textContent = txt; c.appendChild(d);
+  while (c.children.length > 260) c.removeChild(c.firstChild);
+  if (bas) c.scrollTop = c.scrollHeight;
+}
+function taches(n){
+  document.querySelectorAll('#rx-taches li').forEach(function(li, k){ li.className = k < n ? 'fait' : (k === n ? 'cours' : ''); });
+}
+function rejouer(){
+  var c = document.getElementById('rx-console'); if (!c || !c.offsetParent || !lire()) return;
+  if (c.getAttribute('data-run') !== A.run){ c.setAttribute('data-run', A.run); c.innerHTML = ''; E.i = 0; E.fin = false; taches(0); }
+  if (E.i < A.lignes.length){
+    var n = calme ? A.lignes.length : 1;
+    while (n-- > 0 && E.i < A.lignes.length){ var l = A.lignes[E.i++]; ligne(l.t, l.c); if (l.e != null) taches(l.e); }
+  } else if (!E.fin){ E.fin = true; taches(4); ligne(hms() + '  SURVEILLANCE EN DIRECT · prix toutes les 20 s', 'h'); suivre(true); }
+}
+setInterval(rejouer, 110);
+
+/* Compte à rebours : le robot passe à chaque quart d'heure */
+function rebours(){
+  var el = document.getElementById('rx-cd'); if (!el) return;
+  var now = Date.now(), q = 900000, reste = q - (now % q), m = Math.floor(reste / 60000), s = Math.floor(reste % 60000 / 1000);
+  el.textContent = ('0' + m).slice(-2) + ':' + ('0' + s).slice(-2);
+  var b = document.getElementById('rx-cd-b'); if (b) b.style.width = (100 - reste / q * 100).toFixed(1) + '%';
+}
+setInterval(rebours, 1000); rebours();
+
+/* Prix en direct : l'or par le terminal, les cryptos par Coinbase */
+function prixOr(){ var p = T.px && T.px(); return (p && p.live && p.prix > 0 && A) ? p.prix - (A.ajust || 0) : null; }
+function chercher(){
+  if (!lire() || !window.fetch) return;
+  A.suivi.forEach(function(S){
+    if (S.m === 'XAU'){ var v = prixOr(); if (v) E.live.XAU = {px: v, t: Date.now()}; return; }
+    if (!S.cb) return;
+    fetch('https://api.coinbase.com/v2/prices/' + S.cb + '/spot', {cache: 'no-store'})
+      .then(function(r){ if (!r.ok) throw 0; return r.json(); })
+      .then(function(j){ var v = Number(j && j.data && j.data.amount); if (v > 0 && Math.abs(v / S.px - 1) < 0.5) E.live[S.m] = {px: v, t: Date.now()}; })
+      .catch(function(){});
+  });
+}
+var tour = 0;
+function suivre(force){
+  if (!lire()) return;
+  var ul = document.getElementById('rx-live'), h = '', frais = 0, veille = [], cons = E.fin && document.getElementById('rx-console');
+  A.suivi.forEach(function(S){
+    var L = E.live[S.m]; if (!L || Date.now() - L.t > 90000) return;
+    frais++;
+    var var_ = (L.px / S.px - 1) * 100, td = document.getElementById('rx-px-' + S.m);
+    if (td && td.textContent !== px(L.px)){ td.textContent = px(L.px); td.classList.remove('rx-flash'); void td.offsetWidth; td.classList.add('rx-flash'); }
+    var detail = 'veille';
+    S.pos.forEach(function(p){
+      var R = ((L.px - p.e) * p.s - p.f) / p.r, dst = (L.px - p.st) * p.s / L.px * 100, cle = S.m + p.k;
+      detail = p.k + ' ' + sg(R, 2) + ' R (' + sg(R * p.mise, 2) + ' $)';
+      if (!cons) return;
+      if (dst <= 0){ if (!E.vus[cle + 's']){ E.vus[cle + 's'] = 1; ligne(hms() + '  ' + S.sym + ' ' + p.k + ' : STOP TOUCHÉ EN DIRECT à ' + px(L.px) + ' · clôture au prochain passage', 'al'); } }
+      else if (p.o && (L.px - p.o) * p.s >= 0){ if (!E.vus[cle + 'o']){ E.vus[cle + 'o'] = 1; ligne(hms() + '  ' + S.sym + ' ' + p.k + ' : OBJECTIF TOUCHÉ EN DIRECT à ' + px(L.px) + ' · clôture au prochain passage', 'al'); } }
+      else ligne(hms() + '  ' + S.sym + ' ' + px(L.px) + ' · ' + p.k + ' latent ' + sg(R, 2) + ' R (' + sg(R * p.mise, 2) + ' $) · stop à ' + nb(dst, 2) + ' %', 'pos');
+    });
+    S.ord.forEach(function(o){
+      var d = (o.n - L.px) * o.s, cle = S.m + 'ord';
+      detail = 'ordre à ' + px(o.n) + ' (' + nb(Math.abs(d) / L.px * 100, 2) + ' %)';
+      if (!cons) return;
+      if (d <= 0){ if (!E.vus[cle]){ E.vus[cle] = 1; ligne(hms() + '  ' + S.sym + ' ASIE : NIVEAU DE L’ORDRE FRANCHI EN DIRECT à ' + px(L.px) + ' · entrée au prochain passage', 'al'); } }
+      else ligne(hms() + '  ' + S.sym + ' ' + px(L.px) + ' · ordre ASIE à ' + px(o.n) + ' : encore ' + nb(d / L.px * 100, 2) + ' %', 'pr');
+    });
+    if (!S.pos.length && !S.ord.length) veille.push(S.m + ' ' + px(L.px) + ' (' + sg(var_, 2) + ' %)');
+    h += '<li><b>' + S.m + '</b><small>' + detail + '</small><span class="' + (var_ > 0 ? 'up' : (var_ < 0 ? 'down' : '')) + '">' + px(L.px) + '</span></li>';
+  });
+  if (ul && h) ul.innerHTML = h;
+  var ag = document.getElementById('rx-live-age'); if (ag) ag.textContent = frais ? frais + ' marché' + (frais > 1 ? 's' : '') + ' en direct · ' + hms() : 'prix en direct indisponibles';
+  if (cons && veille.length && (force || tour % 3 === 0)) ligne(hms() + '  veille · ' + veille.join(' · ') + '  (depuis le passage)', 'v');
+  tour++;
+}
+chercher(); setInterval(chercher, 20000); setInterval(function(){ suivre(false); }, 20000); setTimeout(function(){ suivre(false); }, 2500);
 })();
 """
