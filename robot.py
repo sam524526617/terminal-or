@@ -45,6 +45,24 @@ OBSERVATION = 10          # trades clos avant de juger une stratégie
 PRUDENCE = 20             # réduction du gain moyen : × n / (n + PRUDENCE)
 CIBLE_R = 0.10            # gain moyen (réduit) qui vaut le risque plein
 
+# Marchés du robot. cout : frais d'un aller-retour ; ecart : écart achat-vente ; pas : marge de déclenchement d'un
+# ordre ; fin : financement annuel d'une position gardée la nuit ; plafond : part maximale du risque.
+MARCHES = {
+    "XAU": {"nom": "Or", "sym": "XAU/USD", "yahoo": None, "classe": "or", "weekend": False, "plafond": 1.0,
+            "cout": lambda px: COUT_FIXE, "ecart": lambda px: SPREAD_MOM, "pas": lambda px: 0.10, "fin": FINANCEMENT},
+    "BTC": {"nom": "Bitcoin", "sym": "BTC/USD", "yahoo": "BTC-USD", "classe": "crypto", "weekend": True, "plafond": 1.0,
+            "cout": lambda px: px * 0.0010, "ecart": lambda px: px * 0.0005, "pas": lambda px: px * 0.0002, "fin": 0.10},
+    "ETH": {"nom": "Ethereum", "sym": "ETH/USD", "yahoo": "ETH-USD", "classe": "crypto", "weekend": True, "plafond": 1.0,
+            "cout": lambda px: px * 0.0010, "ecart": lambda px: px * 0.0005, "pas": lambda px: px * 0.0002, "fin": 0.10},
+    "DOGE": {"nom": "Dogecoin", "sym": "DOGE/USD", "yahoo": "DOGE-USD", "classe": "meme", "weekend": True, "plafond": 0.25,
+             "cout": lambda px: px * 0.0030, "ecart": lambda px: px * 0.0015, "pas": lambda px: px * 0.0005, "fin": 0.15},
+    "SHIB": {"nom": "Shiba Inu", "sym": "SHIB/USD", "yahoo": "SHIB-USD", "classe": "meme", "weekend": True, "plafond": 0.25,
+             "cout": lambda px: px * 0.0030, "ecart": lambda px: px * 0.0015, "pas": lambda px: px * 0.0005, "fin": 0.15},
+    "PEPE": {"nom": "Pepe", "sym": "PEPE/USD", "yahoo": "PEPE24478-USD", "classe": "meme", "weekend": True, "plafond": 0.25,
+             "cout": lambda px: px * 0.0030, "ecart": lambda px: px * 0.0015, "pas": lambda px: px * 0.0005, "fin": 0.15},
+}
+REJEU_JOURS = 55          # rejeu : ce que le robot aurait fait sur les 55 derniers jours (simulation, hors registre)
+
 STRATS = {
     "T20": {"nom": "Tendance 20 jours", "court": "Achat sur cassure du plus haut de 20 jours, stop suiveur",
             "ut": "Daily", "horizon": "plusieurs jours à semaines"},
@@ -68,6 +86,15 @@ def fr(x, d=2, signe=False, unite=""):
     return s.replace(",", " ").replace(".", ",").replace("-", "−") + unite
 
 
+def fpx(x):
+    """Prix lisible quelle que soit sa taille (4 100,25 comme 0,00001234)."""
+    if x is None or not math.isfinite(float(x)):
+        return "—"
+    x = float(x)
+    d = 2 if abs(x) >= 100 else (3 if abs(x) >= 1 else min(10, 3 - int(math.floor(math.log10(abs(x) or 1e-12)))))
+    return fr(x, d)
+
+
 def atr(df, n=14):
     pc = df["close"].shift(1)
     tr = pd.concat([df["high"] - df["low"], (df["high"] - pc).abs(), (df["low"] - pc).abs()], axis=1).max(axis=1)
@@ -85,7 +112,7 @@ def rsi(c, n):
 # DONNÉES
 # ---------------------------------------------------------------------------
 
-def donnees(intra, maintenant):
+def donnees(intra, maintenant, weekend=False):
     """Bougies du terminal -> M15, H1, H4 terminées et Daily (le jour en cours, partiel, marqué non terminé)."""
     b, hb = (intra or {}).get("barres"), (intra or {}).get("heures")
     if b is None or hb is None or len(b) < 300 or len(hb) < 24 * 250:
@@ -100,23 +127,27 @@ def donnees(intra, maintenant):
     base = pd.concat([h1_fini[["open", "high", "low", "close"]],
                       m15[m15.index >= dern_h1][["open", "high", "low", "close"]] if dern_h1 is not None else m15.iloc[:0, :4]])
     D = P.agreger(base.sort_index(), "1D")
-    D = D[D.index.weekday < 5]
+    if not weekend:
+        D = D[D.index.weekday < 5]
+    D = D.copy()
     D["fini"] = D["fin"] <= now
     h4 = P.agreger(h1_fini[["open", "high", "low", "close"]], "4h")
     h4 = h4[h4["fin"] <= now]
     return {"m15": m15, "h1": h1_fini, "h4": h4, "D": D, "now": now}
 
 
-def trade(strat, sens, t_e, entree, risque, stop, objectif=None):
-    return {"strat": strat, "id": f"{strat}-{pd.Timestamp(t_e):%Y%m%d%H%M}", "sens": int(sens), "t_entree": pd.Timestamp(t_e),
-            "entree": float(entree), "risque": float(risque), "stop": float(stop),
+def trade(strat, sens, t_e, entree, risque, stop, objectif=None, M=None, cle="XAU"):
+    M = M or MARCHES["XAU"]
+    pre = "" if cle == "XAU" else cle + ":"
+    return {"strat": strat, "marche": cle, "id": f"{pre}{strat}-{pd.Timestamp(t_e):%Y%m%d%H%M}", "sens": int(sens),
+            "t_entree": pd.Timestamp(t_e), "entree": float(entree), "risque": float(risque), "stop": float(stop),
             "objectif": None if objectif is None else float(objectif), "t_sortie": None, "sortie": None,
-            "issue": None, "R": None, "nuits": 0}
+            "issue": None, "R": None, "nuits": 0, "frais": float(M["cout"](entree)), "fin": M["fin"]}
 
 
 def clore(t, t_s, sortie, issue, cout=True):
     brut = (sortie - t["entree"]) * t["sens"]
-    frais = (COUT_FIXE + t["nuits"] * t["entree"] * FINANCEMENT / 365) if cout else 0.0
+    frais = (t.get("frais", COUT_FIXE) + t["nuits"] * t["entree"] * t.get("fin", FINANCEMENT) / 365) if cout else 0.0
     t.update(t_sortie=pd.Timestamp(t_s), sortie=float(sortie), issue=issue, R=float((brut - frais) / t["risque"]))
     return t
 
@@ -126,7 +157,7 @@ def latent(t, px):
     if px is None:
         return None
     brut = (px - t["entree"]) * t["sens"]
-    frais = COUT_FIXE if t["strat"] != "MOM" else 0.0
+    frais = t.get("frais", COUT_FIXE) if t["strat"] != "MOM" else 0.0
     return float((brut - frais) / t["risque"])
 
 
@@ -134,7 +165,8 @@ def latent(t, px):
 # STRATÉGIES (même logique que backtest/recherche.py et backtest/strategies_mtf.py)
 # ---------------------------------------------------------------------------
 
-def strat_t20(X, debut):
+def strat_t20(X, debut, M=None, cle="XAU"):
+    M = M or MARCHES["XAU"]
     D = X["D"]
     o, h, l, c = (D[x].to_numpy() for x in ("open", "high", "low", "close"))
     fini = D["fini"].to_numpy()
@@ -154,7 +186,7 @@ def strat_t20(X, debut):
         if D.index[k] < debut:
             i += 1
             continue
-        t = trade("T20", 1, D.index[k], o[k], 2 * a[i], o[k] - 2 * a[i])
+        t = trade("T20", 1, D.index[k], o[k], 2 * a[i], o[k] - 2 * a[i], M=M, cle=cle)
         ext, j, ferme = c[i], k, False
         while j < len(D):
             if l[j] <= t["stop"]:
@@ -184,7 +216,8 @@ def strat_t20(X, debut):
     return out
 
 
-def strat_rsi2(X, debut):
+def strat_rsi2(X, debut, M=None, cle="XAU"):
+    M = M or MARCHES["XAU"]
     D = X["D"]
     o, h, l, c = (D[x].to_numpy() for x in ("open", "high", "low", "close"))
     fini = D["fini"].to_numpy()
@@ -206,7 +239,7 @@ def strat_rsi2(X, debut):
         if D.index[k] < debut:
             i += 1
             continue
-        t = trade("RSI2", 1, D.index[k], o[k], 3 * a[i], o[k] - 3 * a[i])
+        t = trade("RSI2", 1, D.index[k], o[k], 3 * a[i], o[k] - 3 * a[i], M=M, cle=cle)
         j, ferme = k, False
         while j < len(D):
             if l[j] <= t["stop"]:
@@ -234,14 +267,15 @@ def strat_rsi2(X, debut):
     return out
 
 
-def strat_asie(X, debut):
+def strat_asie(X, debut, M=None, cle="XAU"):
+    M = M or MARCHES["XAU"]
     m, D, now = X["m15"], X["D"], X["now"]
     T, H, L, C, O = m.index, m["high"].to_numpy(), m["low"].to_numpy(), m["close"].to_numpy(), m["open"].to_numpy()
     Df = D[D["fini"]]
     ema50 = Df["close"].ewm(span=50, adjust=False).mean()
     out, attente = [], None
     for jour in D.index:
-        if jour + pd.Timedelta(hours=22) < debut or jour.weekday() >= 5:
+        if jour + pd.Timedelta(hours=22) < debut or (jour.weekday() >= 5 and not M["weekend"]):
             continue
         prec = Df.index[Df.index < jour]
         if len(prec) < 60:
@@ -255,12 +289,13 @@ def strat_asie(X, debut):
         if haut <= bas:
             continue
         d = 1 if Df["close"].loc[prec[-1]] > ema50.loc[prec[-1]] else -1
-        niveau = haut + 0.10 if d > 0 else bas - 0.10
+        pas = M["pas"](haut)
+        niveau = haut + pas if d > 0 else bas - pas
         stop = bas if d > 0 else haut
         dec = np.flatnonzero(H[f0:f1] > niveau) if d > 0 else np.flatnonzero(L[f0:f1] < niveau)
         if not len(dec):
             if now < jour + pd.Timedelta(hours=15):         # fenêtre encore ouverte : ordre en attente
-                attente = {"strat": "ASIE", "sens": d, "niveau": niveau, "stop": stop,
+                attente = {"strat": "ASIE", "marche": cle, "sens": d, "niveau": niveau, "stop": stop,
                            "objectif": niveau + d * 2 * abs(niveau - stop), "expire": jour + pd.Timedelta(hours=15)}
             continue
         k = f0 + int(dec[0])
@@ -270,7 +305,7 @@ def strat_asie(X, debut):
         risque = abs(e - stop)
         if risque <= 0:
             continue
-        t = trade("ASIE", d, T[k], e, risque, stop, e + d * 2 * risque)
+        t = trade("ASIE", d, T[k], e, risque, stop, e + d * 2 * risque, M=M, cle=cle)
         sh, sl_ = H[k:fin], L[k:fin]
         s = np.flatnonzero(sl_ <= stop) if d > 0 else np.flatnonzero(sh >= stop)
         g = np.flatnonzero(sh >= t["objectif"]) if d > 0 else np.flatnonzero(sl_ <= t["objectif"])
@@ -284,7 +319,8 @@ def strat_asie(X, debut):
     return out, attente
 
 
-def strat_mom(X, debut):
+def strat_mom(X, debut, M=None, cle="XAU"):
+    M = M or MARCHES["XAU"]
     m, h1, h4 = X["m15"], X["h1"], X["h4"]
     if len(h4) < 120:
         return []
@@ -306,13 +342,14 @@ def strat_mom(X, debut):
         if T[k] - fins.iloc[i] > pd.Timedelta(minutes=30):          # trou de données (pause, week-end)
             continue
         d = 1 if achat[i] else -1
-        e = O[k] + (SPREAD_MOM if d > 0 else 0.0)
-        t = trade("MOM", d, T[k], e, 3 * a1[i], e - d * 3 * a1[i], e + d * 4 * a1[i])
+        sp = M["ecart"](O[k])
+        e = O[k] + (sp if d > 0 else 0.0)
+        t = trade("MOM", d, T[k], e, 3 * a1[i], e - d * 3 * a1[i], e + d * 4 * a1[i], M=M, cle=cle)
         k1 = min(len(m), k + 48)
         if d > 0:
             ts, tg = L[k:k1] <= t["stop"], H[k:k1] >= t["objectif"]
         else:
-            ts, tg = H[k:k1] + SPREAD_MOM >= t["stop"], L[k:k1] + SPREAD_MOM <= t["objectif"]
+            ts, tg = H[k:k1] + sp >= t["stop"], L[k:k1] + sp <= t["objectif"]
         s = int(np.argmax(ts)) if ts.any() else None
         g = int(np.argmax(tg)) if tg.any() else None
         if s is not None and (g is None or s <= g):
@@ -323,7 +360,7 @@ def strat_mom(X, debut):
             fin_ = k + g
         elif k + 48 <= len(m):
             fin_ = k + 47
-            clore(t, T[fin_], C[fin_] + (0.0 if d > 0 else SPREAD_MOM), "12 h écoulées", cout=False)
+            clore(t, T[fin_], C[fin_] + (0.0 if d > 0 else sp), "12 h écoulées", cout=False)
         else:
             out.append(t)
             break
@@ -352,15 +389,15 @@ def depuis_json(x):
     return t
 
 
-def poids(clos_avant):
-    """Part du risque engagée sur une stratégie, d'après ses trades déjà clos."""
+def poids(clos_avant, plafond=1.0):
+    """Part du risque engagée sur une stratégie d'un marché, d'après ses trades déjà clos."""
     n = len(clos_avant)
     if n < OBSERVATION:
-        return 0.25, "observation"
+        return min(0.25, plafond), "observation"
     moy = float(np.mean([t["R"] for t in clos_avant])) * n / (n + PRUDENCE)
     if moy <= 0:
         return 0.0, "coupée"
-    return min(1.0, moy / CIBLE_R), "engagée"
+    return min(plafond, moy / CIBLE_R), "engagée"
 
 
 def stats(liste):
@@ -378,126 +415,223 @@ def stats(liste):
             "dd": float((cum - np.maximum.accumulate(np.r_[0, cum])[1:]).min()), "pire": int(pire), "courbe": cum.tolist()}
 
 
-def avancer(etat, intra, maintenant, compte):
-    """Un passage du robot. etat : registre précédent (dict JSON) ou None pour démarrer.
-    Renvoie (nouvel état, vue pour la page, alertes téléphone)."""
-    etat = dict(etat or {})
-    X = donnees(intra, maintenant)
-    if X is None:
-        vue = {"erreur": "pas assez de bougies pour faire tourner le robot"}
-        return etat, vue, []
-    if not etat.get("debut"):
-        etat = {"version": VERSION, "debut": X["now"].isoformat(), "trades": {}, "vus": {}}
-    debut = pd.Timestamp(etat["debut"])
-    registre = {k: depuis_json(v) for k, v in etat.get("trades", {}).items()}
-    vus = dict(etat.get("vus", {}))
-    calc = {}
-    attente = None
+def cle_cellule(t):
+    return (t.get("marche", "XAU"), t["strat"])
+
+
+def ponderer(clos, autres=()):
+    """Donne à chaque trade (clos ou ouvert) le risque que le robot avait engagé à son entrée."""
+    clos = sorted(clos, key=lambda t: t["t_sortie"])
+    for t in list(clos) + list(autres):
+        avant = [x for x in clos if cle_cellule(x) == cle_cellule(t) and x["t_sortie"] <= t["t_entree"]]
+        t["poids"], _ = poids(avant, MARCHES[t.get("marche", "XAU")]["plafond"])
+    return clos
+
+
+def calculer(X, debut, M, cle):
+    """Toutes les stratégies sur un marché. Renvoie (trades, ordres en attente, pannes)."""
+    out, attentes, pannes = [], [], {}
     for nom, f in (("T20", strat_t20), ("RSI2", strat_rsi2), ("ASIE", strat_asie), ("MOM", strat_mom)):
         try:
-            r = f(X, debut)
+            r = f(X, debut, M, cle)
             if nom == "ASIE":
-                r, attente = r
-            calc[nom] = r
+                r, at = r
+                if at:
+                    attentes.append(at)
+            out += [t for t in r if t["t_entree"] >= debut]
         except Exception as e:                       # une stratégie en panne n'arrête pas les autres
-            calc[nom] = []
-            etat.setdefault("pannes", {})[nom] = f"{maintenant:%d/%m %H:%M} {str(e)[:80]}"
-    px = float(X["m15"]["close"].iloc[-1]) if len(X["m15"]) else None
-    ouverts, alertes = [], []
-    for nom, liste in calc.items():
-        for t in liste:
-            if t["t_entree"] < debut:
-                continue
+            pannes[f"{cle} {nom}"] = str(e)[:80]
+    return out, attentes, pannes
+
+
+def avancer(etat, marches, maintenant, compte, rejeu=True):
+    """Un passage du robot. etat : registre précédent (dict JSON) ou None pour démarrer ;
+    marches : {"XAU": bougies, "BTC": bougies, ...} (barres 15 min + heures).
+    Renvoie (nouvel état, vue pour la page, alertes téléphone)."""
+    etat = dict(etat or {})
+    if marches is not None and "barres" in marches:      # ancien appel : l'or seul
+        marches = {"XAU": marches}
+    debuts = dict(etat.get("debuts") or {})
+    if etat.get("debut") and "XAU" not in debuts:
+        debuts["XAU"] = etat["debut"]
+    registre = {k: depuis_json(v) for k, v in etat.get("trades", {}).items()}
+    for t in registre.values():
+        t.setdefault("marche", "XAU")
+    vus = dict(etat.get("vus", {}))
+    ouverts, attentes, pannes, infos, simu = [], [], {}, {}, []
+    for cle, M in MARCHES.items():
+        X = donnees((marches or {}).get(cle), maintenant, M["weekend"])
+        if X is None:
+            infos[cle] = {"ok": False}
+            continue
+        if cle not in debuts:
+            debuts[cle] = X["now"].isoformat()
+        debut = pd.Timestamp(debuts[cle])
+        px = float(X["m15"]["close"].iloc[-1])
+        c = X["m15"]["close"]
+        infos[cle] = {"ok": True, "px": px, "var": float(px / c.iloc[-97] - 1) if len(c) > 97 else None,
+                      "spark": [float(v) for v in c.iloc[-96::4]], "debut": P.depuis_horloge(debut)}
+        tr, at, pn = calculer(X, debut, M, cle)
+        attentes += at
+        pannes.update(pn)
+        for t in tr:
             if t["R"] is not None:
-                if t["id"] not in registre:
-                    registre[t["id"]] = t
+                registre.setdefault(t["id"], t)
             elif t["id"] not in registre:
                 t["latent"] = latent(t, px)
                 ouverts.append(t)
-    # compte du robot : chaque trade clos pondéré par les résultats de sa stratégie au moment de l'entrée
-    clos = sorted(registre.values(), key=lambda t: t["t_sortie"])
-    for t in sorted(registre.values(), key=lambda t: t["t_entree"]):
-        avant = [x for x in clos if x["strat"] == t["strat"] and x["t_sortie"] <= t["t_entree"]]
-        t["poids"], _ = poids(avant)
-    for t in ouverts:
-        avant = [x for x in clos if x["strat"] == t["strat"] and x["t_sortie"] <= t["t_entree"]]
-        t["poids"], _ = poids(avant)
+        if rejeu:
+            try:
+                tr2, _, _ = calculer(X, X["now"] - pd.Timedelta(days=REJEU_JOURS), M, cle)
+                simu += [t for t in tr2 if t["R"] is not None]
+            except Exception:
+                pass
+    if not any(i.get("ok") for i in infos.values()):
+        return etat, {"erreur": "pas assez de bougies pour faire tourner le robot"}, []
+    clos = ponderer(list(registre.values()), ouverts)
     # alertes : entrées et sorties, une seule fois chacune
+    alertes = []
     mot = lambda t: ("achat" if t["sens"] > 0 else "vente")
+    titre = lambda t: f"Robot · {MARCHES[t['marche']]['nom']} · {STRATS[t['strat']]['nom']}"
     for t in ouverts:
         cle = "in|" + t["id"]
         if cle not in vus:
             vus[cle] = maintenant.isoformat()
-            alertes.append((f"robot|{cle}", f"Robot · {STRATS[t['strat']]['nom']}",
-                            f"{mot(t).capitalize()} papier à {fr(t['entree'])}, stop {fr(t['stop'])}"
-                            + (f", objectif {fr(t['objectif'])}" if t.get("objectif") else "")
+            alertes.append((f"robot|{cle}", titre(t),
+                            f"{mot(t).capitalize()} papier à {fpx(t['entree'])}, stop {fpx(t['stop'])}"
+                            + (f", objectif {fpx(t['objectif'])}" if t.get("objectif") else "")
                             + (f". Risque engagé : {fr(t['poids'] * RISQUE_PCT, 2)} %." if t["poids"] > 0 else
                                ". Stratégie coupée (elle perd en direct) : suivie sans risque engagé."),
                             3 if t["poids"] > 0 else 2, ["robot"]))
     for t in registre.values():
         cle = "out|" + t["id"]
-        if cle not in vus and t["t_sortie"] is not None and (maintenant - pd.Timestamp(P.depuis_horloge(t["t_sortie"]))) < timedelta(hours=6):
+        if cle not in vus and (maintenant - pd.Timestamp(P.depuis_horloge(t["t_sortie"]))) < timedelta(hours=6):
             vus[cle] = maintenant.isoformat()
-            alertes.append((f"robot|{cle}", f"Robot · {STRATS[t['strat']]['nom']}",
-                            f"{mot(t).capitalize()} papier clôturé ({t['issue']}) : {fr(t['R'], 2, True)} R.", 3,
-                            ["robot", "white_check_mark" if t["R"] > 0 else "x"]))
+            alertes.append((f"robot|{cle}", titre(t), f"{mot(t).capitalize()} papier clôturé ({t['issue']}) : {fr(t['R'], 2, True)} R.",
+                            3 if t.get("poids", 0) > 0 else 2, ["robot", "white_check_mark" if t["R"] > 0 else "x"]))
     limite = (maintenant - timedelta(days=30)).isoformat()
     vus = {k: v for k, v in vus.items() if v >= limite}
-    etat.update(version=VERSION, trades={k: vers_json(v) for k, v in registre.items()}, vus=vus,
-                maj=maintenant.isoformat())
-    # vue pour la page
-    par_strat = {}
-    for nom in STRATS:
-        cl = [t for t in clos if t["strat"] == nom]
-        w, statut = poids(cl)
-        par_strat[nom] = {"stats": stats(cl), "poids": w, "statut": statut,
-                          "ouvert": next((t for t in ouverts if t["strat"] == nom), None)}
-    robot = sorted([dict(t, R=t["R"] * t["poids"]) for t in clos], key=lambda t: t["t_sortie"])
+    etat.update(version=2, debuts=debuts, trades={k: vers_json(v) for k, v in registre.items()}, vus=vus, maj=maintenant.isoformat())
+    etat.pop("pannes", None)
     capital = compte.get("capital", 50000)
-    vue = {"debut": P.depuis_horloge(debut), "strats": par_strat, "ouverts": ouverts, "attente": attente,
-           "robot": stats(robot), "dollars": sum(t["R"] for t in robot) * capital * RISQUE_PCT / 100,
-           "capital": capital, "historique": sorted(clos, key=lambda t: t["t_sortie"], reverse=True)[:60],
-           "px": px, "pannes": etat.get("pannes", {}), "jours": max(0, (X["now"] - debut).days)}
+
+    def compte_de(liste, titre_):
+        pond = sorted([dict(t, R=t["R"] * t["poids"]) for t in liste], key=lambda t: t["t_sortie"])
+        par_m = {m: stats([t for t in pond if t["marche"] == m]) for m in MARCHES}
+        par_s = {k: stats([t for t in pond if t["strat"] == k]) for k in STRATS}
+        return {"titre": titre_, "stats": stats(pond), "dollars": sum(t["R"] for t in pond) * capital * RISQUE_PCT / 100,
+                "par_marche": par_m, "par_strat": par_s, "R": [t["R"] for t in pond],
+                "trades": sorted(liste, key=lambda t: t["t_sortie"], reverse=True)}
+    cellules = {}
+    for m, M in MARCHES.items():
+        for k in STRATS:
+            cl = [t for t in clos if cle_cellule(t) == (m, k)]
+            w, statut = poids(cl, M["plafond"])
+            cellules[(m, k)] = {"stats": stats(cl), "poids": w, "statut": statut if infos[m].get("ok") else "hors ligne",
+                                "ouvert": next((t for t in ouverts if cle_cellule(t) == (m, k)), None)}
+    direct = compte_de(clos, "en direct")
+    d0 = min((pd.Timestamp(v) for v in debuts.values()), default=None)
+    vue = {"debut": P.depuis_horloge(d0) if d0 is not None else maintenant, "cellules": cellules, "marches": infos,
+           "ouverts": ouverts, "attentes": attentes, "attente": attentes[0] if attentes else None,
+           "direct": direct, "robot": direct["stats"], "dollars": direct["dollars"], "capital": capital,
+           "historique": direct["trades"][:80], "pannes": pannes,
+           "jours": max(0, (pd.Timestamp(maintenant).tz_localize(None) - pd.Timestamp(P.depuis_horloge(d0)).tz_localize(None)).days) if d0 is not None else 0,
+           "rejeu": compte_de(ponderer(simu), f"rejeu {REJEU_JOURS} jours") if (rejeu and simu) else None,
+           "strats": {k: {"stats": direct["par_strat"][k]} for k in STRATS}}
     return etat, vue, alertes
 
 
 # ---------------------------------------------------------------------------
-# AFFICHAGE
+# AFFICHAGE : le centre de contrôle
 # ---------------------------------------------------------------------------
 
-def courbe(cum, w=720, h=180):
-    if not cum:
-        return ""
-    cum = [0.0] + list(cum)
-    mn, mx = min(cum), max(cum)
-    et = (mx - mn) or 1.0
-    g, d, ht, b = 44, 10, 12, 22
-    x = lambda i: g + i / max(1, len(cum) - 1) * (w - g - d)
-    y = lambda v: ht + (mx - v) / et * (h - ht - b)
-    pts = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(cum))
-    coul = "var(--up)" if cum[-1] >= 0 else "var(--down)"
-    return (f'<svg viewBox="0 0 {w} {h}" class="rb-svg" role="img" aria-label="Courbe du compte du robot en R">'
-            f'<line class="gr" x1="{g}" x2="{w - d}" y1="{y(0):.1f}" y2="{y(0):.1f}"/>'
-            f'<text class="ax" x="{g - 6}" y="{y(mx) + 4:.1f}" text-anchor="end">{fr(mx, 1, True)}</text>'
-            f'<text class="ax" x="{g - 6}" y="{y(mn) + 4:.1f}" text-anchor="end">{fr(mn, 1, True)}</text>'
-            f'<polyline points="{pts}" fill="none" stroke="{coul}" stroke-width="2" stroke-linejoin="round"/></svg>')
+import json
 
-
-def monte_carlo(R, n_suite=100, tirages=2000, graine=7):
-    """Éventail des résultats possibles sur les n_suite prochains trades, en tirant au hasard dans les trades réels."""
-    R = np.asarray(R, dtype=float)
-    if len(R) < 15:
-        return None
-    rng = np.random.default_rng(graine)
-    tir = rng.choice(R, size=(tirages, n_suite), replace=True).cumsum(axis=1)
-    pire = np.minimum.accumulate(np.minimum(tir, 0), axis=1)[:, -1]
-    q = lambda p: float(np.percentile(tir[:, -1], p))
-    return {"p5": q(5), "p50": q(50), "p95": q(95), "perte": float((tir[:, -1] < 0).mean()),
-            "dd_med": float(np.median(pire)), "n": n_suite}
+COUL_ETAT = {"observation": "obs", "engagée": "eng", "coupée": "off", "hors ligne": "hl"}
+LIB_ETAT = {"observation": "Observation", "engagée": "Engagée", "coupée": "Coupée", "hors ligne": "Hors ligne"}
 
 
 def heure(t):
     return P.depuis_horloge(t).strftime("%d/%m %H:%M") if t is not None else "—"
+
+
+def mini(vals, w=120, h=30, coul=None, zero=False):
+    """Petite courbe sans axes."""
+    vals = [float(v) for v in vals if v is not None and math.isfinite(float(v))]
+    if len(vals) < 2:
+        return f'<svg viewBox="0 0 {w} {h}" class="rx-mini"></svg>'
+    mn, mx = min(vals + ([0.0] if zero else [])), max(vals + ([0.0] if zero else []))
+    et = (mx - mn) or 1.0
+    pts = " ".join(f"{i / (len(vals) - 1) * w:.1f},{2 + (mx - v) / et * (h - 4):.1f}" for i, v in enumerate(vals))
+    coul = coul or ("var(--up)" if vals[-1] >= vals[0] else "var(--down)")
+    base = f'<line x1="0" x2="{w}" y1="{2 + mx / et * (h - 4):.1f}" y2="{2 + mx / et * (h - 4):.1f}" class="z"/>' if zero else ""
+    return (f'<svg viewBox="0 0 {w} {h}" class="rx-mini" preserveAspectRatio="none">{base}'
+            f'<polyline points="{pts}" fill="none" stroke="{coul}" stroke-width="1.6" stroke-linejoin="round"/></svg>')
+
+
+def courbe(cum, w=720, h=210):
+    cum = [0.0] + list(cum or [])
+    mn, mx = min(cum), max(cum)
+    et = (mx - mn) or 1.0
+    g, d, ht, b = 46, 10, 12, 20
+    x = lambda i: g + i / max(1, len(cum) - 1) * (w - g - d)
+    y = lambda v: ht + (mx - v) / et * (h - ht - b)
+    pts = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(cum))
+    coul = "var(--up)" if cum[-1] >= 0 else "var(--down)"
+    aire = f"{x(0):.1f},{y(0):.1f} {pts} {x(len(cum) - 1):.1f},{y(0):.1f}"
+    return (f'<svg viewBox="0 0 {w} {h}" class="rx-svg" role="img" aria-label="Courbe du compte en R">'
+            f'<polygon points="{aire}" fill="{coul}" opacity=".10"/>'
+            f'<line class="gr" x1="{g}" x2="{w - d}" y1="{y(0):.1f}" y2="{y(0):.1f}"/>'
+            f'<text class="ax" x="{g - 6}" y="{y(mx) + 4:.1f}" text-anchor="end">{fr(mx, 1, True)}</text>'
+            f'<text class="ax" x="{g - 6}" y="{y(mn) + 4:.1f}" text-anchor="end">{fr(mn, 1, True)}</text>'
+            f'<polyline points="{pts}" fill="none" stroke="{coul}" stroke-width="2" stroke-linejoin="round"/>'
+            f'<text class="ax" x="{w - d}" y="{h - 5}" text-anchor="end">{len(cum) - 1} trades · {fr(cum[-1], 2, True)} R</text></svg>')
+
+
+def monte_carlo(R, n_suite=100, tirages=1500, graine=7):
+    """Éventail des résultats possibles sur les n_suite prochains trades, en tirant au hasard dans les trades connus."""
+    R = np.asarray(R, dtype=float)
+    if len(R) < 15:
+        return None
+    rng = np.random.default_rng(graine)
+    tir = np.c_[np.zeros(tirages), rng.choice(R, size=(tirages, n_suite), replace=True).cumsum(axis=1)]
+    creux = (tir - np.maximum.accumulate(tir, axis=1)).min(axis=1)
+    q = lambda p: np.percentile(tir, p, axis=0)
+    return {"n": n_suite, "p5": q(5), "p25": q(25), "p50": q(50), "p75": q(75), "p95": q(95), "ex": tir[:26],
+            "fin": tir[:, -1], "perte": float((tir[:, -1] < 0).mean()), "dd_med": float(np.median(creux))}
+
+
+def svg_eventail(mc, w=640, h=250):
+    g, hist, ht, b = 44, 96, 10, 20
+    pw = w - g - hist
+    mn, mx = float(min(mc["p5"].min(), mc["ex"].min())), float(max(mc["p95"].max(), mc["ex"].max()))
+    et = (mx - mn) or 1.0
+    x = lambda i: g + i / mc["n"] * pw
+    y = lambda v: ht + (mx - v) / et * (h - ht - b)
+    ligne = lambda a: " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(a))
+    bande = lambda hi, lo: ligne(hi) + " " + " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in reversed(list(enumerate(lo))))
+    out = [f'<svg viewBox="0 0 {w} {h}" class="rx-svg" role="img" aria-label="Éventail Monte Carlo des {mc["n"]} prochains trades">',
+           f'<polygon points="{bande(mc["p95"], mc["p5"])}" class="b1"/><polygon points="{bande(mc["p75"], mc["p25"])}" class="b2"/>']
+    out += [f'<polyline points="{ligne(e)}" class="ex"/>' for e in mc["ex"]]
+    out.append(f'<line class="gr" x1="{g}" x2="{g + pw}" y1="{y(0):.1f}" y2="{y(0):.1f}"/><polyline points="{ligne(mc["p50"])}" class="med"/>')
+    for v in (mx, 0.0, mn):
+        out.append(f'<text class="ax" x="{g - 6}" y="{y(v) + 4:.1f}" text-anchor="end">{fr(v, 0, True)}</text>')
+    cpt, bords = np.histogram(mc["fin"], bins=14, range=(mn, mx))
+    for k, n in enumerate(cpt):
+        y1, y2 = y(bords[k + 1]), y(bords[k])
+        lg = n / max(1, cpt.max()) * (hist - 14)
+        out.append(f'<rect x="{g + pw + 8}" y="{y1 + 1:.1f}" width="{lg:.1f}" height="{max(1.0, y2 - y1 - 2):.1f}" class="{"hu" if bords[k] >= 0 else "hd"}"/>')
+    out.append(f'<text class="ax" x="{g}" y="{h - 5}">trade 1</text><text class="ax" x="{g + pw}" y="{h - 5}" text-anchor="end">trade {mc["n"]}</text></svg>')
+    return "".join(out)
+
+
+def ligne_trade(t, simu=False):
+    m = MARCHES[t["marche"]]
+    return (f'<li class="{"rx-sim" if simu else ""}"><span class="rx-tag {m["classe"]}">{esc(t["marche"])}</span>'
+            f'<span class="rx-lt">{esc(t["strat"])} · {"achat" if t["sens"] > 0 else "vente"} {fpx(t["entree"])}'
+            f'<small>{heure(t["t_sortie"] or t["t_entree"])}{" · rejeu" if simu else ""}</small></span>'
+            + (f'<b class="{"up" if t["R"] > 0 else "down"}">{fr(t["R"], 2, True)} R</b>' if t.get("R") is not None else
+               f'<b class="{"up" if (t.get("latent") or 0) > 0 else "down"}">{fr(t.get("latent"), 2, True)} R<i>ouvert</i></b>') + '</li>')
 
 
 def carte_accueil(vue):
@@ -505,21 +639,20 @@ def carte_accueil(vue):
     if not vue or vue.get("erreur"):
         return ""
     R = vue["robot"]
-    ouv = vue["ouverts"]
     lig = ""
-    for t in ouv:
-        lig += (f'<tr><td>{esc(STRATS[t["strat"]]["nom"])}</td><td class="{"up" if t["sens"] > 0 else "down"}">'
-                f'{"Achat" if t["sens"] > 0 else "Vente"} {fr(t["entree"], 1)}</td>'
+    for t in vue["ouverts"][:6]:
+        lig += (f'<tr><td>{esc(MARCHES[t["marche"]]["sym"])} · {esc(t["strat"])}</td><td class="{"up" if t["sens"] > 0 else "down"}">'
+                f'{"Achat" if t["sens"] > 0 else "Vente"} {fpx(t["entree"])}</td>'
                 f'<td class="num {"up" if (t.get("latent") or 0) > 0 else "down"}">{fr(t.get("latent"), 2, True)} R</td></tr>')
-    at = vue.get("attente")
-    if at:
-        lig += (f'<tr><td>{esc(STRATS[at["strat"]]["nom"])}</td><td class="warn">Ordre {"achat" if at["sens"] > 0 else "vente"} '
-                f'à {fr(at["niveau"], 1)}</td><td class="num">jusqu\'à {P.depuis_horloge(at["expire"]):%H:%M}</td></tr>')
+    for at in vue.get("attentes", [])[:3]:
+        lig += (f'<tr><td>{esc(MARCHES[at["marche"]]["sym"])} · ASIE</td><td class="warn">Ordre {"achat" if at["sens"] > 0 else "vente"} '
+                f'{fpx(at["niveau"])}</td><td class="num">→ {P.depuis_horloge(at["expire"]):%H:%M}</td></tr>')
     corps = (f'<table class="ps-mk">{lig}</table>' if lig else '<p class="ps-mini">Aucune position ouverte, aucun ordre en attente.</p>')
-    res = (f'{R["n"]} trades clos · <b class="{"up" if R["total"] > 0 else "down"}">{fr(R["total"], 1, True)} R</b>'
+    res = (f'{R["n"]} trades clos · <b class="{"up" if R["total"] > 0 else "down"}">{fr(R["total"], 2, True)} R</b>'
            if R.get("n") else "aucun trade clos pour l'instant")
-    return (f'<div class="ps-carte rb-carte" data-zone="rb-carte"><div class="ps-tete"><span class="k">Robot papier</span>'
-            f'<a href="#analyse" data-aller="robot" class="ps-lien">détail</a></div>{corps}'
+    nb = sum(1 for i in vue["marches"].values() if i.get("ok"))
+    return (f'<div class="ps-carte rb-carte"><div class="ps-tete"><span class="k">Robot papier · {nb} marchés</span>'
+            f'<a href="#analyse" data-aller="robot" class="ps-lien">centre de contrôle</a></div>{corps}'
             f'<p class="ps-mini">Depuis le {vue["debut"]:%d/%m} : {res}. Sans argent réel.</p></div>')
 
 
@@ -527,93 +660,233 @@ def bloc_robot(vue):
     if not vue or vue.get("erreur"):
         return (f'<section><h2>Robot papier</h2><p class="pourquoi">Indisponible : '
                 f'{esc((vue or {}).get("erreur", "pas de données"))}.</p></section>')
-    R = vue["robot"]
-    h = []
-    intro = (f'<p class="pourquoi">Le robot trade tout seul depuis le <b>{vue["debut"]:%d/%m/%Y à %H:%M}</b>, à chaque passage du '
-             f'terminal, <b>sans argent réel</b>. Ses règles sont fixées à l\'avance et ne changent jamais : ce registre est un '
-             f'test en direct, impossible à arranger après coup. Il engage chaque stratégie selon ses résultats en direct : '
-             f'un quart du risque pendant les {OBSERVATION} premiers trades, puis plus de risque si elle gagne, et plus rien si elle perd. '
-             f'Compte de référence : {fr(vue["capital"], 0)} $ à {fr(RISQUE_PCT, 0)} % de risque par trade.</p>')
-    if R.get("n"):
-        kp = [("Trades clos", f'{R["n"]}', f'en {vue["jours"]} jours'),
-              ("Résultat", f'{fr(R["total"], 2, True)} R', f'{fr(vue["dollars"], 0, True)} $ sur le compte de référence'),
-              ("Réussite", f'{R["reussite"] * 100:.0f} %', ""), ("Gain moyen", f'{fr(R["moy"], 3, True)} R', "par trade, pondéré"),
-              ("Profit factor", "∞" if R["pf"] is None else fr(R["pf"], 2), "gains ÷ pertes"),
-              ("Pire baisse", f'{fr(R["dd"], 2, True)} R', f'pire série : {R["pire"]} pertes')]
+    D, J = vue["direct"], vue.get("rejeu")
+    R = D["stats"]
+    cl = lambda v: "up" if (v or 0) > 0 else ("down" if (v or 0) < 0 else "")
+    en_ligne = [m for m, i in vue["marches"].items() if i.get("ok")]
+    cel = vue["cellules"]
+    nb_eng = sum(1 for c in cel.values() if c["statut"] == "engagée")
+    nb_off = sum(1 for c in cel.values() if c["statut"] == "coupée")
+
+    # ---- bandeau défilant
+    ev = [f'{MARCHES[t["marche"]]["sym"]} · {t["strat"]} · {"ACHAT" if t["sens"] > 0 else "VENTE"} OUVERT {fpx(t["entree"])} · {fr(t.get("latent"), 2, True)} R'
+          for t in vue["ouverts"]]
+    ev += [f'{MARCHES[a_["marche"]]["sym"]} · ASIE · ORDRE {"ACHAT" if a_["sens"] > 0 else "VENTE"} À {fpx(a_["niveau"])}' for a_ in vue["attentes"]]
+    ev += [f'{MARCHES[t["marche"]]["sym"]} · {t["strat"]} · CLOS {fr(t["R"], 2, True)} R ({t["issue"]})' for t in D["trades"][:8]]
+    ev += [f'{len(en_ligne)} MARCHÉS EN LIGNE', f'{len(cel)} CELLULES · {nb_eng} ENGAGÉES · {nb_off} COUPÉES',
+           'COMPTE PAPIER : AUCUN ARGENT RÉEL', 'RÈGLES FIXES · REGISTRE FIGÉ']
+    defil = "".join(f'<span>{esc(x)}</span>' for x in ev)
+    tape = (f'<div class="rx-tape"><b class="rx-live">EN DIRECT</b><div class="rx-defil"><div>{defil}{defil}</div></div></div>')
+
+    # ---- portefeuille
+    wallet = (f'<div class="rx-p rx-wallet"><div class="rx-h"><span>Compte papier · en direct</span><i>depuis le {vue["debut"]:%d/%m %H:%M}</i></div>'
+              f'<div class="rx-big {cl(vue["dollars"]) or "zero"}">{fr(vue["dollars"], 0, True)} $</div>'
+              f'<div class="rx-kv"><div><span>Résultat</span><b class="{cl(R.get("total"))}">{fr(R.get("total", 0.0), 2, True)} R</b></div>'
+              f'<div><span>Trades clos</span><b>{R.get("n", 0)}</b></div>'
+              f'<div><span>Réussite</span><b>{(str(round(R["reussite"] * 100)) + " %") if R.get("n") else "—"}</b></div>'
+              f'<div><span>Positions</span><b>{len(vue["ouverts"])}</b></div></div>'
+              + (f'<div class="rx-rejeu"><div class="rx-h"><span>Rejeu {REJEU_JOURS} jours · simulation</span><i>hors registre</i></div>'
+                 f'<div class="rx-big2 {cl(J["dollars"])}">{fr(J["dollars"], 0, True)} $</div>'
+                 f'<p>{J["stats"]["n"]} trades · {fr(J["stats"]["total"], 1, True)} R · réussite {J["stats"]["reussite"] * 100:.0f} % · '
+                 f'pire baisse {fr(J["stats"]["dd"], 1, True)} R. Ce que les mêmes règles auraient donné sur le passé récent : '
+                 f'un repère, pas un résultat.</p></div>' if J and J["stats"].get("n") else "")
+              + f'<p class="rx-note">Compte de référence {fr(vue["capital"], 0)} $, {fr(RISQUE_PCT, 0)} % de risque plein. Aucun argent réel.</p></div>')
+
+    # ---- courbe
+    src = D if R.get("n", 0) >= 2 else J
+    graph = (f'<div class="rx-p"><div class="rx-h"><span>Courbe du compte · {esc(src["titre"]) if src else ""}</span>'
+             f'<i>{"registre en direct" if src is D else "simulation en attendant les premiers trades"}</i></div>'
+             + (courbe(src["stats"]["courbe"]) if src and src["stats"].get("n") else '<p class="rx-vide">La courbe apparaît au deuxième trade clos.</p>')
+             + '</div>')
+
+    # ---- marchés
+    lm = ""
+    for m, M in MARCHES.items():
+        i = vue["marches"][m]
+        pos = [t for t in vue["ouverts"] if t["marche"] == m]
+        etat = (f'<b class="{cl(sum(t.get("latent") or 0 for t in pos))}">{len(pos)} pos.</b>' if pos else
+                ('<i>veille</i>' if i.get("ok") else '<i class="down">hors ligne</i>'))
+        lm += (f'<tr><td><span class="rx-tag {M["classe"]}">{esc(m)}</span>{esc(M["nom"])}</td>'
+               f'<td class="num">{fpx(i.get("px")) if i.get("ok") else "—"}</td>'
+               f'<td class="num {cl(i.get("var"))}">{fr((i.get("var") or 0) * 100, 2, True, " %") if i.get("var") is not None else "—"}</td>'
+               f'<td class="rx-sp">{mini(i.get("spark") or [], 90, 22)}</td><td class="num">{etat}</td></tr>')
+    marches = (f'<div class="rx-p"><div class="rx-h"><span>Marchés</span><i>prix · 24 h</i></div>'
+               f'<table class="rx-tab rx-mk">{lm}</table>'
+               f'<p class="rx-note">Memecoins (DOGE, SHIB, PEPE) : risque plafonné à 0,25 %. Très volatils et manipulables.</p></div>')
+
+    # ---- agents (stratégies)
+    ag = ""
+    for k, d in STRATS.items():
+        st_d, st_j = D["par_strat"][k], (J["par_strat"][k] if J else {"n": 0})
+        etats = [cel[(m, k)]["statut"] for m in MARCHES]
+        pts = "".join(f'<i class="{COUL_ETAT[e]}" title="{esc(m)} : {esc(e)}"></i>' for m, e in zip(MARCHES, etats))
+        ag += (f'<div class="rx-agent"><div class="rx-ag-t"><b>{esc(k)}</b><span>{esc(d["nom"])}</span></div>'
+               f'{mini(st_j.get("courbe") or [], 150, 34, zero=True)}'
+               f'<div class="rx-ag-b"><span class="rx-pts">{pts}</span>'
+               f'<span>{("direct " + fr(st_d["total"], 1, True) + " R") if st_d.get("n") else ("rejeu " + fr(st_j["total"], 1, True) + " R" if st_j.get("n") else "en attente")}</span></div></div>')
+
+    # ---- sphère : un disque par cellule (marché × stratégie) et par trade
+    disques = []
+    for (m, k), c in cel.items():
+        disques.append({"k": "c", "e": COUL_ETAT[c["statut"]], "o": 1 if c["ouvert"] else 0})
+    for t in D["trades"][:60]:
+        disques.append({"k": "t", "e": "up" if t["R"] > 0 else "down", "o": 0})
+    if J:
+        for t in J["trades"][:max(0, 96 - len(disques))]:
+            disques.append({"k": "s", "e": "up" if t["R"] > 0 else "down", "o": 0})
+    sphere = (f'<div class="rx-sphere"><div class="rx-h"><span>Réseau du robot</span><i>{len(cel)} cellules · {len(disques) - len(cel)} trades</i></div>'
+              f'<canvas id="rx-canvas" aria-label="Sphère animée : un disque par cellule marché × stratégie et par trade"></canvas>'
+              f'<script type="application/json" id="rx-data">{json.dumps({"d": disques})}</script>'
+              f'<div class="rx-leg"><span><i class="obs"></i>cellule en observation</span><span><i class="eng"></i>engagée</span>'
+              f'<span><i class="off"></i>coupée</span><span><i class="up"></i>trade gagnant</span><span><i class="down"></i>trade perdant</span>'
+              f'<span><i class="pulse"></i>position ouverte</span></div></div>')
+
+    # ---- derniers ordres
+    lst = "".join(ligne_trade(t) for t in vue["ouverts"][:6]) + "".join(ligne_trade(t) for t in D["trades"][:10])
+    if J:
+        lst += "".join(ligne_trade(t, True) for t in J["trades"][:max(0, 12 - len(vue["ouverts"][:6]) - len(D["trades"][:10]))])
+    fills = (f'<div class="rx-p rx-fills"><div class="rx-h"><span>Derniers ordres</span><i>ouverts, clos, puis rejeu</i></div>'
+             f'<ul>{lst or "<li class=rx-vide>Aucun ordre pour l’instant.</li>"}</ul></div>')
+
+    # ---- grille marchés × stratégies
+    tete = "".join(f'<th>{esc(k)}</th>' for k in STRATS)
+    gr = ""
+    for m, M in MARCHES.items():
+        gr += f'<tr><th scope="row"><span class="rx-tag {M["classe"]}">{esc(m)}</span></th>'
+        for k in STRATS:
+            c = cel[(m, k)]
+            st = c["stats"]
+            gr += (f'<td class="rx-c {COUL_ETAT[c["statut"]]}{" rx-o" if c["ouvert"] else ""}" title="{esc(M["nom"])} · {esc(STRATS[k]["nom"])} : {esc(c["statut"])}">'
+                   f'<b>{fr(st["total"], 1, True) if st.get("n") else "·"}</b><small>{st.get("n", 0)} tr.</small><small>{fr(c["poids"] * RISQUE_PCT, 2)} %</small></td>')
+        gr += '</tr>'
+    grille = (f'<div class="rx-p"><div class="rx-h"><span>Grille marchés × stratégies</span><i>résultat en direct (R) · risque engagé</i></div>'
+              f'<table class="rx-grille"><thead><tr><th></th>{tete}</tr></thead><tbody>{gr}</tbody></table>'
+              f'<div class="rx-leg"><span><i class="obs"></i>observation (0,25 %)</span><span><i class="eng"></i>engagée</span>'
+              f'<span><i class="off"></i>coupée (0 %)</span><span><i class="hl"></i>hors ligne</span></div></div>')
+
+    # ---- journal
+    src_t = [(t, False) for t in D["trades"][:40]] + ([(t, True) for t in J["trades"][:40]] if J else [])
+    lj = "".join(
+        f'<tr class="{"rx-sim" if sim else ""}"><td>{heure(t["t_sortie"])}</td><td><span class="rx-tag {MARCHES[t["marche"]]["classe"]}">{esc(t["marche"])}</span></td>'
+        f'<td>{esc(t["strat"])}</td><td class="{"up" if t["sens"] > 0 else "down"}">{"A" if t["sens"] > 0 else "V"}</td>'
+        f'<td class="num">{fpx(t["entree"])}</td><td class="num">{fpx(t["sortie"])}</td>'
+        f'<td class="num {cl(t["R"])}">{fr(t["R"], 2, True)}</td><td>{"rejeu" if sim else esc(t["issue"])}</td></tr>' for t, sim in src_t[:60])
+    journal = (f'<div class="rx-p"><div class="rx-h"><span>Journal des trades</span><i>{R.get("n", 0)} en direct'
+               f'{" · rejeu en gris" if J else ""}</i></div><div class="rx-scroll"><table class="rx-tab rx-jr"><thead><tr><th>Clos le</th>'
+               f'<th>Marché</th><th>Strat.</th><th></th><th>Entrée</th><th>Sortie</th><th>R</th><th>Issue</th></tr></thead>'
+               f'<tbody>{lj or "<tr><td colspan=8 class=rx-vide>Pas encore de trade clos.</td></tr>"}</tbody></table></div></div>')
+
+    # ---- Monte Carlo
+    base = D if R.get("n", 0) >= 15 else J
+    mc = monte_carlo(base["R"]) if base else None
+    if mc:
+        fan = (f'<div class="rx-p"><div class="rx-h"><span>Éventail Monte Carlo · {mc["n"]} prochains trades</span>'
+               f'<i>tiré des trades {esc(base["titre"])}</i></div>{svg_eventail(mc)}'
+               f'<div class="rx-kv rx-kv4"><div><span>Médiane</span><b class="{cl(mc["p50"][-1])}">{fr(float(mc["p50"][-1]), 1, True)} R</b></div>'
+               f'<div><span>9 cas sur 10</span><b>{fr(float(mc["p5"][-1]), 0, True)} à {fr(float(mc["p95"][-1]), 0, True)}</b></div>'
+               f'<div><span>Finit en perte</span><b>{mc["perte"] * 100:.0f} %</b></div>'
+               f'<div><span>Creux médian</span><b class="down">{fr(mc["dd_med"], 1, True)} R</b></div></div></div>')
     else:
-        kp = [("Trades clos", "0", f'démarré il y a {vue["jours"]} jour{"s" if vue["jours"] > 1 else ""}'),
-              ("Positions ouvertes", str(len(vue["ouverts"])), "")]
-    kps = "".join(f'<div><span class="k">{esc(k)}</span><b>{esc(v)}</b><small>{esc(s)}</small></div>' for k, v, s in kp)
-    h.append(f'<section><h2>Le robot</h2>{intro}<div class="rb-kpis">{kps}</div>'
-             + (f'<div class="rb-graph">{courbe(R["courbe"])}</div>' if R.get("n") else "")
-             + (f'<p class="rb-avert">Moins de 30 trades : le résultat dépend encore surtout du hasard. Il faut en général '
-                f'2 à 3 mois et au moins 50 trades avant de juger.</p>' if R.get("n", 0) < 30 else "") + '</section>')
-    # positions ouvertes
+        fan = ('<div class="rx-p"><div class="rx-h"><span>Éventail Monte Carlo</span></div>'
+               '<p class="rx-vide">Disponible à partir de 15 trades.</p></div>')
+
+    centre = (f'<div class="rx" id="rx">{tape}<div class="rx-r1">{wallet}{graph}{marches}</div>'
+              f'<div class="rx-r2"><div class="rx-agents"><div class="rx-h"><span>Stratégies</span><i>courbe du rejeu · état par marché</i></div>{ag}</div>'
+              f'{sphere}{fills}</div><div class="rx-r3">{grille}{journal}{fan}</div></div>')
+
+    # ---- détail sous le centre de contrôle
     lig = ""
     for t in vue["ouverts"]:
-        lig += (f'<tr><td>{esc(STRATS[t["strat"]]["nom"])}</td><td class="{"up" if t["sens"] > 0 else "down"}">{"Achat" if t["sens"] > 0 else "Vente"}</td>'
-                f'<td>{heure(t["t_entree"])}</td><td class="num">{fr(t["entree"])}</td><td class="num">{fr(t["stop"])}</td>'
-                f'<td class="num">{fr(t.get("objectif"))}</td><td class="num">{fr(t["poids"] * RISQUE_PCT, 2)} %</td>'
-                f'<td class="num {"up" if (t.get("latent") or 0) > 0 else "down"}">{fr(t.get("latent"), 2, True)} R</td>'
-                f'<td>{esc(t.get("note", ""))}</td></tr>')
-    at = vue.get("attente")
-    if at:
-        lig += (f'<tr class="rb-att"><td>{esc(STRATS["ASIE"]["nom"])}</td><td class="{"up" if at["sens"] > 0 else "down"}">'
-                f'Ordre {"achat" if at["sens"] > 0 else "vente"}</td><td>jusqu\'à {P.depuis_horloge(at["expire"]):%H:%M}</td>'
-                f'<td class="num">{fr(at["niveau"])}</td><td class="num">{fr(at["stop"])}</td><td class="num">{fr(at["objectif"])}</td>'
-                f'<td></td><td></td><td>ordre stop en attente</td></tr>')
-    h.append('<section><h2>Positions et ordres</h2><p class="pourquoi">Prix du future converti, comme tous les calculs du plan ; '
-             'le résultat latent compte les frais.</p>'
-             + (f'<div class="tbl"><table class="rb-tab"><thead><tr><th>Stratégie</th><th>Sens</th><th>Entrée le</th><th>Entrée</th>'
-                f'<th>Stop</th><th>Objectif</th><th>Risque</th><th>Latent</th><th></th></tr></thead><tbody>{lig}</tbody></table></div>'
-                if lig else '<p class="vide">Aucune position ouverte et aucun ordre en attente.</p>') + '</section>')
-    # stratégies
-    cartes = ""
-    for nom, S in vue["strats"].items():
-        st, d = S["stats"], STRATS[nom]
-        etat = {"observation": ("Observation", "warn"), "engagée": ("Engagée", "up"), "coupée": ("Coupée", "down")}[S["statut"]]
-        chiffres = (f'{st["n"]} trades · {fr(st["total"], 1, True)} R · réussite {st["reussite"] * 100:.0f} %'
-                    if st.get("n") else "pas encore de trade clos")
-        cartes += (f'<div class="rb-strat"><div class="rb-st-tete"><b>{esc(d["nom"])}</b><span class="rb-etat {etat[1]}">{etat[0]}</span></div>'
-                   f'<p>{esc(d["court"])}</p><p class="ps-mini">{esc(d["ut"])} · {esc(d["horizon"])}</p>'
-                   f'<div class="rb-st-ch"><span>{esc(chiffres)}</span><span>risque engagé {fr(S["poids"] * RISQUE_PCT, 2)} %</span></div>'
-                   + (f'<p class="rb-panne">En panne : {esc(vue["pannes"][nom])}</p>' if nom in vue.get("pannes", {}) else "")
-                   + '</div>')
-    h.append(f'<section><h2>Ses quatre stratégies</h2><p class="pourquoi">Chacune a ses règles écrites à l\'avance (onglet Labo '
-             f'pour leurs résultats au backtest). Le statut change tout seul selon les résultats en direct.</p>'
-             f'<div class="rb-strats">{cartes}</div></section>')
-    mc = monte_carlo([t["R"] for t in sorted(vue["historique"], key=lambda t: t["t_sortie"])]) if R.get("n", 0) >= 15 else None
-    if mc:
-        h.append(f'<section><h2>Éventail des {mc["n"]} prochains trades</h2><p class="pourquoi">2 000 suites de trades tirées au hasard '
-                 f'parmi les trades réels du robot (méthode de Monte Carlo). Si l\'avenir ressemble au passé récent : résultat '
-                 f'médian {fr(mc["p50"], 1, True)} R, 9 fois sur 10 entre {fr(mc["p5"], 1, True)} et {fr(mc["p95"], 1, True)} R, '
-                 f'perte au bout de {mc["n"]} trades dans {mc["perte"] * 100:.0f} % des cas, baisse médiane en cours de route '
-                 f'{fr(mc["dd_med"], 1, True)} R.</p></section>')
-    # registre
-    lig = "".join(
-        f'<tr><td>{esc(STRATS[t["strat"]]["nom"])}</td><td class="{"up" if t["sens"] > 0 else "down"}">{"Achat" if t["sens"] > 0 else "Vente"}</td>'
-        f'<td>{heure(t["t_entree"])}</td><td class="num">{fr(t["entree"])}</td><td>{heure(t["t_sortie"])}</td><td class="num">{fr(t["sortie"])}</td>'
-        f'<td>{esc(t["issue"])}</td><td class="num {"up" if t["R"] > 0 else "down"}">{fr(t["R"], 2, True)} R</td>'
-        f'<td class="num">{fr(t.get("poids", 0) * RISQUE_PCT, 2)} %</td></tr>' for t in vue["historique"])
-    h.append('<section><h2>Registre des trades clos</h2><p class="pourquoi">Un trade clos est figé : il ne peut plus être modifié.</p>'
-             + (f'<div class="tbl"><table class="rb-tab"><thead><tr><th>Stratégie</th><th>Sens</th><th>Entrée le</th><th>Entrée</th>'
-                f'<th>Sortie le</th><th>Sortie</th><th>Issue</th><th>Résultat</th><th>Risque engagé</th></tr></thead><tbody>{lig}</tbody></table></div>'
-                if lig else '<p class="vide">Pas encore de trade clos.</p>') + '</section>')
-    h.append('<section><h2>Vers le réel (MetaTrader 5)</h2><p class="pourquoi">Le robot ne passe aucun ordre réel. Le brancher sur ton '
-             'compte MT5 ne se fera que si tu le décides, après au moins 50 trades papier gagnants, avec des garde-fous : taille '
-             'maximale, arrêt automatique si les données sont en retard, coupure d\'urgence. Pour l\'instant, tu peux recopier '
-             'ses ordres à la main sur un compte démo MT5 et comparer.</p></section>')
-    return "".join(h)
+        lig += (f'<tr><td>{esc(MARCHES[t["marche"]]["sym"])}</td><td>{esc(STRATS[t["strat"]]["nom"])}</td>'
+                f'<td class="{"up" if t["sens"] > 0 else "down"}">{"Achat" if t["sens"] > 0 else "Vente"}</td>'
+                f'<td>{heure(t["t_entree"])}</td><td class="num">{fpx(t["entree"])}</td><td class="num">{fpx(t["stop"])}</td>'
+                f'<td class="num">{fpx(t.get("objectif"))}</td><td class="num">{fr(t["poids"] * RISQUE_PCT, 2)} %</td>'
+                f'<td class="num {cl(t.get("latent"))}">{fr(t.get("latent"), 2, True)} R</td></tr>')
+    for at in vue["attentes"]:
+        lig += (f'<tr class="rb-att"><td>{esc(MARCHES[at["marche"]]["sym"])}</td><td>{esc(STRATS["ASIE"]["nom"])}</td>'
+                f'<td>Ordre {"achat" if at["sens"] > 0 else "vente"}</td><td>jusqu\'à {P.depuis_horloge(at["expire"]):%H:%M}</td>'
+                f'<td class="num">{fpx(at["niveau"])}</td><td class="num">{fpx(at["stop"])}</td><td class="num">{fpx(at["objectif"])}</td><td></td><td>en attente</td></tr>')
+    regles = "".join(f'<div class="rb-strat"><div class="rb-st-tete"><b>{esc(k)} · {esc(d["nom"])}</b></div><p>{esc(d["court"])}</p>'
+                     f'<p class="ps-mini">{esc(d["ut"])} · {esc(d["horizon"])}</p></div>' for k, d in STRATS.items())
+    pannes = "".join(f'<li>{esc(k)} : {esc(v)}</li>' for k, v in vue.get("pannes", {}).items())
+    return (centre
+            + '<section><h2>Positions et ordres en attente</h2>'
+            + (f'<div class="tbl"><table class="rb-tab"><thead><tr><th>Marché</th><th>Stratégie</th><th>Sens</th><th>Entrée le</th><th>Entrée</th>'
+               f'<th>Stop</th><th>Objectif</th><th>Risque</th><th>Latent</th></tr></thead><tbody>{lig}</tbody></table></div>'
+               if lig else '<p class="vide">Aucune position ouverte et aucun ordre en attente.</p>') + '</section>'
+            + f'<section><h2>Comment le robot décide</h2><p class="pourquoi">Quatre stratégies aux règles écrites à l\'avance, sur six marchés : '
+              f'{len(cel)} cellules. Chaque cellule commence en observation (un quart du risque, 0,25 %). Après {OBSERVATION} trades clos, '
+              f'le robot lui donne plus de risque si elle gagne en direct, et la coupe si elle perd. Les memecoins restent plafonnés à 0,25 %. '
+              f'Frais comptés : 0,40 $ par aller-retour sur l\'or, 0,10 % sur BTC et ETH, 0,30 % sur les memecoins, plus le financement de nuit. '
+              f'Le rejeu applique les mêmes règles aux {REJEU_JOURS} derniers jours : c\'est une simulation, elle ne compte pas dans le registre.</p>'
+              f'<div class="rb-strats">{regles}</div>'
+              + (f'<ul class="rb-panne">{pannes}</ul>' if pannes else "") + '</section>'
+            + '<section><h2>Ce que ce robot n\'est pas</h2><p class="pourquoi">Il ne passe aucun ordre réel et ne garantit aucun gain. '
+              'Moins de 50 trades en direct, le résultat dépend surtout du hasard. Le brancher sur un compte MetaTrader 5 ne se fera que si '
+              'tu le décides, après des résultats en direct positifs, avec des garde-fous (taille maximale, arrêt si les données sont en retard, '
+              'coupure d\'urgence). Les memecoins ne sont presque jamais proposés par les brokers MT5.</p></section>')
 
 
 CSS = """
-/* Robot papier */
-.rb-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px}
-.rb-kpis div{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
-.rb-kpis b{font:700 20px var(--mono);letter-spacing:-.02em} .rb-kpis small{font-size:12px;color:var(--mute)}
-.rb-graph{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-.rb-svg{display:block;width:100%;height:auto} .rb-svg .gr{stroke:#2a2a31} .rb-svg .ax{fill:var(--mute);font:500 11px var(--mono)}
-.rb-avert{margin:10px 0 0;font-size:13px;color:var(--amber)}
+/* Robot : centre de contrôle */
+.rx{--rx:#57c7ff;--rxp:#0a0f1a;--rxl:#1b2a44;display:flex;flex-direction:column;gap:10px;margin-bottom:28px}
+.rx-p,.rx-sphere,.rx-agents{background:linear-gradient(180deg,#0c1322,#070b14);border:1px solid var(--rxl);border-radius:10px;padding:12px 14px;min-width:0}
+.rx-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px}
+.rx-h span{font:700 10.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--rx)}
+.rx-h i{font:500 11px var(--text);font-style:normal;color:var(--mute);text-align:right}
+.rx-tape{display:flex;align-items:center;gap:10px;border:1px solid var(--rxl);border-radius:8px;background:#060a12;padding:6px 10px;overflow:hidden}
+.rx-live{flex:none;font:700 10.5px var(--mono);letter-spacing:.1em;color:#fff;background:#d6303a;border-radius:4px;padding:3px 8px}
+.rx-defil{flex:1;overflow:hidden;white-space:nowrap;mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent)}
+.rx-defil>div{display:inline-block;animation:rx-defil 60s linear infinite}
+.rx-defil span{font:500 11.5px var(--mono);color:#9fb4d4;margin-right:28px} .rx-defil span::before{content:"◆ ";color:var(--rx)}
+@keyframes rx-defil{to{transform:translateX(-50%)}}
+.rx-r1{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) minmax(0,1.15fr);gap:10px}
+.rx-r2{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.7fr) minmax(0,1fr);gap:10px}
+.rx-r3{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) minmax(0,1.3fr);gap:10px}
+.rx-big{font:700 44px/1.05 var(--mono);letter-spacing:-.03em;color:var(--up);text-shadow:0 0 22px rgba(47,210,125,.35)}
+.rx-big.down{color:var(--down);text-shadow:0 0 22px rgba(255,90,95,.35)} .rx-big.zero{color:var(--ink);text-shadow:none}
+.rx-big2{font:700 24px var(--mono);letter-spacing:-.02em} .rx-big2.up{color:var(--up)} .rx-big2.down{color:var(--down)}
+.rx-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+.rx-kv4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.rx-kv div{display:flex;flex-direction:column;gap:1px;min-width:0} .rx-kv span{font-size:11px;color:var(--mute)}
+.rx-kv b{font:600 15px var(--mono)}
+.rx-rejeu{margin-top:12px;padding-top:10px;border-top:1px dashed var(--rxl)} .rx-rejeu p,.rx-note{margin:4px 0 0;font-size:12px;color:var(--mute);line-height:1.45}
+.rx-rejeu .rx-h span{color:var(--amber)}
+.rx-svg{display:block;width:100%;height:auto} .rx-svg .gr{stroke:#2b3c5c} .rx-svg .ax{fill:var(--mute);font:500 11px var(--mono)}
+.rx-svg .b1{fill:rgba(87,199,255,.10)} .rx-svg .b2{fill:rgba(87,199,255,.18)} .rx-svg .ex{fill:none;stroke:rgba(159,180,212,.22);stroke-width:1}
+.rx-svg .med{fill:none;stroke:#fff;stroke-width:2} .rx-svg .hu{fill:var(--up)} .rx-svg .hd{fill:var(--down)}
+.rx-mini{display:block;width:100%;height:30px} .rx-mini .z{stroke:#2b3c5c}
+.rx-tab{width:100%;border-collapse:collapse;font-size:12.5px}
+.rx-tab td,.rx-tab th{padding:6px 6px;border-bottom:1px solid #131d30;white-space:nowrap;text-align:left}
+.rx-tab th{font:600 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.rx-tab td.num{text-align:right;font-family:var(--mono)} .rx-tab i{font-style:normal;color:var(--mute)}
+.rx-sp{width:90px} .rx-sp .rx-mini{height:22px}
+.rx-tag{display:inline-block;font:700 10px var(--mono);letter-spacing:.04em;border-radius:4px;padding:1px 5px;margin-right:7px;border:1px solid}
+.rx-tag.or{color:#ffb340;border-color:rgba(255,179,64,.5)} .rx-tag.crypto{color:var(--rx);border-color:rgba(87,199,255,.5)}
+.rx-tag.meme{color:#ff7ad9;border-color:rgba(255,122,217,.5)}
+.rx-agents{display:flex;flex-direction:column;gap:8px}
+.rx-agent{border:1px solid var(--rxl);border-radius:8px;padding:8px 10px;background:#070c16}
+.rx-ag-t{display:flex;align-items:baseline;gap:8px} .rx-ag-t b{font:700 13px var(--mono);color:var(--rx)} .rx-ag-t span{font-size:12px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rx-ag-b{display:flex;justify-content:space-between;align-items:center;gap:8px;font:500 11.5px var(--mono);color:var(--mute)}
+.rx-pts{display:inline-flex;gap:3px} .rx-pts i,.rx-leg i{display:inline-block;width:8px;height:8px;border-radius:50%}
+.rx i.obs{background:#ffb340} .rx i.eng{background:var(--up)} .rx i.off{background:#5b6170} .rx i.hl{background:#2a2f3a}
+.rx i.up{background:var(--up)} .rx i.down{background:var(--down)} .rx i.pulse{background:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.25)}
+.rx-sphere{display:flex;flex-direction:column;background:radial-gradient(ellipse at 50% 45%,#0f1b33 0%,#070b14 70%)}
+#rx-canvas{display:block;width:100%;height:460px}
+.rx-leg{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:11.5px;color:var(--mute);margin-top:8px} .rx-leg span{display:inline-flex;align-items:center;gap:6px}
+.rx-fills ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:470px;overflow-y:auto}
+.rx-fills li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:4px;border:1px solid var(--rxl);border-radius:7px;padding:6px 8px;background:#070c16}
+.rx-lt{font:500 12.5px var(--mono);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .rx-lt small{display:block;font-size:11px;color:var(--mute)}
+.rx-fills b{font:700 13px var(--mono);text-align:right} .rx-fills b i{display:block;font:500 10px var(--text);font-style:normal;color:var(--mute)}
+.rx-sim{opacity:.55}
+.rx-grille{width:100%;border-collapse:separate;border-spacing:4px;table-layout:fixed}
+.rx-grille th{font:700 10.5px var(--mono);color:var(--mute);text-align:center;padding:2px} .rx-grille tbody th{text-align:left;width:58px}
+.rx-c{border-radius:7px;padding:7px 4px;text-align:center;border:1px solid var(--rxl);background:#0a1120}
+.rx-c b{display:block;font:700 14px var(--mono)} .rx-c small{display:block;font:500 10px var(--mono);color:var(--mute);white-space:nowrap;overflow:hidden}
+.rx-c.obs{border-color:rgba(255,179,64,.45)} .rx-c.eng{border-color:rgba(47,210,125,.7);background:rgba(47,210,125,.10)}
+.rx-c.off{opacity:.5} .rx-c.hl{opacity:.3} .rx-c.rx-o{box-shadow:0 0 0 2px rgba(255,255,255,.55) inset}
+.rx-scroll{max-height:330px;overflow:auto}
+.rx-vide{color:var(--mute);font-size:13px;padding:14px 4px}
 .rb-tab{width:100%;border-collapse:collapse;font-size:13.5px}
 .rb-tab th{text-align:left;font:600 10.5px var(--text);letter-spacing:.07em;text-transform:uppercase;color:var(--mute);padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 .rb-tab td{padding:8px 10px;border-bottom:1px solid var(--band2);white-space:nowrap}
@@ -621,9 +894,74 @@ CSS = """
 .rb-strats{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
 .rb-strat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}
 .rb-strat p{margin:0;font-size:13.5px;line-height:1.45}
-.rb-st-tete{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.rb-etat{font:700 11px var(--text);border:1px solid currentColor;border-radius:5px;padding:2px 8px}
-.rb-st-ch{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;font:500 12.5px var(--mono);color:var(--mute);padding-top:6px;border-top:1px solid var(--band2)}
-.rb-panne{color:var(--down)!important;font-size:12.5px!important}
+.rb-panne{color:var(--down);font-size:12.5px}
 .rb-carte td:nth-child(2){white-space:nowrap}
+@media (max-width:1250px){.rx-r1,.rx-r3{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.rx-r1>:first-child{grid-column:1/-1}.rx-r3>:last-child{grid-column:1/-1}
+  .rx-r2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.rx-sphere{grid-column:1/-1;order:-1}}
+@media (max-width:760px){.rx-r1,.rx-r2,.rx-r3{grid-template-columns:minmax(0,1fr)}.rx-r1>*,.rx-r2>*,.rx-r3>*{grid-column:auto}
+  #rx-canvas{height:340px}.rx-big{font-size:36px}.rx-kv4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (prefers-reduced-motion:reduce){.rx-defil>div{animation:none}}
+"""
+
+JS = r"""
+(function(){
+/* Sphère du robot : un disque par cellule (marché × stratégie) et par trade. Elle lit ses données dans la page. */
+var pts = [], brut = null, t0 = performance.now();
+var calme = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+var COUL = {obs: '#ffb340', eng: '#2fd27d', off: '#5b6170', hl: '#2a2f3a', up: '#2fd27d', down: '#ff5a5f'};
+function lire(){
+  var el = document.getElementById('rx-data'); if (!el || el.textContent === brut) return;
+  brut = el.textContent; var D; try { D = JSON.parse(brut); } catch(e){ return; }
+  var n = D.d.length;
+  pts = D.d.map(function(d, i){ var y = 1 - 2 * (i + 0.5) / n, r = Math.sqrt(1 - y * y), a = i * 2.399963;
+    return {x: Math.cos(a) * r, y: y, z: Math.sin(a) * r, d: d, i: i}; });
+}
+function dessiner(now){
+  requestAnimationFrame(dessiner);
+  var cv = document.getElementById('rx-canvas'); if (!cv || !cv.offsetParent) return;
+  lire(); if (!pts.length) return;
+  var dpr = Math.min(2, window.devicePixelRatio || 1), w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)){ cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  var c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  var R = Math.min(w, h) * 0.42, cx = w / 2, cy = h / 2, t = (now - t0) / 1000;
+  var a = calme ? 0.7 : t / 9, ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(0.38), sb = Math.sin(0.38);
+  var P = pts.map(function(p){ var x = p.x * ca + p.z * sa, z = -p.x * sa + p.z * ca, y = p.y * cb - z * sb; z = p.y * sb + z * cb;
+    return {x: x, y: y, z: z, d: p.d, i: p.i}; });
+  var par = {}; P.forEach(function(p){ par[p.i] = p; });
+  var g = c.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.25);
+  g.addColorStop(0, 'rgba(87,199,255,.10)'); g.addColorStop(1, 'rgba(87,199,255,0)'); c.fillStyle = g; c.fillRect(0, 0, w, h);
+  var r0 = Math.max(7, Math.min(30, R * 1.75 / Math.sqrt(pts.length)));
+  function disque(p){
+    var av = p.z > 0, px = cx + p.x * R, py = cy + p.y * R, k = Math.max(0.14, Math.abs(p.z)), rot = Math.atan2(p.y, p.x);
+    var coul = COUL[p.d.e] || '#888', sim = p.d.k === 's', cel = p.d.k === 'c';
+    c.globalAlpha = (av ? 1 : 0.16) * (sim ? 0.6 : 1);
+    c.beginPath(); c.ellipse(px, py, r0 * k, r0, rot, 0, 6.2832); c.fillStyle = cel ? '#56617a' : '#3c4658'; c.fill();
+    c.beginPath(); c.ellipse(px, py, r0 * k * 0.68, r0 * 0.68, rot, 0, 6.2832); c.fillStyle = cel ? '#d8dee9' : '#8d97a8'; c.fill();
+    c.beginPath(); c.ellipse(px, py, r0 * k * 0.42, r0 * 0.42, rot, 0, 6.2832); c.fillStyle = cel ? '#c9a24a' : '#566072'; c.fill();
+    c.beginPath(); c.ellipse(px, py, r0 * k * 0.2, r0 * 0.2, rot, 0, 6.2832); c.fillStyle = coul; c.fill();
+    if (p.d.o && av){
+      var pu = calme ? 0.5 : (t * 1.2) % 1;
+      c.globalAlpha = 1 - pu; c.strokeStyle = '#fff'; c.lineWidth = 2;
+      c.beginPath(); c.ellipse(px, py, r0 * k * (1 + pu * 0.9), r0 * (1 + pu * 0.9), rot, 0, 6.2832); c.stroke();
+      c.globalAlpha = 0.55; c.lineWidth = 1.2; c.beginPath(); c.moveTo(cx, cy); c.lineTo(px, py); c.stroke();
+    }
+    c.globalAlpha = 1;
+  }
+  P.filter(function(p){ return p.z <= 0; }).sort(function(u, v){ return u.z - v.z; }).forEach(disque);
+  /* signaux : quelques liaisons qui s'allument entre disques voisins */
+  var n = pts.length, pas = Math.floor(t / 0.9);
+  c.lineWidth = 1.2;
+  for (var m = 0; m < 7 && !calme; m++){
+    var i = (pas * 7 + m * 13) % n, j = (i + 5 + (m * 3) % 8) % n, A = par[i], B = par[j];
+    if (!A || !B || A.z <= 0.05 || B.z <= 0.05) continue;
+    var f = 1 - ((t / 0.9) % 1);
+    c.globalAlpha = 0.55 * f; c.strokeStyle = COUL[A.d.e] || '#57c7ff';
+    c.beginPath(); c.moveTo(cx + A.x * R, cy + A.y * R); c.lineTo(cx + B.x * R, cy + B.y * R); c.stroke();
+    c.globalAlpha = f; c.fillStyle = '#fff'; c.beginPath(); c.arc(cx + B.x * R, cy + B.y * R, 2.4, 0, 6.2832); c.fill();
+  }
+  c.globalAlpha = 1;
+  P.filter(function(p){ return p.z > 0; }).sort(function(u, v){ return u.z - v.z; }).forEach(disque);
+}
+requestAnimationFrame(dessiner);
+})();
 """

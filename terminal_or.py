@@ -2494,12 +2494,46 @@ def sauver_robot(etat, site_dir=None):
         pass
 
 
+def bougies_robot(data, demo=False):
+    """Bougies 15 min et 1 h de chaque marché du robot : l'or (déjà chargé) et les cryptos."""
+    out = {"XAU": data.get("intraday")}
+    for cle, M in robot.MARCHES.items():
+        tk = M["yahoo"]
+        if not tk:
+            continue
+        if demo:
+            rng = np.random.default_rng(sum(map(ord, cle)))
+            fin = pd.Timestamp(maintenant()).floor("15min")
+            idx = pd.date_range(fin - pd.Timedelta(days=760), fin, freq="15min")
+            vol = {"crypto": 0.0028, "meme": 0.006}[M["classe"]]
+            base = {"BTC": 74000, "ETH": 2600, "DOGE": 0.16, "SHIB": 0.0000122, "PEPE": 0.0000081}[cle]
+            c = base * np.exp(np.cumsum(rng.normal(0, vol, len(idx)))[::-1] * -1 + 0)
+            c = c / c[-1] * base
+            o = np.r_[c[0], c[:-1]]
+            b = pd.DataFrame({"open": o, "close": c, "high": np.maximum(o, c) * (1 + np.abs(rng.normal(0, vol / 2, len(c)))),
+                              "low": np.minimum(o, c) * (1 - np.abs(rng.normal(0, vol / 2, len(c))))}, index=idx)
+            out[cle] = {"barres": b[b.index >= fin - pd.Timedelta(days=60)],
+                        "heures": b.resample("1h").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()}
+            continue
+        try:
+            b = extraire_ohlcv(telecharger_yahoo(tk, "60d", "15m"), tk)
+            h = extraire_ohlcv(telecharger_yahoo(tk, "730d", "1h"), tk)
+            if len(b) and len(h):
+                out[cle] = {"barres": b, "heures": h}
+        except Exception:
+            pass
+    manque = [c for c in robot.MARCHES if c not in out or out[c] is None]
+    noter("Robot · prix crypto", not manque, "tous les marchés chargés" if not manque else "indisponible : " + ", ".join(manque))
+    return out
+
+
 def faire_tourner_robot(data, a, demo=False):
     """Un passage du robot papier ; renvoie le nouvel état à sauver (None : ne rien écrire)."""
     if robot is None or ACTIF["sym"] != "XAU/USD":
         return None
     if demo:   # démonstration : un robot démarré il y a 50 jours
-        etat = {"version": 1, "debut": (P_horloge(maintenant()) - pd.Timedelta(days=50)).isoformat(), "trades": {}, "vus": {}}
+        etat = {"version": 2, "debuts": {c: (P_horloge(maintenant()) - pd.Timedelta(days=12)).isoformat() for c in robot.MARCHES},
+                "trades": {}, "vus": {}}
     else:
         etat = charger_robot()
         if etat == ROBOT_ERREUR:
@@ -2507,7 +2541,7 @@ def faire_tourner_robot(data, a, demo=False):
             a["robot"] = {"erreur": "registre momentanément illisible, le robot reprend au prochain passage"}
             return None
     try:
-        nouveau, vue, alertes = robot.avancer(etat, data.get("intraday"), maintenant(), COMPTE)
+        nouveau, vue, alertes = robot.avancer(etat, bougies_robot(data, demo), maintenant(), COMPTE)
     except Exception as e:
         noter("Robot papier", False, str(e)[:100])
         a["robot"] = {"erreur": str(e)[:100]}
@@ -7762,7 +7796,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
             f'{"<script>" + theme.JS + "</script>" if pro else ""}'
             f'{"<script>" + direct.JS + "</script>" if (pro and direct) else ""}'
-            f'{"<script>" + journal.JS + "</script>" if (pro and journal) else ""}</body></html>')
+            f'{"<script>" + journal.JS + "</script>" if (pro and journal) else ""}'
+            f'{"<script>" + robot.JS + "</script>" if (pro and robot) else ""}</body></html>')
 
 
 # ---------------------------------------------------------------------------
