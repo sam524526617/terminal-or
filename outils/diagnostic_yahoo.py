@@ -78,6 +78,21 @@ for t, sv in info.get("sauts") or []:
 for t, sv in info.get("sauts_15") or []:
     b, c = autour(g15, a15, t)
     print(f"  15 min {t:%Y-%m-%d %H:%M}  saut {sv:+6.1f} : {b}  ->  {c}")
+if info.get("actif"):
+    xz = charge(info["actif"], "730d", "1h")
+    for t, sv in (info.get("sauts") or [])[-5:]:
+        t = pd.Timestamp(t).tz_localize("UTC")
+        print(f"  --- bougies autour du {t:%Y-%m-%d %H:%M} (saut {sv:+.1f}) : heure | brut O C | corrigé O H L C | contrat O C")
+        for u in g1h.index[(g1h.index >= t - pd.Timedelta(hours=3)) & (g1h.index <= t + pd.Timedelta(hours=4))]:
+            b, c = g1h.loc[u], a1h.loc[u]
+            xx = xz.loc[u] if u in xz.index else None
+            print(f"    {u:%d %Hh} | {b['open']:8.1f} {b['close']:8.1f} | {c['open']:8.1f} {c['high']:8.1f} {c['low']:8.1f} {c['close']:8.1f} | "
+                  + (f"{xx['open']:8.1f} {xx['close']:8.1f}" if xx is not None else "       —"))
+        m = (a1h.index >= t - pd.Timedelta(hours=30)) & (a1h.index <= t + pd.Timedelta(hours=30))
+        for nom, df in (("brut", g1h), ("corrigé", a1h)):
+            trou = (df["open"] - df["close"].shift(1))[m]
+            gros = trou[trou.abs() > 0.5 * abs(sv)]
+            print(f"    trous de plus de la moitié du saut, {nom} : " + (" | ".join(f"{u:%d %Hh} {v:+.1f}" for u, v in gros.items()) or "aucun"))
 ok = all((df["high"] >= df[["open", "close"]].max(axis=1) - 1e-6).all() and (df["low"] <= df[["open", "close"]].min(axis=1) + 1e-6).all()
          for df in (a15, a1h))
 print("  cohérence des bougies corrigées (haut >= ouverture et clôture >= bas) :", "ok" if ok else "PROBLÈME")

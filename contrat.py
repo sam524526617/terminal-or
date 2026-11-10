@@ -133,7 +133,8 @@ def changements(g, x, n=24, garde=True):
                and np.mean(np.abs(lr[k:k + n] - apres) < 0.35 * amp) >= 0.6)        # pas un mélange des deux
         if (SEUIL <= amp <= 0.03 and net and (not recent or abs(apres) <= tol)
                 and (not garde or fenetre_ok(t[k]))):
-            cands.append({"k": k, "avant": avant, "apres": apres})
+            bruit = (np.median(np.abs(lr[max(0, k - n):k] - avant)) + np.median(np.abs(lr[k:k + n] - apres))) / amp
+            cands.append({"k": k, "avant": avant, "apres": apres, "propre": bool(bruit <= 0.08)})
         i = max(j, k) + 1
     # Changement en cours, pas encore visible dans les médianes : sur les 3 derniers jours, des bougies identiques
     # au contrat (nouveau) et d'autres nettement au-dessus (ancien)
@@ -144,7 +145,7 @@ def changements(g, x, n=24, garde=True):
         if ident.any() and (~ident).any():
             avant = float(np.median(lr[span][~ident]))
             if SEUIL <= abs(avant) <= 0.03:
-                cands.append({"k": int(span[np.argmax(ident)]), "avant": avant, "apres": 0.0})
+                cands.append({"k": int(span[np.argmax(ident)]), "avant": avant, "apres": 0.0, "propre": True})
     # un seul changement par fin de mois : le plus net
     cands.sort(key=lambda r: r["k"])
     retenus = []
@@ -172,7 +173,8 @@ def changements(g, x, n=24, garde=True):
                 continue                                  # introuvable : on ne corrige pas ce changement-là
             dist = np.minimum(np.abs(o_[pos] - c_[pos - 1] - saut), np.abs(c_[pos] - o_[pos] - saut))
             t_roll = entre[int(np.argmin(dist))]
-        liste.append({"t": pd.Timestamp(t_roll), "saut": saut, "avant": r["avant"], "apres": r["apres"]})
+        liste.append({"t": pd.Timestamp(t_roll), "saut": saut, "avant": r["avant"], "apres": r["apres"],
+                      "propre": r["propre"] and len(entre) <= 1})
     return liste
 
 
@@ -181,7 +183,8 @@ def appliquer(g, x, liste):
     Règle générale : tout ce qui précède un changement est relevé du saut. Autour du changement (30 h), bougie par
     bougie : ce jour-là Yahoo mélange les deux contrats (une bougie ouvre sur l'ancien et clôture sur le nouveau, ou
     revient un moment sur l'ancien). L'ouverture et la clôture sont donc rangées séparément, en les comparant au
-    contrat x quand il a coté à ce moment-là, sinon par continuité avec la bougie précédente."""
+    contrat x quand la comparaison est propre (contrat liquide), sinon par continuité avec la bougie précédente
+    (un trou de la taille du saut entre deux bougies = retour sur l'autre contrat)."""
     if g is None or len(g) == 0 or not liste:
         return g
     out = g.copy()
@@ -205,8 +208,8 @@ def appliquer(g, x, liste):
         amp, saut = abs(r["avant"] - r["apres"]), r["saut"]
 
         def classe(val_x, val_g):                     # True : ancien contrat, False : nouveau, None : inconnu
-            if not (np.isfinite(val_x) and val_x > 0 and val_g > 0):
-                return None
+            if not r.get("propre") or not (np.isfinite(val_x) and val_x > 0 and val_g > 0):
+                return None                           # contrat de comparaison trop bruité : continuité seulement
             lr = np.log(val_x / val_g)
             if abs(lr - r["avant"]) < 0.35 * amp:
                 return True
