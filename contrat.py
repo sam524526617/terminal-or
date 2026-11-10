@@ -217,25 +217,37 @@ def appliquer(g, x, liste):
                 return False
             return None
         zone = np.where(np.asarray((idx >= r["t"] - pd.Timedelta(hours=30)) & (idx <= r["t"] + pd.Timedelta(hours=30))))[0]
-        prec = True                                   # la zone commence sur l'ancien contrat
+        d_anc, d_nouv = suivants + saut, suivants      # à ajouter à un prix de l'ancien / du nouveau contrat
+        conv = np.exp(-r["apres"])
+
+        def poser(q, co, cc):
+            O[q], C[q] = o0[q] + (d_anc if co else d_nouv), c0[q] + (d_anc if cc else d_nouv)
+            if co == cc:
+                H[q], L[q] = h0[q] + (d_anc if co else d_nouv), l0[q] + (d_anc if co else d_nouv)
+                return
+            # bougie à cheval sur les deux contrats : le prix le plus haut vient du contrat le plus cher
+            h_est = h0[q] + (d_nouv if saut > 0 else d_anc)
+            l_est = l0[q] + (d_anc if saut > 0 else d_nouv)
+            if r.get("propre") and np.isfinite(XH[q]) and np.isfinite(XL[q]):
+                h_est, l_est = XH[q] * conv + suivants, XL[q] * conv + suivants
+            H[q], L[q] = max(O[q], C[q], h_est), min(O[q], C[q], l_est)
+
+        prec, qp, co_p = True, None, True             # la zone commence sur l'ancien contrat
         for q in zone:
             co = classe(XO[q], o0[q])
             if co is None:                            # par continuité : l'ouverture suit la clôture précédente
                 ecart_o = o0[q] - c0[q - 1] if q > 0 else 0.0
-                co = False if abs(ecart_o - saut) < 0.35 * abs(saut) else (True if abs(ecart_o + saut) < 0.35 * abs(saut) else prec)
+                monte, descend = abs(ecart_o - saut) < 0.35 * abs(saut), abs(ecart_o + saut) < 0.35 * abs(saut)
+                co = False if monte else (True if descend else prec)
+                # un trou « vers l'ancien contrat » alors qu'on s'y croyait déjà : la bougie précédente avait en fait
+                # clôturé sur le nouveau (et inversement). On la corrige après coup.
+                if qp is not None and ((descend and prec) or (monte and not prec)):
+                    poser(qp, co_p, not prec)
             cc = classe(XC[q], c0[q])
             if cc is None:                            # la bougie du changement clôture, par définition, sur le nouveau
                 cc = False if idx[q] == r["t"] else co
-            do, dc = suivants + (saut if co else 0.0), suivants + (saut if cc else 0.0)
-            O[q], C[q] = o0[q] + do, c0[q] + dc
-            if co == cc:
-                H[q], L[q] = h0[q] + do, l0[q] + do
-            else:                                     # bougie à cheval sur les deux contrats : mèches du contrat x
-                conv = np.exp(-r["apres"])
-                xh = XH[q] * conv + suivants if np.isfinite(XH[q]) else -np.inf
-                xl = XL[q] * conv + suivants if np.isfinite(XL[q]) else np.inf
-                H[q], L[q] = max(O[q], C[q], xh), min(O[q], C[q], xl)
-            prec = cc
+            poser(q, co, cc)
+            prec, qp, co_p = cc, q, co
     out["open"], out["high"], out["low"], out["close"] = O, H, L, C
     return out
 
@@ -273,12 +285,28 @@ def ajuster_jours(df, liste):
     return out
 
 
+def saut_suspect(g15, l15, ecart_suivant):
+    """Garde-fou : pendant les jours où le changement est attendu, une bougie 15 min récente qui saute de la taille de
+    l'écart avec l'échéance suivante, alors qu'aucun changement n'a été corrigé, est signalée (instant UTC)."""
+    g = _utc(g15)
+    if g is None or not ecart_suivant or abs(ecart_suivant) < 5:
+        return None
+    fin = g.index[-1]
+    if not fenetre_ok(fin) or any((fin - r["t"]).days < 9 for r in l15):
+        return None
+    r = g[g.index >= fin - pd.Timedelta(days=3)]
+    trou = (r["open"] - g["close"].shift(1).reindex(r.index)).to_numpy(dtype=float)
+    corps = (r["close"] - r["open"]).to_numpy(dtype=float)
+    louche = (np.abs(trou - ecart_suivant) < 0.3 * abs(ecart_suivant)) | (np.abs(corps - ecart_suivant) < 0.3 * abs(ecart_suivant))
+    return r.index[np.argmax(louche)] if louche.any() else None
+
+
 def corriger(charger, g15, g1h, gj, aujourdhui):
     """Rend continues les bougies 15 min, 1 h et quotidiennes de GC=F.
     charger(ticker, periode, intervalle) -> bougies (colonnes open/high/low/close), vide si indisponible.
     Renvoie (g15, g1h, gj, info) ; en cas de doute rien n'est modifié et info["erreur"] dit pourquoi."""
     info = {"actif": None, "libelle": None, "sauts": [], "suivant": None, "ecart_suivant": None,
-            "changement": None, "erreur": None}
+            "changement": None, "erreur": None, "suspect": None}
     try:
         cands = contrats_proches(aujourdhui, 3)
         x15 = {tk: charger(tk, "60d", "15m") for tk, _, _ in cands}
@@ -306,6 +334,7 @@ def corriger(charger, g15, g1h, gj, aujourdhui):
         l1h.sort(key=lambda r: r["t"])
         info["sauts"] = [(r["t"], float(r["saut"])) for r in l1h]
         info["sauts_15"] = [(r["t"], float(r["saut"])) for r in l15]
+        info["suspect"] = saut_suspect(g15, l15, info.get("ecart_suivant"))
         return appliquer(g15, x15[tk], l15), appliquer(g1h, x1h, l1h), ajuster_jours(gj, l1h), info
     except Exception as e:      # une donnée manquante ne doit jamais arrêter le terminal
         info["erreur"] = f"correction impossible ({str(e)[:80]})"
