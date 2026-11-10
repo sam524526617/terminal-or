@@ -389,7 +389,7 @@ def carte_position(a):
             f'<p class="ps-mini">vert : signal contrarien plutôt haussier · rouge : plutôt baissier</p></div>')
 
 
-def bloc_poste(a, data, ajust, compte, statut, fiche, mots, now, echelle=None, stat_html=""):
+def bloc_poste(a, data, ajust, compte, statut, fiche, mots, now, echelle=None, stat_html="", robot_html=""):
     """echelle : carte « Niveaux en direct » (remplie par le navigateur) ; stat_html : carte des statistiques du moment.
     Chaque colonne est une zone que le robot rafraîchit ; la carte des niveaux en direct n'en fait pas partie,
     pour ne pas perdre ce que tu y as saisi."""
@@ -402,7 +402,7 @@ def bloc_poste(a, data, ajust, compte, statut, fiche, mots, now, echelle=None, s
     else:
         c3 = f'<div class="ps-col" data-zone="ps-c3">{col_surveiller(dz, a, data, ajust, fiche, mots, now)}</div>'
     return (f'<section class="ps" aria-label="Poste de pilotage">'
-            f'<div class="ps-col" data-zone="ps-c1">{col_decision(dz, statut, compte)}{carte_actus(data, mots, now)}</div>'
+            f'<div class="ps-col" data-zone="ps-c1">{col_decision(dz, statut, compte)}{robot_html}{carte_actus(data, mots, now)}</div>'
             f'<div class="ps-col" data-zone="ps-c2">{col_contexte(dz, a.get("fonda"))}{stat_html}</div>'
             f'{c3}'
             f'<div class="ps-col" data-zone="ps-c4">{col_marche(a, data, ajust, mots, now)}</div></section>')

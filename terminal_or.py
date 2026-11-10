@@ -67,6 +67,11 @@ except ImportError:
     direct = None
 
 try:
+    import robot  # robot papier : il trade tout seul ses stratégies, sans argent réel
+except ImportError:
+    robot = None
+
+try:
     import stats  # fonction STAT : statistiques de séance (probabilités de base)
 except ImportError:
     stats = None
@@ -2447,6 +2452,75 @@ def charger_historique():
         except Exception:
             pass
     return {"previsions": [], "annonces": []}
+
+
+FICHIER_ROBOT = "robot.json"
+ROBOT_ERREUR = "erreur"
+
+
+def charger_robot():
+    """Registre du robot : cache du robot GitHub, sinon la copie publiée avec le site.
+    Renvoie None au tout premier démarrage, ROBOT_ERREUR si le registre existe peut-être mais n'a pas pu être lu
+    (on ne l'écrase jamais dans ce cas)."""
+    f = DOSSIER_CACHE / FICHIER_ROBOT
+    if f.exists():
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    depot = os.environ.get("GITHUB_REPOSITORY", "")
+    if "/" not in depot:
+        return None
+    proprio, nom = depot.split("/", 1)
+    try:
+        r = SESSION.get(f"https://{proprio.lower()}.github.io/{nom}/{FICHIER_ROBOT}", timeout=20,
+                        headers={"User-Agent": UA_SCRIPT, "Cache-Control": "no-cache"})
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return ROBOT_ERREUR
+
+
+def sauver_robot(etat, site_dir=None):
+    txt = json.dumps(etat, ensure_ascii=False)
+    try:
+        DOSSIER_CACHE.mkdir(exist_ok=True)
+        (DOSSIER_CACHE / FICHIER_ROBOT).write_text(txt, encoding="utf-8")
+        if site_dir is not None:
+            (site_dir / FICHIER_ROBOT).write_text(txt, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def faire_tourner_robot(data, a, demo=False):
+    """Un passage du robot papier ; renvoie le nouvel état à sauver (None : ne rien écrire)."""
+    if robot is None or ACTIF["sym"] != "XAU/USD":
+        return None
+    if demo:   # démonstration : un robot démarré il y a 50 jours
+        etat = {"version": 1, "debut": (P_horloge(maintenant()) - pd.Timedelta(days=50)).isoformat(), "trades": {}, "vus": {}}
+    else:
+        etat = charger_robot()
+        if etat == ROBOT_ERREUR:
+            noter("Robot papier", False, "registre illisible : le robot saute ce passage pour ne rien perdre")
+            a["robot"] = {"erreur": "registre momentanément illisible, le robot reprend au prochain passage"}
+            return None
+    try:
+        nouveau, vue, alertes = robot.avancer(etat, data.get("intraday"), maintenant(), COMPTE)
+    except Exception as e:
+        noter("Robot papier", False, str(e)[:100])
+        a["robot"] = {"erreur": str(e)[:100]}
+        return None
+    a["robot"], a["robot_alertes"] = vue, alertes
+    if not vue.get("erreur"):
+        noter("Robot papier", True, f"{len(nouveau.get('trades', {}))} trades clos, {len(vue['ouverts'])} position(s) ouverte(s)")
+    return None if demo else nouveau
+
+
+def P_horloge(t):
+    import plan as P_
+    return P_.vers_horloge(pd.DatetimeIndex([t]))[0]
 
 
 def sauver_historique(hist, site_dir=None):
@@ -7521,10 +7595,10 @@ def eco_html(data, a):
 
 
 ONGLETS_V7 = [("marches", "Marchés"), ("data", "Données"), ("technique", "Technique"), ("fondamental", "Fondamental"), ("annonces", "Agenda éco"),
-              ("actus", "Actualités"), ("stat", "Statistiques"), ("labo", "Labo"), ("suivi", "Journal")]
+              ("actus", "Actualités"), ("stat", "Statistiques"), ("robot", "Robot"), ("labo", "Labo"), ("suivi", "Journal")]
 # Codes de fonction, à la Bloomberg : on les tape dans la barre de commande (touche « / ») puis Entrée
 CODES = {"accueil": "GO", "marches": "MKT", "data": "DATA", "technique": "TECH", "fondamental": "FA", "annonces": "ECO",
-         "actus": "NEWS", "stat": "STAT", "labo": "LAB", "suivi": "JRN"}
+         "actus": "NEWS", "stat": "STAT", "robot": "BOT", "labo": "LAB", "suivi": "JRN"}
 
 
 def v7(a):
@@ -7543,6 +7617,7 @@ def contenus_onglets(data, a, ia):
                             '<button type="button" class="or" data-ouvrir="calc">Ouvrir le calculateur</button></section>'
                             if direct else ''),
             "stat": stats.bloc_stat(a.get("stat")) if stats else "",
+            "robot": robot.bloc_robot(a.get("robot")) if robot else "",
             "fondamental": ((fondamental.bloc_html(a["fonda"], bloc_ia(ia)) if a.get("fonda") else bloc_ia(ia))
                             + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
                             + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
@@ -7651,7 +7726,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             ps = poste.bloc_poste(a, data, AJUST, COMPTE, labo.strategie_en_direct(labo.charger()) if labo else None,
                                   fiche_annonce(evt, a) if evt else None, MOTS_BAROMETRE, maintenant(),
                                   echelle=direct.carte_echelle() if direct else None,
-                                  stat_html=stats.carte_maintenant(a.get("stat")) if stats else "")
+                                  stat_html=stats.carte_maintenant(a.get("stat")) if stats else "",
+                                  robot_html=robot.carte_accueil(a.get("robot")) if robot else "")
             if ps and direct:
                 ps = direct.sante(a["decision"], a, maintenant()) + ps
         if ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
@@ -7680,7 +7756,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{robot.CSS if (pro and robot) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
@@ -7977,6 +8053,16 @@ def donnees_demo():
     barres = pd.DataFrame(lignes, index=ib_idx, columns=["open", "high", "low", "close", "volume"])
     heures = barres.resample("1h").agg({"open": "first", "high": "max", "low": "min", "close": "last",
                                         "volume": "sum"}).dropna()
+    # deux ans de bougies horaires avant la période 15 min (comme les vraies données Yahoo)
+    h_idx = pd.date_range(ib_idx[0] - pd.Timedelta(days=700), ib_idx[0] - pd.Timedelta(hours=1), freq="1h", tz=tz)
+    h_idx = h_idx[h_idx.weekday < 5]
+    pas = [random.gauss(0.00003, 0.0022 * profil[t.hour]) for t in h_idx]
+    fins = np.exp(np.cumsum(pas[::-1]))[::-1] * float(barres["open"].iloc[0])
+    ouv = np.r_[fins[0], fins[:-1]]
+    av = pd.DataFrame({"open": ouv, "close": fins, "high": np.maximum(ouv, fins) * (1 + np.abs(np.random.default_rng(5).normal(0, 0.0012, len(fins)))),
+                       "low": np.minimum(ouv, fins) * (1 - np.abs(np.random.default_rng(6).normal(0, 0.0012, len(fins)))),
+                       "volume": 3000.0}, index=h_idx)
+    heures = pd.concat([av, heures]).sort_index()
     jidx = y["or"].index[-250:]
     cl = y["or"].iloc[-250:].values
     jours = pd.DataFrame({"open": cl * 0.998, "high": cl * 1.009, "low": cl * 0.991, "close": cl}, index=jidx)
@@ -8129,6 +8215,7 @@ def generer(demo=False, watch_min=None, site_dir=None):
     ia = ({"texte": IA_DEMO, "json": lire_json_ia(IA_DEMO), "modele": "démonstration",
            "heure": maintenant().isoformat(), "raison": "démonstration"} if demo else analyste_ia(brief, a, data))
     a["ia"] = ia
+    etat_robot = faire_tourner_robot(data, a, demo)
     page = rendre_html(data, a, brief, ia, watch_min, site=site_dir is not None)
     if site_dir is not None:
         site_dir.mkdir(parents=True, exist_ok=True)
@@ -8137,6 +8224,8 @@ def generer(demo=False, watch_min=None, site_dir=None):
     if not demo:
         alerte_telephone(a, data["hist"], data)
         sauver_historique(data["hist"], site_dir)
+        if etat_robot is not None:
+            sauver_robot(etat_robot, site_dir)
     else:
         FICHIER_HTML.write_text(page, encoding="utf-8")
         FICHIER_BRIEF.write_text(brief, encoding="utf-8")
@@ -8261,7 +8350,7 @@ def alerte_telephone(a, hist, data=None):
     envoyees = hist.setdefault("alertes", {})
     for cle in [k for k, t in envoyees.items() if t < (now - timedelta(days=7)).isoformat()]:
         del envoyees[cle]
-    for cle, titre, msg, prio, tags in alertes_a_envoyer(a, data or {}, now):
+    for cle, titre, msg, prio, tags in alertes_a_envoyer(a, data or {}, now) + list(a.get("robot_alertes") or []):
         if cle in envoyees:
             continue
         try:
