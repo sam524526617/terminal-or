@@ -1,0 +1,21 @@
+# Diagnostic des données Yahoo du terminal (lancement manuel).
+name: Diagnostic des données
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Diagnostic Yahoo
+        run: python outils/diagnostic_yahoo.py
