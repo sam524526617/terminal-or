@@ -172,16 +172,19 @@ def ratios(a):
                   f'<td class="num {coul(r.get("d20"))}">{fr(r.get("d20"), 1, True, " %")}</td>'
                   f'<td class="num">{fr(r.get("pct1a"), 0)}</td><td>{spark(r.get("serie"))}</td>'
                   f'<td class="dt-expl">{esc(r.get("expl", ""))}</td></tr>' for r in rs)
-    return [carte("Ratios de l'or", f'<div class="tbl"><table class="dt-tab"><thead><tr><th>Ratio</th><th>Valeur</th><th>20 j</th>'
-                  f'<th>Percentile 1 an</th><th>3 mois</th><th>Lecture</th></tr></thead><tbody>{lig}</tbody></table></div>')]
+    return ['<div class="dt-plein">' + carte("Ratios de l'or", f'<div class="dt-defil"><table class="dt-tab"><thead><tr><th>Ratio</th><th>Valeur</th><th>20 j</th>'
+                  f'<th>Percentile 1 an</th><th>3 mois</th><th>Lecture</th></tr></thead><tbody>{lig}</tbody></table></div>') + '</div>']
 
 
 def devises(a):
     dv = a.get("devises") or []
     if not dv:
         return []
-    return [carte("L'or dans les autres devises", kv([(f'Or en {d["nom"].lower()}', f'{fr(d["prix"], 0)} · 5 j {fr(d["d5"], 2, True, " %")} · '
-                                                       f'20 j {fr(d["d20"], 2, True, " %")}', coul(d["d20"])) for d in dv]),
+    lig = "".join(f'<tr><th scope="row">Or en {esc(d["nom"].lower())}</th><td class="num">{fr(d["prix"], 0)}</td>'
+                  f'<td class="num {coul(d["d5"])}">{fr(d["d5"], 2, True, " %")}</td>'
+                  f'<td class="num {coul(d["d20"])}">{fr(d["d20"], 2, True, " %")}</td></tr>' for d in dv)
+    return [carte("L'or dans les autres devises", f'<div class="dt-defil"><table class="dt-tab"><thead><tr><th>Devise</th><th>Cours</th>'
+                  f'<th>5 j</th><th>20 j</th></tr></thead><tbody>{lig}</tbody></table></div>',
                   "Si l'or monte dans toutes les devises, c'est une vraie demande d'or ; s'il ne monte qu'en dollars, c'est surtout le dollar qui baisse.")]
 
 
@@ -229,7 +232,10 @@ CSS = """
 /* Données (DATA) */
 .dt-grille{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;align-items:start}
 .dt-grille.dt-large{grid-template-columns:repeat(auto-fit,minmax(460px,1fr))}
-.dt-carte{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.dt-carte{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0;overflow:hidden}
+.dt-plein{grid-column:1/-1;min-width:0}
+.dt-defil{overflow-x:auto;max-width:100%}
+.dt-kv td.num{white-space:normal;word-break:break-word}
 .dt-tete{font:600 10.5px var(--text);letter-spacing:.08em;text-transform:uppercase;color:var(--brass);margin-bottom:8px}
 .dt-kv{width:100%;border-collapse:collapse;font-size:13px}
 .dt-kv td{padding:5px 0;border-bottom:1px solid var(--band2)} .dt-kv td.num{text-align:right;font-family:var(--mono)}
@@ -241,7 +247,7 @@ CSS = """
 .dt-tab th{text-align:left;font:600 10.5px var(--text);letter-spacing:.06em;text-transform:uppercase;color:var(--mute);padding:6px 8px;border-bottom:1px solid var(--line)}
 .dt-tab tbody th{font:500 13px var(--text);text-transform:none;letter-spacing:0;color:var(--ink);white-space:nowrap}
 .dt-tab td{padding:6px 8px;border-bottom:1px solid var(--band2)} .dt-tab td.num{font-family:var(--mono);text-align:right;white-space:nowrap}
-.dt-expl{font-size:12px;color:var(--mute);min-width:200px}
+.dt-expl{font-size:12px;color:var(--mute);min-width:260px;white-space:normal;line-height:1.45}
 .dt-spark polyline{fill:none;stroke:var(--brass);stroke-width:1.3}
 .dt-cor{position:relative;display:inline-block;width:110px;height:7px;background:var(--band2);border-radius:4px;vertical-align:middle}
 .dt-cor i{position:absolute;top:0;bottom:0;border-radius:4px} .dt-cor i.up{background:var(--up)} .dt-cor i.down{background:var(--down)}

@@ -124,6 +124,10 @@ button.or{background:var(--brass);border-color:var(--brass);color:#14100a;font-w
 .minis{display:none}
 #p-graph .pb{min-height:560px}
 
+/* Tableaux : un tableau plus large que l'écran défile dans son cadre, jamais la page entière */
+.tbl,.dt-defil{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}
+.contenu section,.contenu details{max-width:100%;overflow-x:auto}
+.contenu .ps,.contenu .dz,.contenu .ps-tv{overflow:visible}
 /* Tableaux */
 table th{font-family:var(--text)}
 .m td,.m th{font-size:13.5px}
