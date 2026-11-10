@@ -8133,12 +8133,62 @@ def alertes_a_envoyer(a, data, maintenant_):
                         f"{e['titre']} à {e['date']:%H:%M} (prévu {e.get('prevision') or '?'}, précédent {e.get('precedent') or '?'}). "
                         f"Pas d'entrée de {(e['date'] - timedelta(minutes=30)):%H:%M} à {(e['date'] + timedelta(minutes=30)):%H:%M}.",
                         4, ["warning"]))
+    out += alertes_volatilite(a, data, maintenant_)
     f_ = {x[0]: x[2] for x in dz.get("filtres") or []}
     if not o_ and f_.get("Annonces") == "ok" and f_.get("Fondamental") == "ok" and f_.get("Tendance") == "ok" and f_.get("Zone") == "ok":
         texte_zone = next((x[1] for x in dz["filtres"] if x[0] == "Zone"), "")
         out.append((f"prepa|{maintenant_:%Y-%m-%d}|{texte_zone}", "Setup en préparation",
                     f"Tendance et fondamental validés, {texte_zone[:1].lower() + texte_zone[1:]}. Il ne manque que la cassure M15 qui laisse un FVG. "
                     f"{' '.join(dz.get('debloque') or [])}{demo}", 3, ["eyes"]))
+    return out
+
+
+VOL_SEUIL = 2.5        # alerte si l'amplitude de la dernière heure dépasse 2,5 fois l'amplitude horaire habituelle
+VOL_GVZ_PCT = 15.0     # alerte si la volatilité implicite de l'or (GVZ) bondit de plus de 15 % en un jour
+
+
+def alertes_volatilite(a, data, maintenant_):
+    """Forte volatilité : mouvement violent sur la dernière heure (bougies 15 min), ou bond de la volatilité implicite."""
+    out = []
+    intra = (data or {}).get("intraday") or {}
+    b = intra.get("barres")
+    if b is not None and len(b) > 200:
+        fin = pd.Timestamp(maintenant_)
+        try:
+            b = b[b.index + pd.Timedelta(minutes=15) <= fin.tz_convert(b.index.tz) if b.index.tz is not None else fin]
+        except Exception:
+            pass
+        if len(b) > 200 and (fin - b.index[-1].to_pydatetime()).total_seconds() < 3 * 3600:
+            heures = b.tail(10 * 96)
+            amp_h = (heures["high"].rolling(4).max() - heures["low"].rolling(4).min()).dropna()
+            base = float(amp_h.median()) if len(amp_h) else None
+            der = b.tail(4)
+            amp = float(der["high"].max() - der["low"].min())
+            mv = float(der["close"].iloc[-1] - der["open"].iloc[0])
+            if base and amp >= VOL_SEUIL * base:
+                fois = amp / base
+                cause = ""
+                for e in (data.get("cal") or []):
+                    if abs((e["date"] - maintenant_).total_seconds()) <= 75 * 60 and e["date"] <= maintenant_:
+                        cause = f"Cause probable : {e['titre']} publié à {e['date']:%H:%M}" + (f" (réel {e['reel']}, prévu {e['prevision']})" if e.get("reel") else "") + "."
+                if not cause:
+                    news = [it for items in (data.get("news") or {}).values() for it in items if it.get("date") is not None]
+                    if news:
+                        n = max(news, key=lambda x: x["date"])
+                        cause = f"Dernier titre : {n['titre']}"
+                out.append((f"vol|{maintenant_:%Y-%m-%d}|{maintenant_.hour // 2}", f"Forte volatilité · {nb(fois, 1)} fois la normale",
+                            f"L'or a bougé de {nb(amp, 1)} $ sur la dernière heure ({'hausse' if mv > 0 else 'baisse'} de {nb(abs(mv), 1)} $), "
+                            f"contre {nb(base, 1)} $ d'habitude. {cause}\nPrudence : écarts élargis et fausses cassures fréquentes, "
+                            f"réduis la taille ou attends que le marché se calme.", 4, ["zap"]))
+    gvz = pd.to_numeric(((data or {}).get("yahoo") or {}).get("gvz"), errors="coerce") if (data or {}).get("yahoo") else None
+    if gvz is not None:
+        gvz = gvz.dropna()
+        if len(gvz) >= 2:
+            ch = (float(gvz.iloc[-1]) / float(gvz.iloc[-2]) - 1) * 100
+            if ch >= VOL_GVZ_PCT:
+                out.append((f"gvz|{gvz.index[-1]}", f"Volatilité implicite en forte hausse (+{nb(ch, 0)} %)",
+                            f"Le GVZ (volatilité attendue de l'or par les options) passe à {nb(float(gvz.iloc[-1]), 1)} ({nb(ch, 0, True)} % sur la séance) : "
+                            f"le marché se prépare à de gros mouvements. Élargis tes stops ou réduis la taille.", 3, ["warning"]))
     return out
 
 
