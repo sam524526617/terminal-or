@@ -2501,12 +2501,15 @@ def bougies_robot(data, demo=False):
         tk = M["yahoo"]
         if not tk:
             continue
+        if not demo:
+            break
         if demo:
             rng = np.random.default_rng(sum(map(ord, cle)))
             fin = pd.Timestamp(maintenant()).floor("15min")
             idx = pd.date_range(fin - pd.Timedelta(days=760), fin, freq="15min")
             vol = {"crypto": 0.0028, "meme": 0.006}[M["classe"]]
-            base = {"BTC": 74000, "ETH": 2600, "DOGE": 0.16, "SHIB": 0.0000122, "PEPE": 0.0000081}[cle]
+            base = {"BTC": 74000, "ETH": 2600, "SOL": 150, "XRP": 0.62, "BNB": 580, "ADA": 0.41, "AVAX": 27, "LINK": 13.5, "DOGE": 0.16,
+                    "SHIB": 0.0000122, "PEPE": 0.0000081, "BONK": 0.000019, "WIF": 1.7, "FLOKI": 0.00012}.get(cle, 1.0)
             c = base * np.exp(np.cumsum(rng.normal(0, vol, len(idx)))[::-1] * -1 + 0)
             c = c / c[-1] * base
             o = np.r_[c[0], c[:-1]]
@@ -2515,13 +2518,24 @@ def bougies_robot(data, demo=False):
             out[cle] = {"barres": b[b.index >= fin - pd.Timedelta(days=60)],
                         "heures": b.resample("1h").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()}
             continue
+    if not demo:      # deux téléchargements groupés pour toutes les cryptos (au lieu de deux par marché)
+        tks = [M["yahoo"] for M in robot.MARCHES.values() if M["yahoo"]]
         try:
-            b = extraire_ohlcv(telecharger_yahoo(tk, "60d", "15m"), tk)
-            h = extraire_ohlcv(telecharger_yahoo(tk, "730d", "1h"), tk)
-            if len(b) and len(h):
-                out[cle] = {"barres": b, "heures": h}
+            d15, d1h = telecharger_yahoo(tks, "60d", "15m"), telecharger_yahoo(tks, "730d", "1h")
         except Exception:
-            pass
+            d15 = d1h = None
+        for cle, M in robot.MARCHES.items():
+            tk = M["yahoo"]
+            if not tk:
+                continue
+            try:
+                b, h = extraire_ohlcv(d15, tk), extraire_ohlcv(d1h, tk)
+                if tk not in (list(d15.columns.get_level_values(-1)) + list(d15.columns.get_level_values(0))):
+                    continue
+                if len(b) > 300 and len(h) > 6000:
+                    out[cle] = {"barres": b, "heures": h}
+            except Exception:
+                pass
     manque = [c for c in robot.MARCHES if c not in out or out[c] is None]
     noter("Robot · prix crypto", not manque, "tous les marchés chargés" if not manque else "indisponible : " + ", ".join(manque))
     return out
