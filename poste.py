@@ -67,7 +67,35 @@ def col_decision(dz, statut, compte):
                 f'DÉMO · stratégie {esc(statut["statut"])}</span>')
     tete = (f'<div class="ps-tete"><span class="k">Décision</span>{demo}'
             f'<span class="ps-maj">bougie 15 min de {dz["maj"]:%H:%M}</span></div>')
-    if o:
+    avert = ""
+    if dz.get("en_retard"):
+        avert += (f'<p class="ps-avert">Bougies en retard de {dz.get("retard_min", 0):.0f} min : cette décision date. '
+                  f'Vérifie ton graphique avant d\'agir.</p>')
+    if (dz.get("contrat") or {}).get("suspect") is not None:
+        avert += ('<p class="ps-avert">Changement de contrat du future en cours : un saut artificiel peut fausser les '
+                  'niveaux pendant quelques minutes. Vérifie sur ton graphique.</p>')
+    tete += avert
+    m = dz.get("marche") or {}
+    ferme = not m.get("ouvert", True) and not (o and dz.get("etat") in ("en cours", "tp1"))
+    if ferme:
+        r = m.get("reouverture")
+        quand = f"{JOURS[r.weekday()]} {r:%d/%m} à {r:%H:%M}" if r is not None else "bientôt"
+        t = dz.get("tend") or {}
+        sens = t.get("D", 0) if (t.get("D") and t.get("D") == t.get("H4") and t.get("H1") != -t.get("D")) else 0
+        suite = (f"À la réouverture, le plan ne cherchera que des {'achats' if sens > 0 else 'ventes'} "
+                 f"(Daily et H4 {'haussiers' if sens > 0 else 'baissiers'})." if sens else
+                 "À la réouverture, le plan n'a pas de sens tant que Daily, H4 et H1 ne sont pas alignés.")
+        deb = dz.get("debloque") or []
+        deb = [deb] if isinstance(deb, str) else deb
+        cls = "ps-rien"
+        corps = (f'<div class="ps-verdict"><b>FERMÉ</b><div><span class="ps-note">Marché fermé</span>'
+                 f'<small>{esc(m.get("raison") or "")}</small></div></div>'
+                 f'<p class="ps-sous">Réouverture <b>{esc(quand)}</b> (heure de Paris). Aucun ordre d\'ici là : '
+                 f'un ordre laissé pendant la fermeture peut être exécuté loin de son prix.</p>'
+                 f'<p class="ps-sous">{esc(suite)}</p>'
+                 + (f'<div class="ps-deb"><span class="k">À surveiller à la réouverture</span><ol>{"".join(f"<li>{esc(x)}</li>" for x in deb)}</ol></div>'
+                    if deb and not o else ""))
+    elif o:
         etat = {"attente": f"Ordre {('achat' if v > 0 else 'vente')} limite à placer",
                 "en cours": "Position du plan en cours", "tp1": "TP1 touché : stop au point d'entrée"}.get(dz["etat"], "")
         corps = (f'<div class="ps-verdict"><b>{MOT[v]}</b><div><span class="ps-note">Note {esc(dz["note"])}</span>'
@@ -119,8 +147,9 @@ def col_decision(dz, statut, compte):
             corps += (f'<p class="ps-freq">Ce plan donne en moyenne un signal tous les {max(1, round(60 / max(1, len(trades))))} jours '
                       f'({len(trades)} sur les 60 derniers jours) · dernier signal : {der:%d/%m}'
                       + (f', il y a {age} jour{"s" if age > 1 else ""}' if age else "") + '.</p>')
-    jour = (f'<div class="ps-jour"><div><span class="k">Aujourd\'hui</span><b>{dz["nb_jour"]} / {P.MAX_TRADES_JOUR} trades</b></div>'
-            f'<div><span class="k">Résultat</span><b class="{COUL[int(np.sign(round(dz["r_jour"], 2)))]}">{fr(dz["r_jour"], 1, True)} R</b></div>'
+    jour = (f'<div class="ps-verrou" id="jr-verrou" hidden></div>'
+            f'<div class="ps-jour"><div><span class="k" id="jr-auj-k">Aujourd\'hui (plan)</span><b id="jr-auj-n" data-plan="{dz["nb_jour"]} / {P.MAX_TRADES_JOUR} trades">{dz["nb_jour"]} / {P.MAX_TRADES_JOUR} trades</b></div>'
+            f'<div><span class="k">Résultat</span><b id="jr-auj-r" class="{COUL[int(np.sign(round(dz["r_jour"], 2)))]}" data-plan="{fr(dz["r_jour"], 1, True)} R">{fr(dz["r_jour"], 1, True)} R</b></div>'
             f'<div><span class="k">Risque / trade</span><b>{fr(compte.get("risque_pct", 1), 1)} %</b></div>'
             f'<div><span class="k">Arrêt du jour</span><b>{fr(P.PERTE_MAX_JOUR_R, 0)} R</b></div></div>')
     return f'<div class="ps-carte ps-dec {cls}">{tete}{corps}{jour}</div>'
@@ -260,7 +289,7 @@ def actus(news, mots, now, n=3):
     return out
 
 
-def col_surveiller(dz, a, data, ajust, fiche, mots, now):
+def col_surveiller(dz, a, data, ajust, fiche, mots, now, avec_niveaux=True):
     h = []
     if fiche:
         d = fiche["date"]
@@ -276,6 +305,8 @@ def col_surveiller(dz, a, data, ajust, fiche, mots, now):
     ag = agenda_jour(data.get("cal"), now)
     if ag:
         h[-1] = h[-1][:-len("</div>")] + ag + "</div>"
+    if not avec_niveaux:
+        return "".join(h)
     nv = niveaux_cles(dz, a.get("seance"), ajust)
     h.append(f'<div class="ps-carte"><div class="ps-tete"><span class="k">Niveaux clés</span><span class="ps-mini">écart au prix</span></div>'
              f'<table class="ps-niv">{nv}</table></div>')
@@ -330,11 +361,11 @@ def carte_seance(a, ajust):
             ses += (f'<tr class="{"ps-cours" if x.get("en_cours") else ""}"><td>{esc(x["nom"])}{" ●" if x.get("en_cours") else ""}</td>'
                     f'<td class="num">{fr(x["bas"] + ajust, 1)} – {fr(x["haut"] + ajust, 1)}</td>'
                     f'<td class="num">{fr(x["haut"] - x["bas"], 1)} $</td></tr>')
-    return (f'<div class="ps-carte"><div class="ps-tete"><span class="k">Prix et séance</span><span class="ps-mini">spot, référence de l\'analyse</span></div>'
-            f'<div class="ps-prix"><b id="ps-px-live">{fr(px, 2)}</b><span class="{"up" if (ch or 0) > 0 else "down" if (ch or 0) < 0 else ""}">'
+    return (f'<div class="ps-carte"><div class="ps-tete"><span class="k">Prix et séance</span><span class="ps-mini">spot, en direct</span></div>'
+            f'<div class="ps-prix"><b id="ps-px-live">{fr(px, 2)}</b><span id="dx-jvar" class="{"up" if (ch or 0) > 0 else "down" if (ch or 0) < 0 else ""}">'
             f'{fr(ch, 2, True)} ({fr(chp, 2, True, " %")})</span></div>'
-            f'<div class="ps-range"><span>{fr(bas, 1)}</span><div class="ps-rb"><i style="left:{pos:.0f}%"></i></div><span>{fr(haut, 1)}</span></div>'
-            f'<p class="ps-mini">Fourchette du jour · ATR {fr(s.get("atr"), 1)} $ · {fr(s.get("pct_atr"), 0)} % consommé</p>'
+            f'<div class="ps-range"><span id="dx-jb">{fr(bas, 1)}</span><div class="ps-rb"><i id="dx-jpos" style="left:{pos:.0f}%"></i></div><span id="dx-jh">{fr(haut, 1)}</span></div>'
+            f'<p class="ps-mini">Fourchette du jour · amplitude moyenne {fr(s.get("atr"), 1)} $ · <span id="dx-jpct">{fr(s.get("pct_atr"), 0)}</span> % faite</p>'
             f'{f"<table class=ps-ses>{ses}</table>" if ses else ""}</div>')
 
 
@@ -358,15 +389,23 @@ def carte_position(a):
             f'<p class="ps-mini">vert : signal contrarien plutôt haussier · rouge : plutôt baissier</p></div>')
 
 
-def bloc_poste(a, data, ajust, compte, statut, fiche, mots, now):
+def bloc_poste(a, data, ajust, compte, statut, fiche, mots, now, echelle=None, stat_html=""):
+    """echelle : carte « Niveaux en direct » (remplie par le navigateur) ; stat_html : carte des statistiques du moment.
+    Chaque colonne est une zone que le robot rafraîchit ; la carte des niveaux en direct n'en fait pas partie,
+    pour ne pas perdre ce que tu y as saisi."""
     dz = a.get("decision")
     if not dz or dz.get("erreur"):
         return ""
-    return (f'<section class="ps" data-zone="poste" aria-label="Poste de pilotage">'
-            f'<div class="ps-col">{col_decision(dz, statut, compte)}{carte_actus(data, mots, now)}</div>'
-            f'<div class="ps-col">{col_contexte(dz, a.get("fonda"))}</div>'
-            f'<div class="ps-col">{col_surveiller(dz, a, data, ajust, fiche, mots, now)}</div>'
-            f'<div class="ps-col">{col_marche(a, data, ajust, mots, now)}</div></section>')
+    if echelle:
+        c3 = (f'<div class="ps-col"><div class="ps-zone" data-zone="ps-c3">'
+              f'{col_surveiller(dz, a, data, ajust, fiche, mots, now, avec_niveaux=False)}</div>{echelle}</div>')
+    else:
+        c3 = f'<div class="ps-col" data-zone="ps-c3">{col_surveiller(dz, a, data, ajust, fiche, mots, now)}</div>'
+    return (f'<section class="ps" aria-label="Poste de pilotage">'
+            f'<div class="ps-col" data-zone="ps-c1">{col_decision(dz, statut, compte)}{carte_actus(data, mots, now)}</div>'
+            f'<div class="ps-col" data-zone="ps-c2">{col_contexte(dz, a.get("fonda"))}{stat_html}</div>'
+            f'{c3}'
+            f'<div class="ps-col" data-zone="ps-c4">{col_marche(a, data, ajust, mots, now)}</div></section>')
 
 
 CSS = """
@@ -407,6 +446,12 @@ p.ps-mini{margin:6px 0 0}
 .ps-jauge i{width:26px;height:6px;border-radius:3px;background:var(--band2)} .ps-jauge i.on{background:var(--brass)}
 .ps-jauge span{font:600 12px var(--mono);color:var(--mute);margin-left:6px}
 .ps-freq{margin:0;font-size:12.5px;color:var(--mute);line-height:1.45}
+.ps-avert{margin:0;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,90,95,.55);background:rgba(255,90,95,.09);color:var(--down);
+  font-size:13px;font-weight:600;line-height:1.45}
+.ps-verrou{padding:9px 11px;border-radius:8px;border:1px solid var(--down);background:rgba(255,90,95,.12);color:var(--down);
+  font:700 13px/1.45 var(--text)}
+.ps-verrou[hidden]{display:none}
+.ps-verrou small{display:block;font-weight:500;color:var(--ink);margin-top:2px}
 .ps-verdict div{display:flex;flex-direction:column;gap:3px}
 .ps-verdict small{font-size:13px;color:var(--ink)}
 .ps-note{align-self:flex-start;font:700 11px var(--text);border:1px solid currentColor;border-radius:5px;padding:2px 8px;color:var(--mute)}

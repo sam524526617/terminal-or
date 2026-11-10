@@ -127,7 +127,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "8.0"
+VERSION = "9.0"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -4189,6 +4189,12 @@ def analyser(data):
             a["fonda"] = fondamental.analyser(y, f, a, data.get("cal"), maintenant())
         except Exception as e:
             noter("Fondamental du plan", False, str(e)[:120])
+    a["stat"] = None
+    if stats is not None:
+        try:
+            a["stat"] = stats.calculer(data.get("intraday"), maintenant())
+        except Exception as e:
+            noter("Statistiques de séance", False, str(e)[:80])
     a["decision"] = None
     if decision is not None and ACTIF["sym"] == "XAU/USD":
         try:
@@ -5150,7 +5156,7 @@ function chargerEv(){
   catch(e){ EV = []; }
 }
 function prochain(now){
-  for (var i = 0; i < EV.length; i++){ if (EV[i].ts >= now - 10 * 60000) return EV[i]; }
+  for (var i = 0; i < EV.length; i++){ if (EV[i].ts >= now - (CFG.zone || 10) * 60000) return EV[i]; }
   return null;
 }
 function hms(ms){
@@ -5227,10 +5233,10 @@ function tick(){
   if (cpt) cpt.textContent = d > 0 ? (d > 86400000 ? Math.floor(d / 86400000) + ' j ' + hms(d % 86400000) : hms(d))
                                    : 'publiée il y a ' + Math.floor(-d / 60000) + ' min';
   var etat = '', txt = '';
-  if (d <= 0){ etat = 'pub'; txt = 'HIGH IMPACT EVENT PUBLIÉ · ' + e.nom + ' · il y a ' + Math.floor(-d / 60000) +
-               ' min — VOLATILITÉ MAXIMALE, ATTENDRE LA STABILISATION'; }
-  else if (d <= 2 * 60000){ etat = 'z2'; txt = 'HIGH IMPACT EVENT IN ' + hms(d) + ' — AUCUNE POSITION · ' + e.nom; }
-  else if (d <= CFG.zone * 60000){ etat = 'z15'; txt = 'HIGH IMPACT EVENT IN ' + Math.ceil(d / 60000) + ' MIN — SETUP À ÉVITER · ' + e.nom; }
+  if (d <= 0 && -d <= CFG.zone * 60000){ etat = 'pub'; txt = 'ANNONCE FORTE PUBLIÉE · ' + e.nom + ' · il y a ' + Math.floor(-d / 60000) +
+               ' min — pas d’entrée avant ' + Math.ceil(CFG.zone + d / 60000) + ' min'; }
+  else if (d > 0 && d <= 2 * 60000){ etat = 'z2'; txt = 'ANNONCE FORTE DANS ' + hms(d) + ' — AUCUNE ENTRÉE · ' + e.nom; }
+  else if (d > 0 && d <= CFG.zone * 60000){ etat = 'z15'; txt = 'ANNONCE FORTE DANS ' + Math.ceil(d / 60000) + ' MIN — ZONE INTERDITE, PAS D’ENTRÉE · ' + e.nom; }
   if (b){ b.className = 'alerte' + (etat ? ' on ' + etat : ''); if (etat) b.textContent = txt; }
   document.body.classList.toggle('zone-news', !!etat);
   document.title = etat ? '[' + (etat === 'pub' ? 'PUBLIÉE' : hms(d)) + '] ' + titreBase : titreBase;
@@ -5675,14 +5681,14 @@ function majPrix(){
     .then(function(j){
       var p = Number(j.spot_usd_oz); if (!(p > 0)) throw 0;
       var st = j.data_state || {};
-      PX = {prix: p, t: new Date(st.as_of || j.price_as_of || j.updated_at || Date.now()).getTime(), live: st.status !== 'stale'};
+      PX = {prix: p, t: new Date(st.as_of || j.price_as_of || j.updated_at || Date.now()).getTime(), live: st.status !== 'stale', src: 'XAUS'};
       affichePrix();
     })
     .catch(function(){
       fetch('https://api.goldprice.dev/v1/prices?symbol=XAU-USD-SPOT', {cache: 'no-store'})
         .then(function(r){ if (!r.ok) throw 0; return r.json(); })
         .then(function(j){ var p = Number(((j.symbols || [])[0] || {}).price); if (!(p > 0)) throw 0;
-          PX = {prix: p, t: Date.now(), live: true}; affichePrix(); })
+          PX = {prix: p, t: Date.now(), live: true, src: 'goldprice.dev'}; affichePrix(); })
         .catch(function(){ PX.live = false; affichePrix(); });
     });
 }
@@ -5711,7 +5717,7 @@ function majTrader(){
     var m = (e.ts - now) / 60000;
     if (m <= A && m >= -10){
       poseTuile(sig, 'aucun', 'annonce majeure', 'warn');
-      poseTuile(act, m >= 0 ? 'HIGH IMPACT EVENT IN ' + Math.ceil(m) + ' MIN — SETUP À ÉVITER' : 'HIGH IMPACT EVENT PUBLIÉ — ATTENDRE', e.nom, 'warn');
+      poseTuile(act, m >= 0 ? 'Annonce forte dans ' + Math.ceil(m) + ' min : pas d’entrée' : 'Annonce forte publiée : attendre', e.nom, 'warn');
       return;
     }
   }
@@ -5770,8 +5776,11 @@ function majBadges(){
 function fluxCharges(){ document.querySelectorAll('.tv').forEach(function(el){ if (el.querySelector('iframe')) el.classList.add('charge'); }); }
 setInterval(fluxCharges, 1500);
 
-window.terminalOr = {ctx: function(){ return CTX; }, px: function(){ return PX; }};  /* accès de diagnostic */
-chargerEv(); chargerCtx(); if (!PX.prix) PX.prix = (CTX.trader && CTX.trader.ref) || CTX.prix; prixParDefaut(); majRappel(); affichePrix(); majPrix(); setInterval(majPrix, 60000); activerOnglet(onglet); rendreCarte(); majBoutons(); tick(); setInterval(tick, 1000);
+/* Accès pour les autres modules de la page (couche temps réel, journal) */
+window.terminalOr = {ctx: function(){ return CTX; }, px: function(){ return PX; }, ouvert: ouvert,
+  prochain: function(){ return prochain(Date.now()); }, bip: bip, onglet: activerOnglet};
+function bouclePrix(){ majPrix(); setTimeout(bouclePrix, CFG.live ? 60000 : (document.hidden ? 30000 : 20000)); }
+chargerEv(); chargerCtx(); if (!PX.prix) PX.prix = (CTX.trader && CTX.trader.ref) || CTX.prix; prixParDefaut(); majRappel(); affichePrix(); bouclePrix(); activerOnglet(onglet); rendreCarte(); majBoutons(); tick(); setInterval(tick, 1000);
 })();
 """
 
@@ -7512,10 +7521,10 @@ def eco_html(data, a):
 
 
 ONGLETS_V7 = [("marches", "Marchés"), ("data", "Données"), ("technique", "Technique"), ("fondamental", "Fondamental"), ("annonces", "Agenda éco"),
-              ("actus", "Actualités"), ("labo", "Labo"), ("suivi", "Journal")]
+              ("actus", "Actualités"), ("stat", "Statistiques"), ("labo", "Labo"), ("suivi", "Journal")]
 # Codes de fonction, à la Bloomberg : on les tape dans la barre de commande (touche « / ») puis Entrée
 CODES = {"accueil": "GO", "marches": "MKT", "data": "DATA", "technique": "TECH", "fondamental": "FA", "annonces": "ECO",
-         "actus": "NEWS", "labo": "LAB", "suivi": "JRN"}
+         "actus": "NEWS", "stat": "STAT", "labo": "LAB", "suivi": "JRN"}
 
 
 def v7(a):
@@ -7529,8 +7538,11 @@ def contenus_onglets(data, a, ia):
         return {
             "technique": decision.bloc_technique(a["decision"])
                          + ('<section><h2>Contrôle avant l\'entrée</h2><p class="pourquoi">Pour un trade que tu prends toi-même : '
-                            'choisis Achat ou Vente (touches A et V), tape le prix de ta plateforme ; le terminal propose stop et '
-                            'objectif et calcule la taille avec tes réglages.</p>' + f'<div class="panel" id="p-ctl"><div class="pb">{bloc_controle()}</div></div></section>'),
+                            'le calculateur donne la taille selon ton risque et vérifie le trade contre chaque règle du plan '
+                            '(annonces, sens, zone, stop, gain / risque, limite du jour). Touche C ou commande CALC.</p>'
+                            '<button type="button" class="or" data-ouvrir="calc">Ouvrir le calculateur</button></section>'
+                            if direct else ''),
+            "stat": stats.bloc_stat(a.get("stat")) if stats else "",
             "fondamental": ((fondamental.bloc_html(a["fonda"], bloc_ia(ia)) if a.get("fonda") else bloc_ia(ia))
                             + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
                             + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
@@ -7592,6 +7604,15 @@ def bloc_onglets(data, a, ia, accueil=None):
             extra = (f'<section><h2>Consensus technique en direct</h2><p class="pourquoi">Synthèse des moyennes mobiles et '
                      f'oscillateurs sur plusieurs unités de temps (TradingView). À utiliser comme confluence, pas comme '
                      f'signal d\'entrée.</p><div class="tv-cal" style="height:460px">{ta_tv}</div></section>')
+        if i == "suivi" and journal is not None and v7(a):
+            extra = journal.bloc_journal() + extra        # saisie des vrais trades, jamais effacée par le robot
+            contenus[i] = f'<h2 class="jr-sep">Le plan rejoué sur 60 jours</h2>{contenus[i]}'
+            panneaux += (f'<div class="tabpanel" id="tab-{i}" role="tabpanel" aria-label="{esc(t)}">'
+                         f'{extra}<div data-zone="t-{i}">{contenus[i]}</div></div>')
+            continue
+        if i == "accueil":      # chaque bloc de la vue d'ensemble a sa propre zone ; le graphique en direct n'en a pas
+            panneaux += f'<div class="tabpanel" id="tab-{i}" role="tabpanel" aria-label="{esc(t)}">{contenus[i]}</div>'
+            continue
         panneaux += (f'<div class="tabpanel" id="tab-{i}" role="tabpanel" aria-label="{esc(t)}">'
                      f'<div data-zone="t-{i}">{contenus[i]}</div>{extra}</div>')
     cl = "" if accueil is not None else " analyst"
@@ -7599,7 +7620,7 @@ def bloc_onglets(data, a, ia, accueil=None):
         nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false"><span class="fc">{CODES.get(i, "")}</span>'
                       f'{esc(t)}</button>' for i, t in onglets)
         nav += ('<form class="cmd" role="search" onsubmit="return false"><label for="cmd">Fonction</label>'
-                '<input id="cmd" autocomplete="off" spellcheck="false" placeholder="GO, MKT, DATA, TECH, FA, ECO, NEWS" '
+                '<input id="cmd" autocomplete="off" spellcheck="false" placeholder="GO, TECH, AL 4100, CALC, AIDE" '
                 'aria-describedby="cmd-aide"><span id="cmd-aide" class="cmd-aide">touche / puis Entrée</span></form>')
     return (f'<nav class="onglets{cl}" id="analyse" role="tablist" aria-label="Navigation">{nav}</nav>'
             f'<div class="contenu{cl}">{panneaux}<div data-zone="sources">{bloc_sources()}</div></div>')
@@ -7628,7 +7649,11 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             evt = next((e for e in (data.get("cal") or []) if e["impact"] == "High"
                         and e["date"] >= maintenant() - timedelta(minutes=30)), None)
             ps = poste.bloc_poste(a, data, AJUST, COMPTE, labo.strategie_en_direct(labo.charger()) if labo else None,
-                                  fiche_annonce(evt, a) if evt else None, MOTS_BAROMETRE, maintenant())
+                                  fiche_annonce(evt, a) if evt else None, MOTS_BAROMETRE, maintenant(),
+                                  echelle=direct.carte_echelle() if direct else None,
+                                  stat_html=stats.carte_maintenant(a.get("stat")) if stats else "")
+            if ps and direct:
+                ps = direct.sante(a["decision"], a, maintenant()) + ps
         if ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
             accueil = (ps + decision.bloc_graphique(a["decision"]) + bloc_graphique_direct()
                        + f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}')
@@ -7641,6 +7666,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
     corps = (f'{haut}'
              f'<script type="application/json" id="evts" data-zone="evts">{evenements_json(data, a)}</script>'
              f'<script type="application/json" id="ctx" data-zone="ctx">{ctx_json}</script>'
+             + (f'<script type="application/json" id="direct-ctx" data-zone="direct-ctx">{direct.contexte(a, a["decision"], AJUST, COMPTE)}</script>'
+                f'{direct.dialogues()}' if (pro and direct) else '') +
              f'<div data-zone="brief" hidden><textarea id="brief" style="display:none" aria-hidden="true">'
              f'{esc(brief)}</textarea></div>')
     return (f'<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">'
@@ -7653,11 +7680,13 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
-            f'{"<script>" + theme.JS + "</script>" if pro else ""}</body></html>')
+            f'{"<script>" + theme.JS + "</script>" if pro else ""}'
+            f'{"<script>" + direct.JS + "</script>" if (pro and direct) else ""}'
+            f'{"<script>" + journal.JS + "</script>" if (pro and journal) else ""}</body></html>')
 
 
 # ---------------------------------------------------------------------------
