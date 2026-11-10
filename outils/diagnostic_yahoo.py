@@ -58,20 +58,37 @@ if len(gj) and len(aj):
     print(f"  quotidien : première clôture {float(gj['close'].iloc[0]):.1f} -> {float(aj['close'].iloc[0]):.1f} ; "
           f"dernière {float(gj['close'].iloc[-1]):.1f} -> {float(aj['close'].iloc[-1]):.1f}")
 
+def autour(brut, corr, t, heures=30):
+    """Plus gros écart clôture -> ouverture dans les heures qui entourent un changement, avant et après correction."""
+    t = pd.Timestamp(t).tz_localize("UTC") if pd.Timestamp(t).tzinfo is None else pd.Timestamp(t)
+    out = []
+    for df in (brut, corr):
+        e = (df["open"] - df["close"].shift(1))
+        e = e[(e.index >= t - pd.Timedelta(hours=heures)) & (e.index <= t + pd.Timedelta(hours=heures))]
+        out.append(float(e.abs().max()) if len(e) else float("nan"))
+    return out
+
+
+print("=== Chaque changement : plus gros écart autour (brut -> corrigé)")
+for t, sv in info.get("sauts") or []:
+    b, c = autour(g1h, a1h, t)
+    print(f"  1 h   {t:%Y-%m-%d %H:%M}  saut {sv:+6.1f} $ : {b:6.1f} $ -> {c:6.1f} $")
+for t, sv in info.get("sauts_15") or []:
+    b, c = autour(g15, a15, t)
+    print(f"  15 min {t:%Y-%m-%d %H:%M}  saut {sv:+6.1f} $ : {b:6.1f} $ -> {c:6.1f} $")
+
 if info.get("actif"):
     x1h = charge(info["actif"], "730d", "1h")
-    d, pg = K.ecart(g1h, x1h)
-    print(f"=== Écart {info['actif']} - GC=F en 1 h : {len(d)} bougies communes")
-    print("  sans garde-fou de calendrier :", [(f"{t:%Y-%m-%d %H:%M}", round(s, 1)) for t, s in K.reperer(g1h, x1h, n=12, garde=False)])
-    jour = d.groupby(d.index.normalize()).agg(["median", "count", "min", "max"])
-    print("  médiane par jour autour des fins de mois (jour : médiane [min ; max] nombre de bougies)")
-    for t, r in jour.iterrows():
-        if K.fenetre_ok(t) and t >= pd.Timestamp("2025-06-01"):
-            print(f"    {t:%Y-%m-%d %a} : {r['median']:+8.1f}  [{r['min']:+8.1f} ; {r['max']:+8.1f}]  {int(r['count'])}")
-    for t, s in info.get("sauts") or []:
-        t = pd.Timestamp(t)
-        autour = d[(d.index >= t - pd.Timedelta(hours=14)) & (d.index <= t + pd.Timedelta(hours=14))]
-        print(f"  autour du changement du {t:%Y-%m-%d %H:%M} (saut {s:+.1f}) :")
-        print("    " + " ".join(f"{u:%d %Hh}:{v:+.1f}" for u, v in autour.items()))
-    mois = d.groupby(d.index.to_period("M")).agg(["median", "count"])
-    print("  médiane par mois : " + " | ".join(f"{p} {r['median']:+.0f} ({int(r['count'])})" for p, r in mois.iterrows()))
+    print("  sans garde-fou de calendrier :", [(f"{t:%Y-%m-%d %H:%M}", round(sv, 1)) for t, sv in K.reperer(g1h, x1h, n=12, garde=False)])
+    # simulation : et si le terminal avait tourné juste après chacun des derniers changements ?
+    print("=== Rejeu : le terminal lancé N bougies après chaque changement récent")
+    for t, sv in (info.get("sauts") or [])[-3:]:
+        t = pd.Timestamp(t).tz_localize("UTC")
+        for nb in (1, 2, 4, 12):
+            fin = g1h.index[g1h.index >= t][:nb]
+            if not len(fin):
+                continue
+            gg, xx = g1h[g1h.index <= fin[-1]], x1h[x1h.index <= fin[-1]]
+            l, cl = K.changements(gg, xx, n=12)
+            trouve = [r for r in l if abs((r["t"].tz_localize("UTC") - t).total_seconds()) < 36 * 3600]
+            print(f"  {t:%Y-%m-%d %H:%M} + {nb:2d} bougie(s) : " + (f"repéré, saut {trouve[0]['saut']:+.1f} $" if trouve else "PAS repéré"))
