@@ -654,7 +654,8 @@ def avancer(etat, marches, maintenant, compte, rejeu=True):
     capital = float(compte.get("capital_robot", CAPITAL))
 
     def compte_de(liste, titre_):
-        pond = sorted([dict(t, R=t["R"] * t["poids"]) for t in liste], key=lambda t: t["t_sortie"])
+        # seuls les trades réellement risqués comptent (une cellule coupée est suivie à risque zéro)
+        pond = sorted([dict(t, R=t["R"] * t["poids"]) for t in liste if t["poids"] > 0], key=lambda t: t["t_sortie"])
         solde, soldes = capital, []
         for t in pond:                               # 1 % du solde du moment risqué à chaque trade (intérêts composés)
             solde += solde * RISQUE_PCT / 100 * t["R"]
@@ -878,7 +879,7 @@ def bloc_robot(vue):
               f'<div><span>Résultat 7 jours</span><b class="{cl(vue["semaine"]["r"])}">{fr(vue["semaine"]["r"], 2, True)} R</b></div></div>'
               + (f'<div class="rx-rejeu"><div class="rx-h"><span>Rejeu {REJEU_JOURS} jours · simulation</span><i>hors registre</i></div>'
                  f'<div class="rx-big2 {cl(J["dollars"])}">{fr(J["solde"], 2)} $ <small>({fr(J["dollars"], 2, True)} $)</small></div>'
-                 f'<p>{J["stats"]["n"]} trades · {fr(J["stats"]["total"], 1, True)} R · réussite {J["stats"]["reussite"] * 100:.0f} % · '
+                 f'<p>{J["stats"]["n"]} trades risqués sur {len(J["trades"])} · {fr(J["stats"]["total"], 1, True)} R · réussite {J["stats"]["reussite"] * 100:.0f} % · '
                  f'pire baisse {fr(J["stats"]["dd"], 1, True)} R. Ce que les mêmes règles auraient donné sur le passé récent : '
                  f'un repère, pas un résultat.</p></div>' if J and J["stats"].get("n") else "")
               + f'<p class="rx-note">Compte papier de {fr(vue["capital"], 0)} $ : {fr(RISQUE_PCT, 0)} % du solde au maximum par trade. Aucun argent réel.</p></div>')
