@@ -3,3 +3,4 @@ pandas>=1.5
 numpy>=1.23
 requests>=2.28
 tzdata
+anthropic>=1.0

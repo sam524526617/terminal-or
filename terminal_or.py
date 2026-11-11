@@ -67,6 +67,11 @@ except ImportError:
     direct = None
 
 try:
+    import analyste  # note de l'analyste IA, écrite à partir de la décision du plan
+except ImportError:
+    analyste = None
+
+try:
     import stats  # fonction STAT : statistiques de séance (probabilités de base)
 except ImportError:
     stats = None
@@ -281,7 +286,7 @@ THEMES_NEWS = [
 #   GEMINI_API_KEY    -> Gemini de Google, offre gratuite (quelques dizaines d'analyses par jour)
 #   ANTHROPIC_API_KEY -> Claude, payant à l'usage (quelques dollars par mois)
 # Si les deux sont présentes, Claude est utilisé. Sans clé, rien n'est appelé.
-IA_MODELE = "claude-sonnet-5"
+IA_MODELE = "claude-opus-5-5"
 GEMINI_MODELE = "auto"           # "auto" = le meilleur modèle Flash disponible sur ton compte, sinon Flash-Lite
 IA_MAX_JOUR = 15                 # plafond d'analyses par jour, pour rester dans le quota gratuit de Gemini
 IA_INTERVALLE_MIN = 120          # une nouvelle analyse au plus toutes les 2 heures
@@ -4275,14 +4280,10 @@ def cle_ia():
     return None, None
 
 
-def appeler_claude(cle, brief):
-    r = requests.post("https://api.anthropic.com/v1/messages", timeout=120, headers={
-        "x-api-key": cle, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        json={"model": IA_MODELE, "max_tokens": 2000, "system": CONSIGNE_IA,
-              "messages": [{"role": "user", "content": "Relevé du terminal :\n\n" + brief}]})
-    r.raise_for_status()
-    texte = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text").strip()
-    return texte, IA_MODELE
+def appeler_claude(cle, brief, consigne=None, schema=None):
+    """Appel à Claude par le SDK officiel (module analyste). consigne / schema : ceux de la note du plan, sinon l'ancienne consigne."""
+    import analyste as an_
+    return an_.appeler_claude(cle, brief, consigne or CONSIGNE_IA, schema)
 
 
 def modeles_gemini(cle):
@@ -4313,10 +4314,10 @@ def modeles_gemini(cle):
     return choix or ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 
-def appeler_gemini(cle, brief):
+def appeler_gemini(cle, brief, consigne=None, schema=None):
     """Essaie les modèles un par un. Serveur surchargé (500, 503) : jusqu'à deux nouvelles tentatives espacées.
     Quota du jour atteint (429) ou modèle absent (404) : modèle suivant."""
-    corps = {"systemInstruction": {"parts": [{"text": CONSIGNE_IA}]},
+    corps = {"systemInstruction": {"parts": [{"text": consigne or CONSIGNE_IA}]},
              "contents": [{"role": "user", "parts": [{"text": "Relevé du terminal :\n\n" + brief}]}],
              "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4, "maxOutputTokens": 8192}}
     echecs = []
@@ -4347,7 +4348,8 @@ def appeler_gemini(cle, brief):
     raise RuntimeError(" ; ".join(echecs) or "aucun modèle Gemini disponible")
 
 
-def analyste_ia(brief, a=None, data=None):
+def analyste_ia(brief, a=None, data=None, note=None):
+    # note : module analyste (note du plan) ; sans lui, l'ancienne consigne et l'ancien format sont utilisés (page EUR/USD)
     """Analyse rédigée par Claude. Régénérée toutes les IA_INTERVALLE_MIN minutes en séance, et aussitôt après une
     annonce forte ou un changement de direction de la vue de marché. Sans clé ANTHROPIC_API_KEY : rien n'est appelé."""
     fournisseur, cle = cle_ia()
@@ -4363,9 +4365,15 @@ def analyste_ia(brief, a=None, data=None):
     now = maintenant()
     dans_fenetre = now.weekday() < 5 and IA_HEURES[0] <= now.hour < IA_HEURES[1]
     direction = ((a or {}).get("vue") or {}).get("direction")
+    lire_ = note.lire if note else lire_json_ia
+    if note:      # la note suit la décision du plan : elle est réécrite quand le verdict ou une tendance change
+        dz_ = (a or {}).get("decision") or {}
+        direction = f"{dz_.get('verdict')}|{dz_.get('etat')}|" + "".join(str(dz_.get("tend", {}).get(k)) for k in ("D", "H4", "H1"))
     raison = None
     if cache is None:
         raison = "première analyse"
+    elif note and (cache.get("json") or {}).get("format") != note.FORMAT:
+        raison = "nouveau format de note"
     elif dans_fenetre:
         age_min = (now.timestamp() - cache.get("ts", 0)) / 60
         dernier = datetime.fromtimestamp(cache.get("ts", 0), tz=now.tzinfo)
@@ -4376,7 +4384,7 @@ def analyste_ia(brief, a=None, data=None):
         elif publiees:
             raison = f"après {publiees[-1]['titre']}"
         elif direction and cache.get("vue") and direction != cache.get("vue"):
-            raison = "changement de la vue de marché"
+            raison = "changement de la décision du plan" if note else "changement de la vue de marché"
     compteur = (cache or {}).get("compteur") or {}
     if raison and cache is not None and compteur.get("date") == now.date().isoformat() and compteur.get("n", 0) >= IA_MAX_JOUR:
         raison = None  # plafond du jour atteint : on garde la dernière analyse
@@ -4384,11 +4392,14 @@ def analyste_ia(brief, a=None, data=None):
         noter("Analyste IA", True, "analyse en cache")
         return cache
     try:
-        texte, modele = (appeler_claude if fournisseur == "claude" else appeler_gemini)(cle, brief)
+        if fournisseur == "claude":
+            texte, modele = appeler_claude(cle, brief, note.CONSIGNE if note else None, note.SCHEMA if note else None)
+        else:
+            texte, modele = appeler_gemini(cle, brief, note.CONSIGNE_JSON if note else None)
         if not texte:
             raise RuntimeError("réponse vide")
         n = compteur.get("n", 0) + 1 if compteur.get("date") == now.date().isoformat() else 1
-        cache = {"ts": now.timestamp(), "texte": texte, "json": lire_json_ia(texte), "modele": modele,
+        cache = {"ts": now.timestamp(), "texte": texte, "json": lire_(texte), "modele": modele,
                  "fournisseur": "Claude" if fournisseur == "claude" else "Gemini", "heure": now.isoformat(),
                  "vue": direction, "raison": raison, "compteur": {"date": now.date().isoformat(), "n": n}}
         DOSSIER_CACHE.mkdir(exist_ok=True)
@@ -7532,6 +7543,10 @@ def v7(a):
     return bool(decision is not None and dz and not dz.get("erreur"))
 
 
+def note_ia(ia):
+    return analyste.bloc(ia, ia_quand(ia)) if (analyste and ia) else (analyste.bloc(None) if analyste else bloc_ia(ia))
+
+
 def contenus_onglets(data, a, ia):
     y, f = data["yahoo"], data["fred"]
     if v7(a):
@@ -7543,7 +7558,7 @@ def contenus_onglets(data, a, ia):
                             '<button type="button" class="or" data-ouvrir="calc">Ouvrir le calculateur</button></section>'
                             if direct else ''),
             "stat": stats.bloc_stat(a.get("stat")) if stats else "",
-            "fondamental": ((fondamental.bloc_html(a["fonda"], bloc_ia(ia)) if a.get("fonda") else bloc_ia(ia))
+            "fondamental": (note_ia(ia) + (fondamental.bloc_html(a["fonda"], "") if a.get("fonda") else "")
                             + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
                             + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
                             + bloc_devises(a) + '</details>'),
@@ -7651,7 +7666,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             ps = poste.bloc_poste(a, data, AJUST, COMPTE, labo.strategie_en_direct(labo.charger()) if labo else None,
                                   fiche_annonce(evt, a) if evt else None, MOTS_BAROMETRE, maintenant(),
                                   echelle=direct.carte_echelle() if direct else None,
-                                  stat_html=stats.carte_maintenant(a.get("stat")) if stats else "")
+                                  stat_html=stats.carte_maintenant(a.get("stat")) if stats else "",
+                                  note_html=analyste.carte_accueil(ia, ia_quand(ia)) if (analyste and ia) else "")
             if ps and direct:
                 ps = direct.sante(a["decision"], a, maintenant()) + ps
         if ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
@@ -7680,7 +7696,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
@@ -8135,9 +8151,17 @@ def generer(demo=False, watch_min=None, site_dir=None):
         data["hist"]["previsions"] = previsions_demo(data)
     suivre_previsions(data["hist"], a, data)
     a["suivi"] = stats_previsions(data["hist"])
-    brief = construire_brief(data, a)
-    ia = ({"texte": IA_DEMO, "json": lire_json_ia(IA_DEMO), "modele": "démonstration",
-           "heure": maintenant().isoformat(), "raison": "démonstration"} if demo else analyste_ia(brief, a, data))
+    note = analyste if (analyste is not None and v7(a) and ACTIF["sym"] == "XAU/USD") else None
+    if note:      # relevé centré sur le plan : ce que le trader a sous les yeux
+        st_ = labo.strategie_en_direct(labo.charger()) if labo else None
+        brief = note.brief(a, data, AJUST, maintenant(), direct.niveaux(a, a["decision"], AJUST) if direct else None,
+                           f"{st_['statut']} ({st_['nom']})" if st_ else None)
+        ia = ({"texte": note.DEMO, "json": note.lire(note.DEMO), "modele": "démonstration", "heure": maintenant().isoformat(),
+               "raison": "démonstration"} if demo else analyste_ia(brief, a, data, note=note))
+    else:
+        brief = construire_brief(data, a)
+        ia = ({"texte": IA_DEMO, "json": lire_json_ia(IA_DEMO), "modele": "démonstration",
+               "heure": maintenant().isoformat(), "raison": "démonstration"} if demo else analyste_ia(brief, a, data))
     a["ia"] = ia
     page = rendre_html(data, a, brief, ia, watch_min, site=site_dir is not None)
     if site_dir is not None:
@@ -8209,6 +8233,37 @@ def alertes_a_envoyer(a, data, maintenant_):
         out.append((f"prepa|{maintenant_:%Y-%m-%d}|{texte_zone}", "Setup en préparation",
                     f"Tendance et fondamental validés, {texte_zone[:1].lower() + texte_zone[1:]}. Il ne manque que la cassure M15 qui laisse un FVG. "
                     f"{' '.join(dz.get('debloque') or [])}{demo}", 3, ["eyes"]))
+    ouvert_ = (dz.get("marche") or {}).get("ouvert", True)
+    # Cassure de structure confirmée (clôture au-delà du dernier sommet ou creux) en 1 h, 4 h ou Daily
+    try:
+        import plan as P_
+        t_now = P_.vers_horloge(pd.DatetimeIndex([maintenant_]))[0]
+        for l in (dz.get("tech") or {}).get("lignes", []):
+            der = l.get("der")
+            if ouvert_ and l["ut"] in ("H1", "H4", "D") and der and timedelta(0) <= (t_now - pd.Timestamp(der["t"])) <= timedelta(minutes=25):
+                haut_ = der["sens"] > 0
+                out.append((f"bos|{l['ut']}|{pd.Timestamp(der['t']):%Y%m%d%H%M}", f"Cassure {'haussière' if haut_ else 'baissière'} en {l['nom']}",
+                            f"Clôture à {nb(der['cloture'], 2)} : la tendance {l['nom']} devient {'haussière' if haut_ else 'baissière'}. "
+                            f"Plan : {'ACHAT' if dz.get('verdict', 0) > 0 else 'VENTE' if dz.get('verdict', 0) < 0 else 'RIEN'}. "
+                            f"{' '.join((dz.get('debloque') or [])[:1])}", 4 if l["ut"] != "H1" else 3,
+                            ["arrow_up" if haut_ else "arrow_down"]))
+    except Exception:
+        pass
+    # Briefing du matin : une fois par jour de marché, au premier passage après 7 h 30
+    if maintenant_.weekday() < 5 and (7, 30) <= (maintenant_.hour, maintenant_.minute) < (10, 0):
+        lignes = [f"Or {nb(dz.get('px'), 2)}. Plan : {'ACHAT' if dz.get('verdict', 0) > 0 else 'VENTE' if dz.get('verdict', 0) < 0 else 'RIEN'}."]
+        lignes += [x for x in (dz.get("debloque") or [])[:2]]
+        note_ = ((a.get("ia") or {}).get("json") or {})
+        if note_.get("titre"):
+            lignes.append("Analyste : " + note_["titre"])
+        if note_.get("discipline"):
+            lignes.append("À ne pas faire : " + note_["discipline"])
+        forts = [e for e in data.get("cal") or [] if e.get("impact") == "High" and maintenant_ <= e["date"] <= maintenant_ + timedelta(hours=16)]
+        lignes.append("Annonces fortes : " + (" ; ".join(f"{e['titre']} à {e['date']:%H:%M}" for e in forts[:3]) if forts else "aucune aujourd'hui") + ".")
+        st_ = (a.get("stat") or {}).get("amplitude")
+        if st_:
+            lignes.append(f"Amplitude habituelle d'une journée : {nb(st_['med'], 0)} $ (une sur deux entre {nb(st_['q25'], 0)} et {nb(st_['q75'], 0)} $).")
+        out.append((f"matin|{maintenant_:%Y-%m-%d}", "Briefing du matin", "\n".join(lignes), 3, ["sunrise"]))
     return out
 
 
