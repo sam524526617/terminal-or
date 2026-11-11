@@ -4322,13 +4322,22 @@ def appeler_gemini(cle, brief, consigne=None, schema=None):
              "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4, "maxOutputTokens": 8192}}
     echecs = []
     for modele in modeles_gemini(cle):
+        r = None
         for essai in range(3):
-            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{modele}:generateContent",
-                              timeout=120, headers={"x-goog-api-key": cle, "content-type": "application/json"}, json=corps)
+            try:
+                r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{modele}:generateContent",
+                                  timeout=(15, 150), headers={"x-goog-api-key": cle, "content-type": "application/json"}, json=corps)
+            except requests.exceptions.RequestException as e:
+                # délai dépassé ou coupure réseau : on passe au modèle suivant au lieu d'abandonner
+                r = None
+                echecs.append(f"{modele} {'trop lent (plus de 150 s)' if isinstance(e, requests.exceptions.Timeout) else 'injoignable'}")
+                break
             if r.status_code in (500, 503) and essai < 2:
                 time.sleep(8 * (essai + 1))
                 continue
             break
+        if r is None:
+            continue
         if r.status_code >= 400:
             try:
                 msg = str((r.json().get("error") or {}).get("message", ""))[:60]
