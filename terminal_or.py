@@ -8212,6 +8212,8 @@ def generer(demo=False, watch_min=None, site_dir=None):
         FICHIER_HTML.write_text(page, encoding="utf-8")
         FICHIER_BRIEF.write_text(brief, encoding="utf-8")
     resume_terminal(a)
+    for x_ in (a.get("pourquoi") or [])[:7]:      # contrôle dans le journal du robot
+        print(f"Pourquoi {x_['date']:%d/%m} : {x_['clair']}" + (" | titres : " + " / ".join(t["titre"] for t in x_["titres"]) if x_["titres"] else ""))
     return a
 
 
