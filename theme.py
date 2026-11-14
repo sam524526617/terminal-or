@@ -56,6 +56,15 @@ button.or{background:var(--brass);border-color:var(--brass);color:#0a1018;font-w
 .actions{gap:6px;flex-wrap:nowrap}
 .actions button{padding:6px 10px;font-size:12.5px;white-space:nowrap}
 #btn-mode,#btn-notif{display:none}
+/* Écrans regroupés : sommaire et titres de rubrique */
+.ec-som{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 18px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.ec-som a{display:inline-flex;align-items:center;gap:7px;font:600 13px var(--text);color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:5px 10px;background:var(--band)}
+.ec-som a:hover{border-color:var(--brass)}
+.ec-som .fc,.ec-titre .fc{font:700 10.5px var(--mono);color:var(--brass);background:rgba(126,166,214,.1);border:1px solid rgba(126,166,214,.35);border-radius:4px;padding:1px 5px;letter-spacing:.04em}
+.ec-sec{scroll-margin-top:calc(var(--haut-barre,57px) + 60px)}
+.ec-sec+.ec-sec{margin-top:34px;padding-top:26px;border-top:2px solid var(--line)}
+.ec-titre{display:flex;align-items:center;gap:10px;margin:0 0 14px}
+.ec-titre h2{font:800 22px var(--text);letter-spacing:-.01em;margin:0;color:var(--ink)}
 .tape{border-bottom:1px solid var(--line);background:#0c1016}
 
 /* Navigation : onglets fixés sous la barre */
@@ -175,9 +184,11 @@ var cmd = document.getElementById('cmd');
 function aller(code){
   var T = window.terminalOr; if (T && T.commande && T.commande(code)) return true;   /* AL 4100, CALC, AIDE */
   var id = CODES[(code || '').trim().toUpperCase()];
-  var b = id && document.querySelector('.onglets [data-tab="' + id + '"]');
-  if (!b) return false;
-  b.click(); window.scrollTo({top: 0}); return true;
+  if (!id) return false;
+  var b = document.querySelector('.onglets [data-tab="' + id + '"]');
+  if (b){ b.click(); window.scrollTo({top: 0}); return true; }
+  if (T && T.onglet && document.getElementById('sec-' + id)){ T.onglet(id); return true; }   /* rubrique d'un écran : MKT, DATA, STAT, NEWS, LAB */
+  return false;
 }
 if (cmd){
   cmd.addEventListener('keydown', function(e){

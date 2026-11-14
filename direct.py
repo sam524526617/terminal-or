@@ -181,9 +181,10 @@ def sante(dz, a, now):
 
 def dialogues():
     """Calculateur de position et aide : fenêtres ouvertes par commande, hors des zones rafraîchies."""
-    codes = [("GO", "Vue d'ensemble : décision, niveaux, agenda"), ("MKT", "Tous les marchés"), ("DATA", "Positionnement, volatilité, ratios"),
-             ("TECH", "Structure, zones, graphiques du plan"), ("FA", "Fondamental"), ("ECO", "Agenda économique"),
-             ("NEWS", "Actualités"), ("STAT", "Statistiques de séance"), ("LAB", "Stratégies testées"), ("JRN", "Journal de trading")]
+    codes = [("GO", "Vue d'ensemble : décision, pourquoi l'or bouge, niveaux"), ("TECH", "Technique : structure, zones, graphiques du plan"),
+             ("STAT", "… statistiques de séance"), ("FA", "Fondamental : note de l'analyste, taux, dollar"), ("MKT", "… tous les marchés"),
+             ("DATA", "… positionnement, volatilité, ratios"), ("ECO", "Agenda économique"), ("NEWS", "… actualités"),
+             ("JRN", "Journal de trading"), ("LAB", "… stratégies testées")]
     cmds = [("AL 4100", "Crée une alerte de prix à 4 100"), ("CALC", "Ouvre le calculateur de position"),
             ("CALC A 4061 4052 4079", "Achat à 4 061, stop 4 052, objectif 4 079 (V pour une vente)"), ("AIDE", "Cette fenêtre")]
     touches = [("/", "Aller à la barre de commande"), ("1 à 9, 0", "Changer d'écran"), ("C", "Calculateur"), ("?", "Aide"), ("Échap", "Fermer")]

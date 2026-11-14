@@ -137,7 +137,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "9.0"
+VERSION = "10.0"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -5361,6 +5361,10 @@ if (bNotif) bNotif.addEventListener('click', function(){
 /* Onglets (touches 1 à 9) */
 var onglet = lire('onglet-or', 'synthese');
 function activerOnglet(id){
+  var sec = document.getElementById('sec-' + id), cible = null;
+  if (sec && !document.querySelector('.onglets [data-tab="' + id + '"]')){ cible = sec; id = sec.closest('.tabpanel').id.replace('tab-', ''); }
+  else if (sec && sec.previousElementSibling && sec.previousElementSibling.classList.contains('ec-sec')) cible = sec;
+  if (cible) setTimeout(function(){ cible.scrollIntoView({block: 'start'}); }, 80);
   var trouve = false;
   document.querySelectorAll('.onglets [role=tab]').forEach(function(b){
     var on = b.getAttribute('data-tab') === id; if (on) trouve = true;
@@ -7636,7 +7640,59 @@ def contenus_onglets(data, a, ia):
     }
 
 
+# v10 : cinq écrans, dans l'ordre de la méthode. Chaque écran regroupe plusieurs rubriques (code de fonction, titre).
+ECRANS = [
+    ("accueil", "GO", "Vue d'ensemble", [("accueil", "GO", "Vue d'ensemble")]),
+    ("technique", "TECH", "Technique", [("technique", "TECH", "Structure et zones du plan"), ("stat", "STAT", "Statistiques de séance")]),
+    ("fondamental", "FA", "Fondamental", [("fondamental", "FA", "Analyste et fondamental"), ("marches", "MKT", "Marchés"),
+                                           ("data", "DATA", "Positionnement et données")]),
+    ("annonces", "ECO", "Agenda et actus", [("annonces", "ECO", "Agenda économique"), ("actus", "NEWS", "Actualités")]),
+    ("suivi", "JRN", "Journal", [("suivi", "JRN", "Journal et plan"), ("labo", "LAB", "Stratégies testées")]),
+]
+
+
+def bloc_ecrans(data, a, ia, accueil):
+    """Navigation regroupée : 5 onglets, un sommaire en haut de chaque écran, chaque rubrique dans sa propre zone."""
+    contenus = contenus_onglets(data, a, ia)
+    contenus["accueil"] = accueil
+    cal_tv = tv("embed-widget-events.js", {"colorTheme": "dark", "isTransparent": True, "width": "100%", "height": "100%",
+                                           "locale": "fr", "importanceFilter": "0,1", "countryFilter": ACTIF["tv_pays"]},
+                "Calendrier économique en direct (TradingView)")
+    nav, panneaux = "", ""
+    for cle, code, titre, rubriques in ECRANS:
+        nav += (f'<button type="button" role="tab" data-tab="{cle}" aria-selected="false"><span class="fc">{code}</span>{esc(titre)}</button>')
+        if cle == "accueil":      # chaque bloc de la vue d'ensemble a sa propre zone ; le graphique en direct n'en a pas
+            panneaux += f'<div class="tabpanel" id="tab-accueil" role="tabpanel" aria-label="{esc(titre)}">{contenus["accueil"]}</div>'
+            continue
+        sommaire = ""
+        if len(rubriques) > 1:
+            sommaire = ('<div class="ec-som" role="navigation" aria-label="Dans cet écran"><span class="k">Dans cet écran</span>'
+                        + "".join(f'<a href="#analyse" data-aller="{r}"><span class="fc">{c}</span>{esc(t)}</a>' for r, c, t in rubriques) + '</div>')
+        corps = ""
+        for k, (r, c, t) in enumerate(rubriques):
+            if not contenus.get(r):
+                continue
+            tete = f'<div class="ec-titre"><span class="fc">{c}</span><h2>{esc(t)}</h2></div>' if len(rubriques) > 1 else ""
+            avant = apres = ""
+            contenu = contenus[r]
+            if r == "suivi" and journal is not None:      # saisie des vrais trades, jamais effacée par le robot
+                avant = journal.bloc_journal()
+                contenu = f'<h2 class="jr-sep">Le plan rejoué sur 60 jours</h2>{contenu}'
+            if r == "annonces":
+                apres = (f'<details class="on-plus"><summary>Calendrier en direct (TradingView)</summary>'
+                         f'<div class="tv-cal">{cal_tv}</div></details>')
+            corps += (f'<div class="ec-sec" id="sec-{r}">{tete}{avant}<div data-zone="t-{r}">{contenu}</div>{apres}</div>')
+        panneaux += f'<div class="tabpanel" id="tab-{cle}" role="tabpanel" aria-label="{esc(titre)}">{sommaire}{corps}</div>'
+    nav += ('<form class="cmd" role="search" onsubmit="return false"><label for="cmd">Fonction</label>'
+            '<input id="cmd" autocomplete="off" spellcheck="false" placeholder="GO, TECH, AL 4100, CALC, AIDE" '
+            'aria-describedby="cmd-aide"><span id="cmd-aide" class="cmd-aide">touche / puis Entrée</span></form>')
+    return (f'<nav class="onglets" id="analyse" role="tablist" aria-label="Navigation">{nav}</nav>'
+            f'<div class="contenu">{panneaux}<div data-zone="sources">{bloc_sources()}</div></div>')
+
+
 def bloc_onglets(data, a, ia, accueil=None):
+    if accueil is not None and v7(a):
+        return bloc_ecrans(data, a, ia, accueil)
     contenus = contenus_onglets(data, a, ia)
     onglets = ONGLETS_V7 if v7(a) else ONGLETS
     if accueil is not None:   # v8 : la vue d'ensemble (décision, graphique, cockpit) devient le premier onglet
@@ -7718,7 +7774,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             if ps and pourquoi and a.get("pourquoi"):
                 ps += pourquoi.bloc(a["pourquoi"], ((ia or {}).get("json") or {}).get("pourquoi_recent"))
         if ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
-            accueil = (ps + decision.bloc_graphique(a["decision"]) + bloc_graphique_direct()
+            accueil = (ps + '<div class="ps-titre">Graphiques</div>' + decision.bloc_graphique(a["decision"]) + bloc_graphique_direct()
                        + f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}')
         else:
             accueil = dec_html + bloc_strip(a, y, f) + bloc_bandeau_tv() + bloc_cockpit(a, y, f, sans_setup=True)
