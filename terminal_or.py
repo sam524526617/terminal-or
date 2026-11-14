@@ -7323,6 +7323,13 @@ def generer(demo=False, watch_min=None, site_dir=None):
         FICHIER_HTML.write_text(page, encoding="utf-8")
         FICHIER_BRIEF.write_text(brief, encoding="utf-8")
     resume_terminal(a)
+    j_ = (ia or {}).get("json") or {}
+    if j_:                                        # note de l'analyste, pour contrôle dans le journal du robot
+        print(f"Note IA ({(ia or {}).get('fournisseur')} {(ia or {}).get('modele')}, {(ia or {}).get('heure', '')[:16]}) :")
+        for k_ in ("titre", "synthese", "pourquoi_recent", "biais", "conviction", "accord_plan", "accord_explication", "scenario_principal",
+                   "scenario_alternatif", "achat", "vente", "niveaux", "annonces", "risques", "discipline"):
+            if j_.get(k_):
+                print(f"  {k_} : {j_[k_]}")
     for x_ in (a.get("pourquoi") or [])[:7]:      # contrôle dans le journal du robot
         print(f"Pourquoi {x_['date']:%d/%m} : {x_['clair']}" + (" | titres : " + " / ".join(t["titre"] for t in x_["titres"]) if x_["titres"] else "")
               + (" | annonces : " + ", ".join(f"{e['t']:%H:%M} {e['titre']}" for e in x_["evts"]) if x_["evts"] else " | aucune annonce connue"))
