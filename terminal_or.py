@@ -56,90 +56,24 @@ import numpy as np
 import pandas as pd
 import requests
 
-try:
-    import contrat  # série de prix continue : correction du changement de contrat du future
-except ImportError:
-    contrat = None
+import contrat  # série de prix continue : correction du changement de contrat du future
+import direct  # couche temps réel : échelle des niveaux, alertes de prix, calculateur, commandes
+import analyste  # note de l'analyste IA, écrite à partir de la décision du plan
+import ecran  # poste de travail plein écran : la Vue d'ensemble tient sur un seul écran
+import salle  # salle des marchés : squawk, sentiment de risque, force des actifs, taux, horaires, saisonnalité, heatmap
+import pourquoi  # rubrique « Pourquoi l'or bouge » : l'explication de chaque séance
+import stats  # fonction STAT : statistiques de séance (probabilités de base)
+import journal  # fonction JRN : journal des vrais trades, statistiques, verrou de risque
+import eco  # fonction ECO : agenda de la semaine, surprises et réactions de l'or
+import donnees  # fonction DATA : positionnement, volatilité, ratios, corrélations, surprise macro
+import marches  # fonction MKT : tableau de tous les marchés et courbe des taux
+import poste  # poste de pilotage : tout l'essentiel sur le premier écran
+import theme  # thème professionnel v8 (police, grille, navigation en haut)
+import labo  # labo des stratégies : résultats de backtest et statut
+import onglets  # onglets Annonces, Actualités et Suivi (v7)
+import fondamental  # onglet Fondamental (lecture macro reliée au filtre du plan)
 
-try:
-    import direct  # couche temps réel : échelle des niveaux, alertes de prix, calculateur, commandes
-except ImportError:
-    direct = None
-
-try:
-    import analyste  # note de l'analyste IA, écrite à partir de la décision du plan
-except ImportError:
-    analyste = None
-
-try:
-    import ecran  # poste de travail plein écran : la Vue d'ensemble tient sur un seul écran
-except ImportError:
-    ecran = None
-
-try:
-    import salle  # salle des marchés : squawk, sentiment de risque, force des actifs, taux, horaires, saisonnalité, heatmap
-except ImportError:
-    salle = None
-
-try:
-    import pourquoi  # rubrique « Pourquoi l'or bouge » : l'explication de chaque séance
-except ImportError:
-    pourquoi = None
-
-try:
-    import stats  # fonction STAT : statistiques de séance (probabilités de base)
-except ImportError:
-    stats = None
-
-try:
-    import journal  # fonction JRN : journal des vrais trades, statistiques, verrou de risque
-except ImportError:
-    journal = None
-
-try:
-    import eco  # fonction ECO : agenda de la semaine, surprises et réactions de l'or
-except Exception:
-    eco = None
-
-try:
-    import donnees  # fonction DATA : positionnement, volatilité, ratios, corrélations, surprise macro
-except Exception:
-    donnees = None
-
-try:
-    import marches  # fonction MKT : tableau de tous les marchés et courbe des taux
-except Exception:
-    marches = None
-
-try:
-    import poste  # poste de pilotage : tout l'essentiel sur le premier écran
-except Exception:
-    poste = None
-
-try:
-    import theme  # thème professionnel v8 (police, grille, navigation en haut)
-except Exception:
-    theme = None
-
-try:
-    import labo  # labo des stratégies : résultats de backtest et statut
-except Exception:
-    labo = None
-
-try:
-    import onglets  # onglets Annonces, Actualités et Suivi (v7)
-except Exception:
-    onglets = None
-
-try:
-    import fondamental  # onglet Fondamental (lecture macro reliée au filtre du plan)
-except Exception:
-    fondamental = None
-
-try:
-    import decision  # moteur de décision du plan (ACHAT / VENTE / RIEN), règles communes avec le backtest
-except Exception:  # le terminal reste utilisable sans lui
-    decision = None
+import decision  # moteur de décision du plan (ACHAT / VENTE / RIEN), règles communes avec le backtest
 
 try:
     import yfinance as yf
@@ -229,15 +163,6 @@ DECALAGE_CFD = 0.0
 # Flux en direct (widgets TradingView). Si ton broker a un flux sur TradingView, tu peux le mettre
 # à la place (ex. "PEPPERSTONE:XAUUSD", "ICMARKETS:XAUUSD", "FOREXCOM:XAUUSD").
 TV_OR = "OANDA:XAUUSD"
-# Les widgets gratuits refusent certains symboles (TVC:DXY, TVC:US10Y, TVC:VIX...) : on utilise des équivalents CFD.
-# T-Note = prix de l'obligation américaine : il MONTE quand les taux BAISSENT.
-TV_BANDEAU = [("OANDA:XAUUSD", "XAU/USD"), ("OANDA:XAGUSD", "XAG/USD"), ("CAPITALCOM:DXY", "Dollar index"),
-              ("OANDA:USB02YUSD", "T-Note 2 ans"), ("OANDA:USB10YUSD", "T-Note 10 ans"), ("TVC:UKOIL", "Brent"),
-              ("FOREXCOM:SPXUSD", "S&P 500"), ("CAPITALCOM:VIX", "VIX"), ("FX:EURUSD", "EUR/USD"),
-              ("FX:USDJPY", "USD/JPY")]
-TV_MINIS = [("CAPITALCOM:DXY", "Dollar index"), ("OANDA:USB10YUSD", "T-Note 10 ans (monte si les taux baissent)"),
-            ("TVC:UKOIL", "Brent"), ("FOREXCOM:SPXUSD", "S&P 500")]
-TV_LANGUE_ACTUS = "fr"
 
 # Taille de position, utilisée par le contrôle Achat / Vente. Valeurs par défaut : tu peux les changer
 # directement dans la page (bouton « Réglages »), sans toucher à ce fichier.
@@ -3798,9 +3723,7 @@ def moteur_reactions(a, data):
 # SETUP A : BALAYAGE DE LIQUIDITÉ PUIS RETOURNEMENT (la stratégie de Samuel, version 1 à tester)
 # ---------------------------------------------------------------------------
 
-FENETRES_SETUP_A = [(8.0, 11.0), (14.5, 17.0)]   # heure de Paris : ouverture de Londres et de New York
 ASIE_SETUP_A = (0.0, 8.0)                        # range asiatique de la règle : 0 h - 8 h, heure de Paris
-NEWS_SETUP_A = 30                                # minutes sans trade avant et après une annonce forte
 
 
 def dernier_bos(df, swings, k=2):
@@ -4298,9 +4221,6 @@ aucun chiffre absent du relevé ; les titres d'actualité servent seulement de c
 dis-le au lieu de trancher artificiellement. Pas de conseil en investissement ni d'ordre ferme : décris des conditions,
 pas des injonctions. 450 mots au maximum au total."""
 
-CLES_IA = ("titre", "lecture", "direction", "accord", "accord_explication", "forces", "annonces", "invalidation",
-           "achat", "vente", "vigilance")
-
 
 def lire_json_ia(texte):
     """Extrait l'objet JSON de la réponse (tolère des balises de code ou du texte autour)."""
@@ -4561,29 +4481,6 @@ def graphique_double(s1, s2, jours=365, inverser2=True, d1=0, d2=2, w=720, h=240
             f'{_axe_x(list(df.index), x, h - 6)}</svg>')
 
 
-def graphique_ligne(s, d=2, unite="", w=720, h=200, n=None):
-    if s is None:
-        return '<p class="vide">Données indisponibles.</p>'
-    s = s.dropna()
-    if n:
-        s = s.tail(n)
-    if len(s) < 5:
-        return '<p class="vide">Données insuffisantes.</p>'
-    pl, pr, pt, pb = 54, 20, 14, 26
-    W, H = w - pl - pr, h - pt - pb
-    lo, hi = float(s.min()), float(s.max())
-    x = lambda i: pl + i * W / (len(s) - 1)
-    y = lambda v: pt + (hi - v) / ((hi - lo) or 1) * H
-    p = "M" + " L".join(f"{x(i):.1f},{y(float(v)):.1f}" for i, v in enumerate(s))
-    aire = p + f" L{x(len(s) - 1):.1f},{pt + H} L{x(0):.1f},{pt + H} Z"
-    return (f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="Graphique">'
-            f'<path d="{aire}" class="aire"/><path d="{p}" class="l1"/>'
-            f'<text x="{pl - 8}" y="{pt + 4}" text-anchor="end" class="ax">{nb(hi, d)}{unite}</text>'
-            f'<text x="{pl - 8}" y="{pt + H}" text-anchor="end" class="ax">{nb(lo, d)}{unite}</text>'
-            f'<circle cx="{x(len(s) - 1):.1f}" cy="{y(float(s.iloc[-1])):.1f}" r="3.5" class="pt"/>'
-            f'{_axe_x(list(s.index), x, h - 6)}</svg>')
-
-
 def graphique_cot(cot, info, w=720, h=240):
     if cot is None or info is None:
         return '<p class="vide">Données COT indisponibles.</p>'
@@ -4663,7 +4560,6 @@ def graphique_structure(df, swings, titre, w=640, h=300):
                f'<text x="{pl + W + 6}" y="{y(px) + 4:.1f}" class="ax c1">{fp(px + AJUST, 1)}</text>')
     out.append(_etiquettes_svg(swings, x_of, y, lo, hi))
     return f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="{esc(titre)}">' + "".join(out) + '</svg>'
-
 
 
 COURTS = {"Plus haut de la veille": "Haut veille", "Plus bas de la veille": "Bas veille"}
@@ -5893,41 +5789,6 @@ def ligne_metrique(lib, s, mode, dec, effet, unite=""):
 ENTETE_M = '<tr><th></th><th>Dernier</th><th>1 j</th><th>5 j</th><th>60 j</th></tr>'
 
 
-def barre_centree(v, echelle):
-    if v is None or not echelle:
-        return '<div class="cbar"></div>'
-    larg = min(abs(v) / echelle, 1) * 50
-    gauche = 50 - larg if v < 0 else 50
-    return f'<div class="cbar"><b class="{"up" if v > 0 else "down"}" style="left:{gauche:.1f}%;width:{larg:.1f}%"></b></div>'
-
-
-def bloc_lecture(a):
-    paras = "".join(f"<p>{esc(p)}</p>" for p in a["point"])
-    r = a["regime"]
-    reg = (f'<div class="regime"><div class="label">Régime de marché</div><div class="nom {r["ton"]}">{esc(r["nom"])}</div>'
-           f'<p>{esc(r["explication"])}</p><p class="cons">{esc(r["consequence"])}</p>')
-    dc = a.get("decomp")
-    if dc:
-        j = dc["jour"]
-        vals = list(j["contrib"].values()) + [j["attendu"], j["reel"], j["residu"]]
-        ech = max(abs(v) for v in vals) or 1
-        noms = {"dxy": "Dollar", "us10": "Taux 10 ans", "brent": "Pétrole"}
-        lignes = "".join(f'<span>{noms[k]}</span>{barre_centree(v, ech)}<span class="v">{nb(v, 2, True)} %</span>'
-                         for k, v in j["contrib"].items())
-        lignes += (f'<span class="total">Attendu</span>{barre_centree(j["attendu"], ech)}'
-                   f'<span class="v total">{nb(j["attendu"], 2, True)} %</span>'
-                   f'<span class="total">Réel</span>{barre_centree(j["reel"], ech)}'
-                   f'<span class="v total">{nb(j["reel"], 2, True)} %</span>'
-                   f'<span>Écart (flux, géopolitique)</span>{barre_centree(j["residu"], ech)}'
-                   f'<span class="v">{nb(j["residu"], 2, True)} %</span>')
-        reg += (f'<h3>Décomposition du dernier mouvement de l\'or</h3>'
-                f'<p class="legende" style="margin:0">Modèle sur 60 jours : le dollar, les taux et le pétrole expliquent '
-                f'{nb(dc["r2"] * 100, 0)} % des variations de l\'or.</p><div class="decomp">{lignes}</div>')
-    reg += "</div>"
-    return (f'<section id="lecture"><h2>Le point en 30 secondes</h2><div class="grille2 grille-lec">'
-            f'<div class="lecture">{paras}</div>{reg}</div></section>')
-
-
 def ia_quand(ia):
     try:
         return date_fr(datetime.fromisoformat(ia["heure"]), True)
@@ -5957,35 +5818,6 @@ def bloc_ia(ia):
             f'<div><h4>Pour un achat</h4><p>{esc(j["achat"])}</p><h4>Pour une vente</h4><p>{esc(j["vente"])}</p>'
             f'<h4>Ce qui invaliderait la lecture</h4><ul>{liste(j["invalidation"])}</ul>'
             f'<h4>Vigilance pour la séance</h4><ul>{liste(j["vigilance"])}</ul></div></div></div></section>')
-
-
-def couleur_z(z, effet):
-    if z is None:
-        return ""
-    alpha = min(abs(z), 3) / 3 * 0.55 + 0.05
-    rgb = "152,163,174" if effet == 0 else ("93,187,141" if z * effet > 0 else "227,104,91")
-    return f"background:rgba({rgb},{alpha:.2f})"
-
-
-def bloc_moteurs(a):
-    items = ""
-    for m in a["moteurs_jour"]:
-        items += (f'<li><div class="t"><b>{esc(m["lib"])}</b><span class="var {m["ton"]}">{esc(m["var"])}</span>'
-                  f'<span class="z">{nb(m["z"], 1, True)} σ, {esc(m["intensite"])}</span>'
-                  f'<span class="{m["ton"]}">{esc(m["effet"])}</span></div>'
-                  f'<div class="mec">{esc(m["mecanisme"])}</div></li>')
-    lignes = ""
-    for m in a["mouvements"]:
-        cells = "".join(f'<td class="c" style="{couleur_z(m[z], m["effet"])}">{nb(m[z], 1, True)}</td>'
-                        for z in ("z1", "z5", "z20"))
-        lignes += f'<tr><td>{esc(m["lib"])}</td>{cells}</tr>'
-    return (f'<section id="moteurs"><div class="grille2"><div><h2>Ce qui bouge l\'or aujourd\'hui</h2>'
-            f'<p class="pourquoi">Les mouvements du jour classés par intensité. σ = combien de fois le mouvement habituel '
-            f'(écart-type sur 60 jours) : au-delà de 2, c\'est un mouvement fort.</p><ul class="moteurs">{items}</ul></div>'
-            f'<div><h2>Carte de chaleur des moteurs</h2><p class="pourquoi">Intensité des mouvements sur 1, 5 et 20 jours, '
-            f'en σ. Vert : favorable à l\'or. Rouge : défavorable. Bleu : sans effet direct.</p>'
-            f'<table class="heat"><tr><th></th><th>1 j</th><th>5 j</th><th>20 j</th></tr>{lignes}</table></div></div>'
-            f'</section>')
 
 
 def bloc_seance(a):
@@ -6036,85 +5868,6 @@ def bloc_seance(a):
             f'<div><h3 style="margin-top:0">Repères de volatilité</h3>{stats}</div></div></section>')
 
 
-def derniere_date(s):
-    try:
-        return s.dropna().index[-1]
-    except Exception:
-        return None
-
-
-def bloc_fed(y, f, a):
-    fw = a.get("fedwatch")
-    if fw:
-        lignes = ""
-        for r in fw["reunions"]:
-            pb_, ps_, ph_ = r["p_baisse"] * 100, r["p_statu"] * 100, r["p_hausse"] * 100
-            lignes += (f'<tr><td class="l" style="white-space:nowrap">{r["date"].day} {MOIS_FR[r["date"].month - 1]} '
-                       f'{str(r["date"].year)[2:]}</td><td class="v">{nb(r["taux"], 2)} %</td>'
-                       f'<td class="d {classe_effet(r["delta_pb"], -1)}">{nb(r["delta_pb"], 0, True)}</td>'
-                       f'<td style="padding-left:12px"><div class="proba" title="Baisse {nb(pb_, 0)} %, statu quo '
-                       f'{nb(ps_, 0)} %, hausse {nb(ph_, 0)} %"><i class="pr-b" style="width:{pb_:.0f}%"></i>'
-                       f'<i class="pr-s" style="width:{ps_:.0f}%"></i><i class="pr-h" style="width:{ph_:.0f}%"></i></div></td>'
-                       f'<td class="d">{nb(ph_ if ph_ >= pb_ else -pb_, 0, True)} %</td></tr>')
-        cible = fw["cible"]
-        cible_txt = f'{nb(cible[0], 2)} à {nb(cible[1], 2)} %' if cible[0] is not None and cible[1] is not None else "n.d."
-        cumul = fw.get("cumul_fin_annee")
-        phrase = ""
-        if cumul is not None:
-            sens = "de hausse" if cumul > 0 else "de baisse"
-            phrase = (f'D\'ici fin {maintenant().year}, le marché price {nb(abs(cumul), 0)} pb {sens} '
-                      f'(environ {nb(abs(cumul) / 25, 1)} mouvement de 25 pb). ')
-        fed_html = (f'<p class="sous" style="margin-top:0">Fourchette actuelle : <b>{cible_txt}</b>, fed funds effectif '
-                    f'<b>{nb(fw["effr"], 2)} %</b>. {phrase}</p>'
-                    f'<div class="defile"><table class="m" style="margin-top:8px"><tr><th>Réunion</th><th>Taux</th>'
-                    f'<th>Var. pb</th><th>Probabilités</th><th>Proba.</th></tr>{lignes}</table></div>'
-                    f'<p class="legende" style="margin-top:8px">Calcul maison à partir des futures fed funds, proche de '
-                    f'la méthode du CME FedWatch. Barre : baisse en vert, statu quo, hausse en rouge. '
-                    f'Proba. positive = hausse, négative = baisse.</p>')
-    else:
-        fed = a["fed"]
-        fed_html = (f'<p class="vide">Futures fed funds indisponibles. Écart taux 2 ans et fed funds : '
-                    f'{nb(fed["spread_pb"], 0, True)} pb (positif = hausses attendues).</p>')
-    taux = [
-        ("Taux réel 5 ans", f.get("reel5"), "pb", 2, -1, " %"), ("Taux réel 10 ans", f.get("reel10"), "pb", 2, -1, " %"),
-        ("Taux réel 30 ans", f.get("reel30"), "pb", 2, -1, " %"), ("Taux US 3 mois", y.get("us3m"), "pb", 2, -1, " %"),
-        ("Taux US 2 ans", f.get("us2"), "pb", 2, -1, " %"), ("Taux US 10 ans", y.get("us10"), "pb", 2, -1, " %"),
-        ("Taux US 30 ans", y.get("us30"), "pb", 2, -1, " %"),
-        ("Inflation anticipée 5 ans", f.get("be5"), "pb", 2, 1, " %"),
-        ("Inflation anticipée 10 ans", f.get("be10"), "pb", 2, 1, " %"),
-        ("Inflation 5 ans dans 5 ans", f.get("fwd5y5y"), "pb", 2, 1, " %"),
-        ("Pente 2 ans / 10 ans", f.get("pente2s10s"), "pb", 2, 0, " %"),
-        ("Pente 3 mois / 10 ans", f.get("pente3m10a"), "pb", 2, 0, " %"),
-        ("Prime de terme 10 ans", f.get("prime_terme"), "pb", 2, 0, " %"),
-        ("SOFR", f.get("sofr"), "pb", 2, -1, " %"),
-    ]
-    t = "".join(ligne_metrique(*r) for r in taux)
-    liq = a.get("liquidite")
-    if liq:
-        liq_html = (f'<div class="kv"><span>Liquidité nette</span><span>{nb(liq["niveau"], 2)} T$</span>'
-                    f'<span>Sur 4 semaines</span><span class="{classe_effet(liq["d4"], 1)}">{nb(liq["d4"], 1, True)} %</span>'
-                    f'<span>Sur 13 semaines</span><span class="{classe_effet(liq["d13"], 1)}">{nb(liq["d13"], 1, True)} %</span>'
-                    f'<span>Bilan de la Fed</span><span>{nb(liq["bilan"], 2)} T$</span>'
-                    f'<span>Compte du Trésor (TGA)</span><span>{nb(liq["tga"] * 1000, 0)} Md$</span>'
-                    f'<span>Reverse repo</span><span>{nb(liq["rrp"] * 1000, 0)} Md$</span></div>'
-                    f'{graphique_ligne(liq["serie"], 2, " T", w=520, h=170, n=104)}')
-    else:
-        liq_html = '<p class="vide">Données de liquidité indisponibles.</p>'
-    stress = [("Spread high yield", f.get("hy"), "pb", 2, 0, " %"), ("Spread investment grade", f.get("ig"), "pb", 2, 0, " %"),
-              ("Conditions financières (NFCI)", f.get("nfci"), "abs", 2, 0, ""),
-              ("Volatilité obligataire (MOVE)", y.get("move"), "abs", 1, 0, ""), ("VIX", y.get("vix"), "abs", 1, 0, "")]
-    st = "".join(ligne_metrique(*r) for r in stress)
-    return (f'<section id="fed"><h2>Fed, taux et liquidité {fraicheur("daily", derniere_date(f.get("reel10")))}</h2><p class="pourquoi">L\'or ne rapporte rien : son premier '
-            f'concurrent est le rendement sans risque. Tout ce qui fait monter les taux réels ou le dollar le pénalise ; '
-            f'tout ce qui injecte de la liquidité ou fait douter de la dette américaine le soutient.</p>'
-            f'<div class="grille3"><div><h3 style="margin-top:0">Ce que le marché price pour la Fed</h3>{fed_html}</div>'
-            f'<div><h3 style="margin-top:0">Courbe des taux</h3><table class="m">{ENTETE_M}{t}</table>'
-            f'<p class="legende" style="margin-top:8px">Pente qui se redresse par le long terme et prime de terme en hausse : '
-            f'le marché exige plus pour détenir la dette US longue, thème favorable à l\'or.</p></div>'
-            f'<div><h3 style="margin-top:0">Liquidité (bilan Fed - Trésor - reverse repo)</h3>{liq_html}'
-            f'<h3>Stress financier</h3><table class="m">{ENTETE_M}{st}</table></div></div></section>')
-
-
 def bloc_marches(y, f, a):
     e_p = effet_petrole()
     rows = [("Dollar index (DXY)", y.get("dxy"), "pct", 2, -1, ""), ("Dollar large (Fed)", f.get("dollar_large"), "pct", 2, -1, ""),
@@ -6144,62 +5897,6 @@ def bloc_marches(y, f, a):
             f'<th>Percentile 1 an</th></tr>{rat}</table>{vol}</div></div></section>')
 
 
-def bloc_flux(a):
-    c = a["cot"]
-    if c:
-        pos = clamp(c["pct3a"] or 0, 0, 100)
-        grp = "".join(f'<span>{esc(g["lib"])}</span><span>{nb(g["net"], 0)} ({nb(g["chg"], 0, True)}), pct {nb(g["pct3a"], 0)}</span>'
-                      for g in c["groupes"])
-        lect = (f'<div class="note" style="border-left-color:var(--steel);background:rgba(152,163,174,.08)">'
-                f'<b>{esc(c["lecture"][0])}.</b> {esc(c["lecture"][1])}</div>') if c.get("lecture") else ""
-        cot_html = (f'<h3 style="margin-top:0">Positionnement COMEX {fraicheur("weekly", c["date"])}</h3>'
-                    f'<div class="kv"><span>Fonds, position nette ({esc(c["categorie"])})</span><span>{nb(c["net"], 0)} contrats</span>'
-                    f'<span>Variation sur la semaine</span><span class="{classe_effet(c["chg"], 1)}">{nb(c["chg"], 0, True)}</span>'
-                    f'<span>Achats / ventes des fonds</span><span>{nb(c["long"], 0)} / {nb(c["short"], 0)}</span>'
-                    f'<span>Percentile des achats / ventes</span><span>{nb(c["pct_long"], 0)} / {nb(c["pct_short"], 0)}</span>'
-                    f'<span>Part de l\'open interest</span><span>{nb(c["pct_oi"], 1)} %</span>{grp}</div>'
-                    f'<div class="pctbar"><i style="left:{SEUILS["cot_bas"]}%"></i><i style="left:{SEUILS["cot_haut"]}%"></i>'
-                    f'<b style="left:{pos:.1f}%"></b></div><div class="pctleg"><span>Peu exposés</span>'
-                    f'<span>percentile 3 ans : {nb(c["pct3a"], 0)}</span><span>Surchargés</span></div>{lect}')
-    else:
-        cot_html = '<h3 style="margin-top:0">Positionnement COMEX</h3><p class="vide">COT indisponible.</p>'
-    g = a["gld"]
-    gld_html = (f'<h3>ETF GLD, avoirs physiques {fraicheur("daily", g["date"])}</h3>'
-                f'<div class="kv"><span>Avoirs</span><span>{nb(g["t"], 1)} t</span>'
-                f'<span>Sur 5 jours</span><span class="{classe_effet(g["d5"], 1)}">{nb(g["d5"], 1, True)} t '
-                f'({nb(g["usd5"], 2, True)} Md$)</span>'
-                f'<span>Sur 20 jours</span><span class="{classe_effet(g["d20"], 1)}">{nb(g["d20"], 1, True)} t '
-                f'({nb(g["usd20"], 2, True)} Md$)</span></div>') if g else \
-        '<h3>ETF GLD, avoirs physiques</h3><p class="vide">Données GLD indisponibles.</p>'
-    st = a.get("structure")
-    if st:
-        lignes = "".join(f'<tr><td class="l">{esc(l["libelle"])}</td><td class="v">{nb(l["ecart"], 1, True)} $</td>'
-                         f'<td class="d">{nb(l["portage"], 2)} %</td><td class="d {classe_effet(-l["vs_sofr"], -1)}">'
-                         f'{nb(l["vs_sofr"], 2, True)}</td></tr>' for l in st["lignes"])
-        lect = ("Portage nettement sous le SOFR : l'or physique est rare, ceux qui en ont besoin paient cher pour "
-                "l'emprunter. Signal de demande physique forte." if st["tension"] else
-                "Courbe normale : le portage reflète le coût de l'argent, pas de tension sur le physique.")
-        st_html = (f'<h3>Structure du marché de l\'or</h3><table class="m"><tr><th>Échéances</th><th>Écart</th>'
-                   f'<th>Portage annuel</th><th>vs SOFR</th></tr>{lignes}</table>'
-                   f'<p class="sous">Taux de location implicite de l\'or : <b>{nb(st["location_implicite"], 2)} %</b>. '
-                   f'{esc(lect)}</p>')
-    else:
-        st_html = ""
-    dev = ""
-    if a["devises"]:
-        dev = ('<h3>L\'or dans d\'autres devises</h3><table class="m"><tr><th>Or en</th><th>Prix</th><th>5 j</th>'
-               '<th>20 j</th></tr>' + "".join(
-                   f'<tr><td class="l">{esc(d["nom"])}</td><td class="v">{nb(d["prix"], 0)}</td>'
-                   f'<td class="d {classe_effet(d["d5"], 1)}">{nb(d["d5"], 2, True)}</td>'
-                   f'<td class="d {classe_effet(d["d20"], 1)}">{nb(d["d20"], 2, True)}</td></tr>' for d in a["devises"])
-               + '</table><p class="legende" style="margin-top:8px">Si l\'or baisse en dollars mais tient en euros, '
-                 'le mouvement vient du dollar, pas de l\'or.</p>')
-    return (f'<section id="flux"><h2>Flux et positionnement</h2><p class="pourquoi">Qui achète, qui vend. Les fonds '
-            f'spéculatifs amplifient les mouvements ; les ETF reflètent les investisseurs occidentaux ; la structure '
-            f'des futures révèle la tension sur l\'or physique.</p><div class="grille3"><div>{cot_html}</div>'
-            f'<div>{gld_html}{st_html}</div><div>{dev}</div></div></section>')
-
-
 def bloc_correlations(a):
     if not a["correlations"]:
         return '<div><h2>Qui mène l\'or en ce moment</h2><p class="vide">Données insuffisantes.</p></div>'
@@ -6224,18 +5921,6 @@ def bloc_correlations(a):
             f'<div class="corr">{lignes}</div>{phrase}</div>')
 
 
-def bloc_routine():
-    etapes = [
-        ("Lis le point en 30 secondes.", "Régime, biais et prochain risque : le contexte de ta séance."),
-        ("Repère le moteur dominant.", "Garde ce marché ouvert à côté de ton graphique de l'or pendant la séance."),
-        ("Vérifie la prochaine annonce.", "Bloc orange = zone news : aucune nouvelle position. Relis la fiche de scénarios."),
-        ("Place les niveaux de la séance.", "Plus haut et plus bas de la veille, pivot, VWAP : ce sont les zones où le prix réagit."),
-        ("Note le biais dans ton journal.", "Colonne « biais du jour » et « trade aligné oui/non » pour mesurer si le filtre t'aide."),
-    ]
-    li = "".join(f'<li><b>{esc(t)}</b> {esc(d)}</li>' for t, d in etapes)
-    return f'<div><h2>Routine avant séance, 2 minutes</h2><ol class="routine">{li}</ol></div>'
-
-
 def bloc_graphiques(y, f, cot, a):
     g1 = graphique_double(y.get("or"), f.get("reel10"))
     g2 = graphique_cot(cot, a["cot"])
@@ -6249,57 +5934,6 @@ def bloc_graphiques(y, f, cot, a):
             f'<span><i style="background:var(--mute)"></i>Seuils de percentile</span></div>{g2}'
             f'<p class="legende" style="margin-top:8px">Au-dessus du seuil haut, les fonds sont très chargés : '
             f'une mauvaise nouvelle peut déclencher des ventes en cascade.</p></div></section>')
-
-
-def bloc_calendrier(cal, a):
-    fiches = ""
-    for fi in a["fiches"]:
-        nu = "".join(f'<p class="nu">{esc(n)}</p>' for n in fi["nuances"])
-        amp = f'<p class="flat">Amplitude journalière normale de l\'or : ±{nb(fi["amplitude"], 0)} $.</p>' if fi["amplitude"] else ""
-        scen = ""
-        if fi["haut"]:
-            scen = (f'<div class="sc"><span class="num">▲</span><span>{esc(fi["haut"])}</span>'
-                    f'<span class="num">▼</span><span>{esc(fi["bas"])}</span></div>')
-        fiches += (f'<div class="fiche"><div class="t">{esc(fi["nom"])}</div>'
-                   f'<div class="q">{date_fr(fi["date"], True)} (Paris)</div>'
-                   f'<div class="pp"><div><span>Prévision</span>{esc(fi["prevision"] or "n.d.")}</div>'
-                   f'<div><span>Précédent</span>{esc(fi["precedent"] or "n.d.")}</div></div>'
-                   f'<p>{esc(fi["pourquoi"])}</p>{scen}{nu}{amp}</div>')
-    fiches_html = (f'<h2>Scénarios avant les prochaines annonces</h2><p class="pourquoi">Pour chaque annonce à fort '
-                   f'impact : ce qu\'elle mesure et la réaction probable de l\'or selon que le chiffre sort au-dessus ou '
-                   f'en dessous de la prévision, dans le contexte actuel de la Fed.</p><div class="fiches">{fiches}</div>'
-                   ) if fiches else '<h2>Scénarios avant les prochaines annonces</h2><p class="vide">Aucune annonce à fort impact à venir dans le calendrier.</p>'
-    now = maintenant()
-    if not cal:
-        cal_html = '<p class="vide">Calendrier indisponible.</p>'
-    else:
-        lignes = ""
-        for e in cal:
-            passe = e["date"] < now - timedelta(minutes=FENETRE_NEWS[1])
-            lignes += (f'<tr class="{"passe" if passe else ""}"><td class="num">{date_fr(e["date"], True)}</td>'
-                       f'<td><span class="imp {e["impact"]}" title="Impact {e["impact"]}"></span>{esc(e["titre"])}</td>'
-                       f'<td class="num">{esc(e["reel"])}</td><td class="num">{esc(e["prevision"])}</td>'
-                       f'<td class="num">{esc(e["precedent"])}</td></tr>')
-        cal_html = ('<div class="defile"><table class="cal"><tr><th>Heure de Paris</th><th>Annonce USD</th><th>Réel</th>'
-                    f'<th>Prévision</th><th>Précédent</th></tr>{lignes}</table></div>')
-    macro = "".join(f'<tr><td class="l">{esc(m["nom"])}<br><small class="flat">{MOIS_FR[m["date"].month - 1]} '
-                    f'{m["date"].year}</small></td><td class="v">{m["val"]}</td><td class="d flat">{m["prec"]}</td></tr>'
-                    for m in a["macro"])
-    macro_html = (f'<table class="m"><tr><th></th><th>Dernier</th><th>Précédent</th></tr>{macro}</table>'
-                  if macro else '<p class="vide">Données macro indisponibles.</p>')
-    su = a.get("surprise")
-    su_html = ""
-    if su:
-        sens = ("plus fortes que prévu : argument pour une Fed dure, pression sur l'or" if su["score"] > 0.2 else
-                ("plus faibles que prévu : argument pour une Fed souple, soutien à l'or" if su["score"] < -0.2 else
-                 "conformes aux attentes dans l'ensemble"))
-        su_html = (f'<h3>Indice de surprise maison</h3><p class="sous" style="margin-top:0">Sur les {su["n"]} dernières '
-                   f'publications US : score <b>{nb(su["score"], 2, True)}</b>, données {esc(sens)}.</p>')
-    return (f'<section id="calendrier">{fiches_html}</section><section class="grille2 grille-cal">'
-            f'<div><h2>Calendrier économique</h2><p class="legende">Point rouge : fort impact. Point orange : impact moyen. '
-            f'Règle en scalping : aucune position ouverte à l\'approche d\'un point rouge.</p>{cal_html}</div>'
-            f'<div><h2>Macro US</h2>{macro_html}{su_html}<p class="legende" style="margin-top:10px">Aujourd\'hui : '
-            f'données fortes = Fed plus dure = pression sur l\'or. Données faibles = l\'inverse.</p></div></section>')
 
 
 def jauge(g, d, lib_g, lib_d, coul_g, coul_d):
@@ -6523,157 +6157,6 @@ def bloc_sources():
 # PAGE HTML : BLOCS v4 (vue de marché, contrôle, plan, technique, suivi)
 # ---------------------------------------------------------------------------
 
-def barre_score(v):
-    """Barre centrée de -1 à +1."""
-    if v is None:
-        return '<div class="cbar"></div>'
-    larg = min(abs(v), 1) * 50
-    return (f'<div class="cbar"><b class="{"up" if v > 0 else "down"}" '
-            f'style="left:{50 - larg if v < 0 else 50:.1f}%;width:{larg:.1f}%"></b></div>')
-
-
-def ligne_fiabilite(a):
-    st = a.get("suivi")
-    if not st:
-        return ""
-    if st["n_dir"] < 20:
-        return (f'<p class="pied">Fiabilité : {st["n_dir"]} prévision(s) directionnelle(s) évaluée(s) sur 30 jours. '
-                f'Pas encore assez pour s\'y fier (il en faut au moins 20).</p>')
-    return (f'<p class="pied">Fiabilité mesurée sur 30 jours : <b>{nb(st["taux_dir"], 0)} %</b> de bonnes directions '
-            f'sur {st["n_dir"]} prévisions. <a href="#analyse" data-aller="suivi">Détail</a></p>')
-
-
-def ligne_playbook(a):
-    pb = a.get("playbook")
-    if not pb:
-        return ""
-    ton = {1: "up", -1: "down"}.get(pb["sens"], "flat")
-    z = (pb["zones_entree"] or [None])[0]
-    zone = (f' Zone d\'entrée : <b>{fp(z["bas"], 1)}–{fp(z["haut"], 1)}</b> ({esc(", ".join(z["elements"][:2]))}).' if z else "")
-    inv = f' Invalidation : {fp(pb["invalidation"], 1)}.' if pb.get("invalidation") else ""
-    return (f'<div class="pb-ligne"><span class="k">Playbook technico-fondamental</span><br><b class="{ton}">'
-            f'{esc(pb["titre"])}</b>.{zone}{inv} <a href="#analyse" data-aller="technique">Détail</a></div>')
-
-
-def avis_ia(ia):
-    j = (ia or {}).get("json")
-    if not j:
-        return ""
-    ton = {"d'accord": "up", "en désaccord": "down"}.get(j["accord"].lower(), "flat")
-    return (f'<div class="avis-ia"><div class="k">Analyste IA ({esc(ia.get("fournisseur", "Claude"))}) · {ia_quand(ia)}</div>'
-            f'<p><span class="chip {ton}">{esc(j["accord"])}</span> {esc(j["titre"])} '
-            f'<a href="#analyse" data-aller="fondamental">Lire</a></p></div>')
-
-
-def bloc_vue_cockpit(a):
-    v = a.get("vue")
-    if not v:
-        return '<p class="vide">Vue de marché indisponible.</p>'
-    ton = {1: "up", -1: "down"}.get(v["sens"], "flat")
-    st_ = {x["nom"]: x for x in (a.get("technique") or {}).get("structure", [])}
-
-    def puce(t):
-        x = st_.get(t["nom"])
-        labs = f' {x["label_sommet"] or ""}·{x["label_creux"] or ""}' if x else ""
-        return (f'<span class="tf {({1: "up", -1: "down"}).get(t["sens"], "flat")}" '
-                f'title="{esc(t["detail"] + (" ; structure " + x["etat"].lower() if x else ""))}">'
-                f'{esc(t["nom"].replace(" heures", " h").replace("1 heure", "1 h").replace("Journalier", "Jour"))} '
-                f'{({1: "▲", -1: "▼"}).get(t["sens"], "●")}{labs}</span>')
-    mt = "".join(puce(t) for t in a.get("matrice") or [])
-    fourch = (f'<div class="fourch"><span class="k">Fourchette probable à {HORIZON_H} h (68 %)</span>'
-              f'<b>{fp(v["fourchette"][0], 0)} – {fp(v["fourchette"][1], 0)}</b><small>±{nb(v["sigma"], 0)} {UNITE}</small></div>'
-              ) if v["fourchette"] else ""
-    alert = "".join(f'<p class="nu">Conviction réduite : {esc(x)}.</p>' for x in v["alertes"])
-    sent = "".join(f'<span class="chip {t}">{esc(l)} : {esc(d)}</span>' for l, d, t in v["sentiment"][:4])
-    return (f'<div class="vue-top"><div><div class="k">Direction à {HORIZON_H} heures</div>'
-            f'<div class="verdict-s {ton}">{v["direction"].upper()}</div>'
-            f'<div class="k">conviction {esc(v["conviction"])}</div></div>'
-            f'<div class="vue-score">{barre_score(v["score"])}<div class="pctleg"><span>Baissier</span>'
-            f'<span>score {nb(v["score"], 2, True)}</span><span>Haussier</span></div></div></div>'
-            f'<div class="tfs">{mt}</div>{fourch}'
-            f'<p class="scen"><b>Scénario central.</b> {esc(v["central"])}</p>'
-            + (f'<p class="scen alt"><b>Scénario alternatif.</b> {esc(v["alternatif"])}</p>' if v["alternatif"] else "")
-            + f'{alert}{ligne_playbook(a)}<div class="chips">{sent}</div>{avis_ia(a.get("ia"))}{ligne_fiabilite(a)}'
-            f'<p class="pied"><a href="#analyse" data-aller="synthese">Plan de séance, sentiment et catalyseurs</a></p>')
-
-
-def bloc_setup_a(a):
-    sa = a.get("setup_a")
-    if not sa:
-        return '<p class="vide">Setup A indisponible (données intraday manquantes).</p>'
-    mot = {1: "achats", -1: "ventes"}
-    fl = {1: '<span class="up">▲ haussière</span>', -1: '<span class="down">▼ baissière</span>', 0: '<span class="flat">aucune</span>'}
-
-    def bos_txt(x):
-        return (f'{fl[x["sens"]]} <small class="flat">({fp(x["niveau"] + AJUST, 1)}, {date_fr(x["t"].to_pydatetime(), True)})</small>'
-                if x else fl[0])
-    ic = lambda ok: '<span class="ic up">✓</span>' if ok else '<span class="ic down">✗</span>'
-    lignes = [(sa["d4"] != 0, "Biais H4 : dernière cassure", bos_txt(sa["bos4"])),
-              (sa["d"] != 0, "H1 dans le même sens", bos_txt(sa["bos1"]) + ("" if sa["d"] or not sa["d4"] else
-                                                                            ' <small class="down">contradiction : pas de trade</small>'))]
-    li = "".join(f'<li>{ic(ok)}<span>{esc(lib)}</span><span>{val}</span></li>' for ok, lib, val in lignes)
-    li += ('<li id="sa-h"><span class="ic flat">●</span><span>Horaires (8 h–11 h, 14 h 30–17 h)</span><span>…</span></li>'
-           '<li id="sa-n"><span class="ic flat">●</span><span>Pas d\'annonce forte à ±30 min</span><span>…</span></li>')
-    niv = lambda L: "".join(f'<span>{esc(l)}</span><span class="num">{fp(v, 1)} <small class="flat">{nb(dd, 1, True)}</small></span>'
-                            for l, v, dd in L)
-    det = ""
-    if sa["d"]:
-        bal = sa["balayage"]
-        bal_txt = (f'<p class="bloc-txt"><b class="{"up" if sa["d"] > 0 else "down"}">Balayage fait</b> '
-                   f'{"sous" if sa["d"] > 0 else "au-dessus de"} {esc(bal["lib"].lower())} ({fp(bal["niveau"], 1)}) à '
-                   f'{bal["t"].hour:02d}:{bal["t"].minute:02d} : guette le MSS en M5.</p>') if bal else ""
-        r2 = (f'<p class="pied">Écart entre la liquidité et la première cible : {nb(sa["dist"], 1)} {UNITE}. Pour un trade à '
-              f'2R, ton stop ne doit pas dépasser <b>{nb(sa["stop_max"], 1)} {UNITE}</b>'
-              + (f' (plafond 1 ATR H1 : {nb(sa["atr_h1"], 1)})' if sa.get("atr_h1") else "")
-              + (f'. Marge derrière la mèche : environ {nb(sa["marge"], 1)} {UNITE} (0,3 ATR M5)' if sa.get("marge") else "")
-              + '.</p>') if sa.get("stop_max") else ""
-        det = (bal_txt + f'<div class="sa-cols"><div><div class="k">Liquidités à balayer</div><div class="kv">'
-               f'{niv(sa["a_balayer"]) or "<span>aucune nette</span><span></span>"}</div></div>'
-               f'<div><div class="k">Cibles (liquidité opposée)</div><div class="kv">'
-               f'{niv(sa["cibles"]) or "<span>aucune nette</span><span></span>"}</div></div></div>{r2}')
-    cfg = json.dumps({"d": sa["d"], "bal": bool(sa["balayage"]), "mot": mot.get(sa["d"], ""),
-                      "liq": (sa["a_balayer"][0][0].lower() if sa["a_balayer"] else ""), "fen": FENETRES_SETUP_A,
-                      "news": NEWS_SETUP_A}, ensure_ascii=False)
-    return (f'<div id="setup-a" data-cfg="{esc(cfg)}"><div class="sa-statut flat" id="sa-statut">…</div>'
-            f'<ul class="sa-liste">{li}</ul>{det}<p class="pied">Le balayage en M15 et le MSS en M5 se vérifient sur ton '
-            f'graphique : le terminal se met à jour toutes les 15 minutes. <a href="#regles-setup-a" data-aller="suivi">Règles du Setup A</a></p></div>')
-
-
-def bloc_controle():
-    return ('<div class="ctl"><div class="ctl-boutons"><button type="button" class="achat" data-sens="1">Achat <kbd>A</kbd></button>'
-            '<button type="button" class="vente" data-sens="-1">Vente <kbd>V</kbd></button></div>'
-            '<div class="ctl-champs"><label>Prix d\'entrée <input id="ctl-prix" inputmode="decimal" autocomplete="off"></label>'
-            '<label>Stop <input id="ctl-stop" inputmode="decimal" placeholder="proposé" autocomplete="off"></label>'
-            '<label>Objectif <input id="ctl-cible" inputmode="decimal" placeholder="proposé" autocomplete="off"></label></div>'
-            '<div id="ctl-res"><p class="pied">Choisis Achat ou Vente (touches A et V). Tape le prix de ta plateforme pour des '
-            'distances exactes. Sans stop ni objectif, le terminal propose ses niveaux de référence et calcule la taille.</p></div></div>')
-
-
-def bloc_biais_detail(a):
-    b = a["biais"]
-    lignes = ""
-    for s in b["signaux"]:
-        ic = {1: '<span class="ic up">▲</span>', -1: '<span class="ic down">▼</span>'}.get(s["score"], '<span class="ic flat">●</span>')
-        lignes += f'<tr><td>{ic} {esc(s["nom"])}</td><td class="num">{esc(s["valeur"])}</td><td class="flat">{esc(s["lecture"])}</td></tr>'
-    div = f'<div class="note">{esc(a["divergence"])}</div>' if a.get("divergence") else ""
-    coul = {"Haussier": "up", "Baissier": "down"}.get(b["verdict"], "flat")
-    return (f'<section><h2>Biais fondamental : <span class="{coul}">{b["verdict"]}</span> '
-            f'<small class="flat">score {nb(b["total"], 0, True) if b["total"] else "0"} sur {b["n"]} signaux</small></h2>'
-            f'<div class="defile"><table class="cal">{lignes}</table></div>{div}</section>')
-
-
-def bloc_risque(a):
-    r = a.get("risque")
-    if not r:
-        return ""
-    comp = "".join(f'<span>{esc(l)}</span>{barre_score(v / 3)}<span class="v">{nb(v, 1, True)} σ</span>'
-                   for l, v in r["composantes"])
-    ton = {"Risk-on": "down", "Risk-off": "up"}.get(r["etat"], "flat")
-    return (f'<section><h2>Appétit pour le risque : <span class="{ton}">{r["etat"]}</span> '
-            f'<small class="flat">score {nb(r["score"], 0, True)} sur 100</small></h2>'
-            f'<p class="pourquoi">{esc(r["lecture"])} Chaque barre montre le mouvement sur 5 jours, orienté pour que '
-            f'la droite signifie « prise de risque ».</p><div class="decomp" style="max-width:640px">{comp}</div></section>')
-
 
 def graphique_profil_vol(pv, cal, w=1000, h=190):
     if not pv or pv.get("moy") is None:
@@ -6803,57 +6286,6 @@ MATRICE_PB = {(1, 1): "Acheter les replis", (1, 0): "Achats sélectifs", (1, -1)
               (0, 1): "Suivre la technique, taille réduite", (0, 0): "Patience ou range",
               (0, -1): "Suivre la technique, taille réduite", (-1, 1): "Divergence : attendre le CHoCH baissier",
               (-1, 0): "Ventes sélectives", (-1, -1): "Vendre les rebonds"}
-
-
-def bloc_synthese_tech(a):
-    t, pb = a.get("technique"), a.get("playbook")
-    if not t or not pb:
-        return ('<section><h2>Synthèse technico-fondamentale</h2><p class="vide">Données intraday insuffisantes.</p>'
-                '</section>')
-    cellules = ""
-    for fv, flib in ((1, "Fondamental haussier"), (0, "Fondamental neutre"), (-1, "Fondamental baissier")):
-        cellules += f'<div class="mx-l">{flib}</div>'
-        for tv_ in (1, 0, -1):
-            actif = (fv, tv_) == (pb["fond"], pb["tech"])
-            ton = {1: "up", -1: "down"}.get(fv if fv == tv_ else 0, "flat") if fv or tv_ else "flat"
-            cellules += f'<div class="mx-c{" actif" if actif else ""} {ton}">{esc(MATRICE_PB[(fv, tv_)])}</div>'
-    entete = ('<div></div><div class="mx-h">Technique haussière</div><div class="mx-h">Technique neutre</div>'
-              '<div class="mx-h">Technique baissière</div>')
-    reg = t["regime"]
-    notes = []
-    if reg["nom"] == "range":
-        notes.append("Régime de range : les cassures échouent plus souvent, privilégie les extrémités.")
-    if reg["compression"]:
-        notes.append("Volatilité comprimée" + (" (NR7 hier)" if reg["nr7"] else "") + " : une expansion est probable, "
-                     "attention aux faux départs avant les annonces.")
-    etapes = "".join(f"<li>{esc(e)}</li>" for e in pb["etapes"])
-    ton_pb = {1: "up", -1: "down"}.get(pb["sens"], "flat")
-    b = a["biais"]
-    scores = (f'<div class="kv"><span>Fondamental</span><span>{b["verdict"]} ({nb(b["total"], 0, True) if b["total"] else "0"} '
-              f'sur {b["n"]})</span><span>Technique</span><span class="{({1: "up", -1: "down"}).get(t["sens"], "flat")}">'
-              f'{nb(t["score"], 2, True)} ({({1: "haussière", -1: "baissière"}).get(t["sens"], "neutre")})</span>'
-              f'<span>Régime</span><span>{esc(reg["nom"])}{", compression" if reg["compression"] else ""}</span></div>')
-    conf = ""
-    for z in sorted(t["confluences"], key=lambda z: -z["centre"]):  # du plus haut au plus bas, comme une échelle de prix
-        dedans = z["bas"] <= t["prix"] <= z["haut"]
-        pos = "prix dedans" if dedans else (f'{nb(z["dist"], 1, True)} {UNITE}')
-        larg = min(z["score"] / 12, 1) * 100
-        conf += (f'<tr{" class=ici" if dedans else ""}><td class="num">{fp(z["bas"], 1)} – {fp(z["haut"], 1)}</td>'
-                 f'<td><div class="jauge-s"><i style="width:{larg:.0f}%"></i></div></td><td class="num">{nb(z["score"], 1)}</td>'
-                 f'<td class="num flat">{pos}</td>'
-                 f'<td class="flat">{esc(", ".join(z["elements"]))}</td></tr>')
-    return (f'<section id="synthese-tech"><h2>Synthèse technico-fondamentale</h2><p class="pourquoi">Le fondamental donne le '
-            f'sens du vent, la technique dit si le prix le suit et où agir. Leur combinaison détermine le type de trade qui a '
-            f'un avantage maintenant. Case dorée : la situation actuelle.</p>'
-            f'<div class="grille2"><div><div class="matrice-pb">{entete}{cellules}</div>{scores}</div>'
-            f'<div><div class="k">Playbook du moment</div><div class="pb-titre {ton_pb}">{esc(pb["titre"])}</div>'
-            f'<p class="bloc-txt">{esc(pb["explication"])}</p><ol class="routine">{etapes}</ol>'
-            + "".join(f'<p class="nu">{esc(n)}</p>' for n in notes) + '</div></div>'
-            f'<h3>Zones de confluence</h3><p class="legende">Là où plusieurs niveaux surveillés par les professionnels se '
-            f'superposent : c\'est là que le prix réagit le plus souvent. Plus le score est élevé, plus la zone est forte. '
-            f'Prix en {ACTIF['spot']}.</p><div class="defile"><table class="cal"><tr><th>Zone</th><th></th><th>Score</th>'
-            f'<th>Distance</th><th>Niveaux superposés</th></tr>{conf or "<tr><td>Aucune zone forte à proximité</td></tr>"}'
-            f'</table></div></section>')
 
 
 def bloc_details_tech(a):
@@ -7030,23 +6462,6 @@ def bloc_technique(a, data):
     return bloc_details_tech(a) + bloc_concepts(a) + mat + bloc_intermarche(a) + bloc_carnets(a) + vol + prof + bloc_seance(a)
 
 
-def bloc_reactions(a):
-    r = a.get("reactions") or []
-    if not r:
-        return (f'<section><h2>Réactions passées {ACTIF["de"]} aux annonces</h2><p class="vide">Pas encore assez de données : '
-                'la base se remplit à chaque annonce publiée.</p></section>')
-    lignes = "".join(f'<tr><td>{esc(x["type"])}</td><td class="num">{x["n"]}</td><td class="num">{nb(x["med_rng"], 0)} {UNITE}</td>'
-                     f'<td class="num">{nb(x["max_rng"], 0)} {UNITE}</td><td class="num">{nb(x["med_mv"], 0)} {UNITE}</td>'
-                     f'<td class="num">{nb(x["retour_pct"], 0)} %</td><td class="num">{nb(x["hausse_pct"], 0)} %</td>'
-                     f'<td class="flat">{esc(x["precision"])}</td></tr>' for x in r)
-    return (f'<section><h2>Réactions passées {ACTIF["de"]} aux annonces</h2><p class="pourquoi">Ce que {ACTIF["nom"]} a fait dans '
-            f'l\'heure qui a suivi chaque type d\'annonce. Amplitude = écart entre le plus haut et le plus bas ; retournement = '
-            f'le mouvement à 1 h va dans le sens inverse des 15 premières minutes. Sert à placer tes stops et à décider si tu '
-            f'trades après l\'annonce ou si tu attends.</p><div class="defile"><table class="cal"><tr><th>Annonce</th>'
-            f'<th>Nombre</th><th>Amplitude médiane</th><th>Amplitude max</th><th>Mouvement médian à 1 h</th>'
-            f'<th>Retournements</th><th>Hausse</th><th>Précision</th></tr>{lignes}</table></div></section>')
-
-
 def bloc_adjudications(a):
     ad = a.get("adjudic")
     if not ad:
@@ -7066,66 +6481,6 @@ def bloc_adjudications(a):
             f'<div><h3 style="margin-top:0">Résultats récents</h3><div class="defile"><table class="cal"><tr><th>Date</th>'
             f'<th>Titre</th><th>Rendement</th><th>Couverture</th><th>Moyenne</th><th>Étrangers</th><th>Demande</th></tr>'
             f'{ps or "<tr><td>Aucun</td></tr>"}</table></div></div></div></section>')
-
-
-def bloc_plan(a):
-    v, p, bi, se = a.get("vue"), a.get("plan"), a.get("bilan"), a.get("semaine")
-    out = ""
-    if v:
-        comp = "".join(f'<span>{lib}</span>{barre_score(v["composantes"][k])}<span class="v">{nb(v["composantes"][k], 2, True)}</span>'
-                       for k, lib in (("fondamental", "Fondamental"), ("tendance", "Technique"), ("momentum", "Momentum du jour"),
-                                      ("sentiment", "Sentiment")))
-        sent = "".join(f'<tr><td>{esc(l)}</td><td class="{t}">{esc(d)}</td></tr>' for l, d, t in v["sentiment"])
-        cat = "".join(f"<li>{esc(c)}</li>" for c in v["catalyseurs"]) or '<li class="vide">Aucun catalyseur majeur identifié.</li>'
-        out += (f'<section><h2>Où va le marché : <span class="{({1: "up", -1: "down"}).get(v["sens"], "flat")}">'
-                f'{v["direction"]}</span> <small class="flat">conviction {esc(v["conviction"])}, horizon {HORIZON_H} h</small></h2>'
-                f'<div class="grille2"><div><p class="scen"><b>Scénario central.</b> {esc(v["central"])}</p>'
-                + (f'<p class="scen alt"><b>Scénario alternatif.</b> {esc(v["alternatif"])}</p>' if v["alternatif"] else "")
-                + (f'<p class="sous">Fourchette probable à {HORIZON_H} h : <b>{fp(v["fourchette"][0], 0)} – {fp(v["fourchette"][1], 0)}</b> '
-                   f'(deux chances sur trois), à partir du dernier relevé à {fp(v["prix"], 1)}.</p>' if v["fourchette"] else "")
-                + f'<h3>Pourquoi</h3><p class="bloc-txt">{esc("Parce que " + " ; ".join(v["pourquoi"]) + ".")}</p>'
-                + "".join(f'<p class="nu">Conviction réduite : {esc(x)}.</p>' for x in v["alertes"])
-                + f'</div><div><h3 style="margin-top:0">Composantes du score</h3><div class="decomp">{comp}</div>'
-                f'<h3>Sentiment</h3><table class="cal">{sent or "<tr><td>n.d.</td></tr>"}</table>'
-                f'<h3>Catalyseurs à venir</h3><ul class="suite">{cat}</ul></div></div>'
-                f'<p class="legende" style="margin-top:12px">Score = {nb(POIDS_VUE["fondamental"] * 100, 0)} % fondamental, '
-                f'{nb(POIDS_VUE["tendance"] * 100, 0)} % tendance multi-unités, {nb(POIDS_VUE["momentum"] * 100, 0)} % momentum '
-                f'du jour, {nb(POIDS_VUE["sentiment"] * 100, 0)} % sentiment. C\'est une lecture probabiliste, pas une '
-                f'certitude : l\'onglet Suivi mesure son taux de réussite réel.</p>{ligne_fiabilite(a)}</section>')
-    if p:
-        ses, aucune = "", '<li class="vide">Pas d’annonce</li>'
-        for x in p["seances"]:
-            ann = "".join(f'<li><span class="num">{_hm(d)}</span> {esc(t)}{" (fort impact)" if imp == "High" else ""}</li>'
-                          for d, t, imp in x["annonces"])
-            ses += (f'<div class="fiche"><div class="t">{esc(x["nom"])} <small class="flat">{int(x["debut"]):02d}:'
-                    f'{int(x["debut"] % 1 * 60):02d} – {int(x["fin"]):02d}:{int(x["fin"] % 1 * 60):02d}</small></div>'
-                    f'<p>Activité habituelle : <b>{esc(x["activite"])}</b></p><ul class="suite">'
-                    f'{ann or aucune}</ul></div>')
-        niv_h = "".join(f'<li><span class="num">{fp(v_, 1)}</span> {esc(l)}</li>' for l, v_ in p["dessus"])
-        niv_b = "".join(f'<li><span class="num">{fp(v_, 1)}</span> {esc(l)}</li>' for l, v_ in p["dessous"])
-        regles = "".join(f"<li>{esc(r)}</li>" for r in p["regles"])
-        out += (f'<section><h2>{esc(p["titre"])}</h2><p class="bloc-txt">{esc(p["contexte"])}</p>'
-                f'<div class="grille3"><div><h3 style="margin-top:0">Au-dessus</h3><ul class="suite">{niv_h}</ul>'
-                f'<h3>En dessous</h3><ul class="suite">{niv_b}</ul></div>'
-                f'<div style="grid-column:span 2"><h3 style="margin-top:0">Règles du jour</h3><ol class="routine">{regles}</ol></div></div>'
-                f'<h3>Agenda par séance</h3><div class="fiches">{ses}</div></section>')
-    if bi:
-        ann = "".join(f'<tr><td class="num">{esc(x["heure"])}</td><td>{esc(x["titre"])}</td><td class="num">{esc(x["reel"])}</td>'
-                      f'<td class="num">{esc(x["prev"])}</td><td class="num {classe_effet(x["mv"], 1)}">'
-                      f'{nb(x["mv"], 1, True) + " " + UNITE if x["mv"] is not None else "n.d."}</td></tr>' for x in bi["annonces"])
-        out += (f'<section><h2>Bilan de la séance du {date_fr(bi["date"])}</h2>'
-                + "".join(f'<p class="bloc-txt">{esc(t)}</p>' for t in bi["phrases"])
-                + (f'<table class="cal"><tr><th>Heure</th><th>Annonce</th><th>Réel</th><th>Prévu</th><th>{ACTIF["court"]} sur 1 h</th></tr>'
-                   f'{ann}</table>' if ann else "") + '</section>')
-    if se:
-        jours = ""
-        for d, evs in se["jours"]:
-            li = "".join(f'<li><span class="num">{_hm(t)}</span> {esc(x)}</li>' for t, x in sorted(evs, key=lambda z: z[0]))
-            jours += f'<div class="fiche"><div class="t">{date_fr(d)}</div><ul class="suite">{li}</ul></div>'
-        out += (f'<section><h2>Les jours à venir</h2><p class="pourquoi">{ACTIF["semaine"]} Plus haut et plus bas de la semaine : {fp((se["haut_sem"] or 0) + AJUST, 1) if se["haut_sem"] else "n.d."} '
-                f'et {fp((se["bas_sem"] or 0) + AJUST, 1) if se["bas_sem"] else "n.d."}.</p>'
-                f'<div class="fiches">{jours or "<p class=vide>Rien de majeur au calendrier.</p>"}</div></section>')
-    return out
 
 
 def bloc_suivi(a):
@@ -7210,133 +6565,6 @@ def bloc_qui_a_raison(so):
 COUL = {1: "up", -1: "down", 0: "flat", 2: "warn"}  # vert haussier, rouge baissier, gris neutre, orange attente / risque
 
 
-def fraicheur(typ, quand=None):
-    """Badge de fraîcheur : LIVE, il y a X min (relevé), DAILY, WEEKLY."""
-    if typ == "live":
-        return '<span class="fr live">LIVE</span>'
-    if typ == "rel":
-        iso = quand.isoformat() if hasattr(quand, "isoformat") else (quand or maintenant().isoformat())
-        return f'<span class="fr rel" data-t="{esc(iso)}">relevé</span>'
-    lib = {"daily": "DAILY", "weekly": "WEEKLY"}.get(typ, typ.upper())
-    d = f" · {quand.day} {MOIS_FR[quand.month - 1]}" if hasattr(quand, "day") else ""
-    return f'<span class="fr {typ}">{lib}{d}</span>'
-
-
-def bloc_trader(a):
-    tr, ev = a.get("trader") or {}, a.get("annonce")
-    s = a.get("seance") or {}
-    b = tr.get("biais", 0)
-    tuile = lambda k, v, sub="", cls="", id_="": (f'<div class="tu {cls}"{(" id=" + chr(34) + id_ + chr(34)) if id_ else ""}>'
-                                                 f'<span class="k">{k}</span><b>{v}</b><small>{sub}</small></div>')
-    im, grs = a.get("intermarket"), a.get("grs")
-    im_txt = im["statut"] if im else "n.d."
-    im_cls = {"DIVERGENCE": "warn", "MIXED": "flat"}.get(im_txt, COUL.get(im["sens"] if im else 0, "flat"))
-    der = (a.get("reactions_evt") or [None])[0]
-    der_html = ""
-    if der and der["date"] >= maintenant() - timedelta(hours=3) and der["reac"].get("or_60") is not None:
-        der_html = (f'<p class="pied">Dernière annonce : <b>{esc(der["nom"])}</b> {esc(der["reel"])} contre {esc(der["prevision"])} '
-                    f'prévu · {ACTIF["mini"]} {nb(der["reac"].get("or_usd_60"), 1, True)} {UNITE} en 1 h. {esc(der["interpretation"])}</p>')
-    t_ = a.get("technique") or {}
-    bt = t_.get("sens", 0) if t_ else 0
-    bt_txt = {1: "Haussier", -1: "Baissier", 0: "Neutre"}[bt] if t_ else "n.d."
-    s1 = next((x for x in t_.get("structure", []) if x["nom"] == "1 heure"), None)
-    bt_sub = (f'score {nb(t_["score"], 2, True)}' + (f' · 1 h {s1["etat"].lower()} ({s1["label_sommet"] or "?"} + {s1["label_creux"] or "?"})' if s1 else "")) if t_ else ""
-    return (f'<section id="trader" class="trader"><div class="tr-tete"><h2>Mode Trader</h2>'
-            f'<span>Analyse {fraicheur("rel", s.get("maj"))} · prix <span class="fr live" id="tr-badge">LIVE</span> <b id="tr-px">'
-            f'{nb(tr.get("ref"), 2)}</b></span></div>'
-            f'<div class="tr-l1">'
-            + tuile("Bias fondamental", esc(tr.get("biais_txt", "n.d.")),
-                    f'score {nb(a["biais"]["total"], 0, True) if a["biais"]["total"] else "0"} sur {a["biais"]["n"]}', COUL.get(b, "flat"))
-            + tuile("Bias technique", esc(bt_txt), bt_sub, COUL.get(bt, "flat"))
-            + tuile("Signal", "aucun", "", "flat", "tr-signal")
-            + tuile("Setup A", "…", "balayage puis retournement", "flat large", "tr-setupa")
-            + '</div><div class="tr-l2">'
-            + tuile("Playbook général", "…", "", "warn large", "tr-action")
-            + tuile("Intermarket", im_txt, (f'{ACTIF["rs"]} {nb(grs["score"], 0, True)}' if grs else ""), im_cls)
-            + tuile("Prochaine news", esc(fiche_annonce(ev, a)["nom"]) if ev else "aucune", "", "", "tr-news")
-            + f'</div>{der_html}</section>')
-
-
-def bloc_intermarket(a):
-    im, grs = a.get("intermarket"), a.get("grs")
-    if not im:
-        return ""
-    fl = lambda v, impl, d, u: (f'<td class="num {COUL.get(impl, "flat")}">{nb(v, d, True)}{u} '
-                                f'{({1: "▲", -1: "▼"}).get(impl, "·")}</td>') if v is not None else '<td class="num flat">n.d.</td>'
-    lignes = ""
-    for l in im["lignes"]:
-        badge = l["statut"]
-        cls = "warn" if badge == "DIVERGENCE" else ("flat" if badge == "MIXED" else COUL.get(l["consensus"], "flat"))
-        frais = fraicheur("daily") if l["horizon"] in ("1 jour", "5 jours") else '<span class="fr rel15">15 MIN</span>'
-        lignes += (f'<tr><td>{esc(l["horizon"])} {frais}</td><td class="num {COUL.get(l["sens_or"], "flat")}">{nb(l["or"], 2, True)} %</td>'
-                   + fl(l["dxy"], l["impl"][0], 2, " %") + fl(l["us2"], l["impl"][1], 1, " pb") + fl(l["reel"], l["impl"][2], 1, " pb")
-                   + f'<td><span class="statut {cls}">{badge}</span></td><td class="flat">{esc(l["lecture"])}</td></tr>')
-    g = ""
-    if grs:
-        pos = (grs["score"] + 100) / 2
-        g = (f'<h3>Gold Relative Strength : <span class="{COUL.get(1 if grs["score"] > 25 else (-1 if grs["score"] < -25 else 0))}">'
-             f'{nb(grs["score"], 0, True)}</span> <small class="flat">({esc(grs["etat"])})</small></h3>'
-             f'<div class="pctbar"><i style="left:50%"></i><b style="left:{pos:.1f}%"></b></div>'
-             f'<div class="pctleg"><span>Plus faible que prévu</span><span>en ligne</span><span>Plus forte que prévu</span></div>'
-             f'<p class="legende" style="margin-top:6px">Écart entre ce que l\'or a fait et ce que le dollar et les taux '
-             f'expliquent, sur 1 h, 4 h, 1 jour et 5 jours. Un or plus fort que prévu signale des acheteurs de fond ; plus '
-             f'faible, des vendeurs de fond.</p>')
-    return (f'<section id="intermarket"><h2>Intermarket : <span class="statut {"warn" if im["statut"] == "DIVERGENCE" else "flat" if im["statut"] == "MIXED" else COUL.get(im["sens"], "flat")}">'
-            f'{im["statut"]}</span></h2><p class="pourquoi">L\'or face au dollar (DXY), au taux 2 ans et au taux réel 10 ans. '
-            f'Chaque flèche indique ce que le mouvement du moteur implique pour l\'or (▲ favorable, ▼ défavorable). '
-            f'CONFIRMED : l\'or suit ses moteurs. DIVERGENCE : il va contre (signal fort, à surveiller). MIXED : pas de '
-            f'message clair.</p><div class="defile"><table class="cal"><tr><th>Horizon</th><th>Or</th><th>DXY</th>'
-            f'<th>US 2 ans</th><th>Réel 10 ans</th><th>Statut</th><th>Lecture</th></tr>{lignes}</table></div>{g}</section>')
-
-
-def bloc_regimes(a, compact=False):
-    rg = a.get("regimes")
-    if not rg:
-        return ""
-    lignes = ""
-    for d in sorted(rg["dimensions"], key=lambda x: -x["intensite"]):
-        cls = COUL.get(d["effet"], "flat")
-        eff = {1: "favorable à l'or", -1: "défavorable à l'or", 0: "neutre", 2: "risque (liquidations possibles)"}[d["effet"]]
-        lignes += (f'<span>{esc(d["nom"])}</span><div class="jauge-s"><i class="{cls}" style="width:{d["intensite"]:.0f}%"></i></div>'
-                   f'<span class="v {cls}">{nb(d["intensite"], 0)}</span>'
-                   + ("" if compact else f'<span class="{cls}">{eff}</span><span class="flat">{esc(d["etat"])}</span>'))
-    dom = rg["dominant"]
-    return (f'<section id="regimes"><h2>Régime de marché : <span class="{COUL.get(dom["effet"], "flat")}">{esc(dom["nom"])}</span> '
-            f'<small class="flat">domine (intensité {nb(dom["intensite"], 0)})</small></h2>'
-            f'<p class="pourquoi">Six forces qui pilotent l\'or, classées par intensité. La plus forte dicte à quels '
-            f'indicateurs donner la priorité aujourd\'hui. Vert : favorable à l\'or, rouge : défavorable, orange : risque.</p>'
-            f'<div class="regimes{" compact" if compact else ""}">{lignes}</div></section>')
-
-
-def bloc_reactions_evt(a):
-    rs = a.get("reactions_evt") or []
-    if not rs:
-        return ('<section><h2>Event Reaction Engine</h2><p class="vide">Aucune annonce majeure publiée cette semaine pour '
-                'l\'instant. Après chaque CPI, NFP, PCE ou décision de la Fed, la réaction du dollar, du 2 ans et de l\'or '
-                's\'affiche ici.</p></section>')
-    cartes = ""
-    for r in rs:
-        rc = r["reac"]
-        sp = {1: "dure (dollar ▲)", -1: "souple (dollar ▼)", 0: "conforme"}[r["sens_surprise"]]
-        def val(k, d, u):
-            v = rc.get(k)
-            if v is None:
-                return '<span class="flat">n.d.</span>'
-            effet = (1 if v > 0 else -1) * (1 if k.startswith("or") else -1) if v else 0
-            return f'<span class="{COUL.get(effet)}">{nb(v, d, True)}{u}</span>'
-        cartes += (f'<div class="fiche"><div class="t">{esc(r["nom"])}</div><div class="q">{date_fr(r["date"], True)}</div>'
-                   f'<div class="pp"><div><span>Consensus</span>{esc(r["prevision"] or "n.d.")}</div><div><span>Réel</span>'
-                   f'<b>{esc(r["reel"])}</b></div><div><span>Surprise</span>{esc(sp)}</div></div>'
-                   f'<div class="kv"><span>DXY 15 min / 1 h</span><span>{val("dxy_15", 2, " %")} / {val("dxy_60", 2, " %")}</span>'
-                   f'<span>US 2 ans 15 min / 1 h</span><span>{val("us2_15", 1, " pb")} / {val("us2_60", 1, " pb")}</span>'
-                   f'<span>Or 15 min / 1 h</span><span>{val("or_15", 2, " %")} / {val("or_60", 2, " %")}</span></div>'
-                   f'<p class="nu">{esc(r["interpretation"])}</p></div>')
-    return (f'<section id="reactions"><h2>Event Reaction Engine</h2><p class="pourquoi">Après chaque annonce majeure : '
-            f'consensus, chiffre réel, surprise, réaction du dollar, du taux 2 ans et de l\'or, puis lecture. Une réaction '
-            f'inverse à la surprise est souvent le signal le plus intéressant de la journée.</p>'
-            f'<div class="fiches">{cartes}</div></section>')
-
-
 def tv(script, config, lib, style=""):
     """Widget TradingView (flux en direct). Le texte lib reste visible si le flux ne charge pas."""
     return (f'<div class="tradingview-widget-container tv" data-lib="{esc(lib)}" style="{style}">'
@@ -7392,12 +6620,6 @@ def bloc_reglages():
             f'<div class="reg-actions"><button type="button" id="reg-defaut">Valeurs par défaut</button>'
             f'<button type="submit" value="annuler">Fermer</button>'
             f'<button type="button" id="reg-ok" class="or">Enregistrer</button></div></form></dialog>')
-
-
-def bloc_bandeau_tv():
-    conf = {"symbols": [{"proName": s, "description": lib} for s, lib in TV_BANDEAU], "showSymbolLogo": False,
-            "isTransparent": True, "displayMode": "compact", "colorTheme": "dark", "locale": "fr"}
-    return f'<div class="tape">{tv("embed-widget-ticker-tape.js", conf, "Cotations en direct (TradingView)", "height:46px")}</div>'
 
 
 def bloc_strip(a, y, f):
@@ -7463,66 +6685,6 @@ def bloc_strip(a, y, f):
     return f'<div class="strip analyst" data-zone="strip">{corps}</div>'
 
 
-def bloc_commande(a):
-    b = a["biais"]
-    coul = {"Haussier": "up", "Baissier": "down"}.get(b["verdict"], "flat")
-    n = max(b["n"], 1)
-    larg = f"calc((100% - {2 * (n - 1)}px) / {n})"
-    baiss = "".join(f'<div class="bloc b" style="width:{larg}"></div>' for s in b["signaux"] if s["score"] < 0)
-    hauss = "".join(f'<div class="bloc h" style="width:{larg}"></div>' for s in b["signaux"] if s["score"] > 0)
-    sig = ""
-    for s in b["signaux"]:
-        ic = {1: '<span class="ic up">▲</span>', -1: '<span class="ic down">▼</span>'}.get(s["score"], '<span class="ic flat">●</span>')
-        sig += f'{ic}<span title="{esc(s["lecture"])}">{esc(s["nom"])}</span><span class="val">{esc(s["valeur"])}</span>'
-    r = a["regime"]
-    lect = [p for p in a["point"][2:] if not p.startswith("Prochain risque")]
-    div = f'<p class="nu">{esc(a["divergence"])}</p>' if a.get("divergence") else ""
-    return (f'<div class="cmd-top"><div><div class="k">Biais fondamental</div>'
-            f'<div class="verdict-s {coul}">{b["verdict"].upper()}</div>'
-            f'<div class="k">score {nb(b["total"], 0, True) if b["total"] else "0"} sur {b["n"]}</div></div>'
-            f'<div class="balance-s"><div class="moitie g">{baiss}</div><div class="moitie">{hauss}</div>'
-            f'<div class="axe"></div></div></div><div class="sig">{sig}</div>'
-            f'<div class="k">Régime de marché</div><div class="bloc-txt"><b class="{r["ton"]}">{esc(r["nom"])}</b>'
-            f'<p>{esc(r["consequence"])}</p></div>'
-            f'<div class="k">Lecture</div><div class="bloc-txt">' + "".join(f"<p>{esc(p)}</p>" for p in lect) +
-            f'{div}<p><a href="#analyse" data-aller="fondamental">Lecture complète et analyste IA</a></p></div>')
-
-
-def bloc_niveaux_compact(a):
-    s = a.get("seance")
-    if not s:
-        return '<p class="vide">Données intraday indisponibles.</p>'
-    lignes, fait = "", False
-    choisis = [n for n in s["niveaux"] if abs(n["dist"]) <= 3 * (s["atr"] or 1e9)]
-    for n in choisis:
-        if not fait and n["niveau"] < s["prix"]:
-            lignes += (f'<tr class="ici"><td>Dernier relevé</td><td class="num">{fp(s["prix"] + AJUST, 1)}</td>'
-                       f'<td></td></tr>')
-            fait = True
-        lignes += (f'<tr><td{" class=liq" if n.get("carnet") else ""}>{esc(n["lib"])}</td><td class="num">{fp(n["cfd"], 1)}</td>'
-                   f'<td class="num dist flat" data-v="{n["cfd"]:.2f}">{nb(n["dist"], 1, True)}</td></tr>')
-    if not fait:
-        lignes += f'<tr class="ici"><td>Dernier relevé</td><td class="num">{fp(s["prix"] + AJUST, 1)}</td><td></td></tr>'
-    vw = s.get("vwap")
-    pos = ("au-dessus du VWAP : acheteurs aux commandes" if s["prix"] > vw else "sous le VWAP : vendeurs aux commandes") if vw else ""
-    ses = " · ".join(f'{x["nom"]} <b>{fp(x["haut"] + AJUST, 1)}</b>/<b>{fp(x["bas"] + AJUST, 1)}</b>'
-                     for x in s["seances"] if x["haut"] is not None)
-    return (f'<table class="niv-c">{lignes}</table>'
-            f'<p class="pied">ATR 14 j <b>{nb(s["atr"], 1)} {UNITE}</b> · consommé <b>{nb(s["pct_atr"], 0)} %</b>'
-            f'{" · prix " + esc(pos) if pos else ""}</p><p class="pied">{ses}</p>'
-            f'<p class="pied"><a href="#analyse" data-aller="technique">Graphique des niveaux et détail des séances</a></p>')
-
-
-def bloc_moteurs_compact(a):
-    li = ""
-    for m in a["moteurs_jour"]:
-        fl = {"up": '<span class="up">▲</span>', "down": '<span class="down">▼</span>'}.get(m["ton"], '<span class="flat">●</span>')
-        li += (f'<li title="{esc(m["mecanisme"])}"><span>{esc(m["lib"])}</span><span class="num {m["ton"]}">{esc(m["var"])}</span>'
-               f'<span class="z">{nb(m["z"], 1, True)} σ</span>{fl}</li>')
-    return (f'<ul class="mot-c">{li}</ul><p class="pied">▲ favorable à l\'or · ▼ défavorable · σ = intensité du '
-            f'mouvement. <a href="#analyse" data-aller="fondamental">Carte de chaleur</a></p>')
-
-
 def evenements_json(data, a):
     now = maintenant()
     out = []
@@ -7534,47 +6696,6 @@ def evenements_json(data, a):
                     "fcst": e["prevision"], "reel": e["reel"], "haut": fi["haut"], "bas": fi["bas"],
                     "nuance": fi["nuances"][0] if fi["nuances"] else "", "histo": fi.get("histo", "")})
     return json.dumps(out[:16], ensure_ascii=False).replace("</", "<\\/")
-
-
-def bloc_cockpit(a, y, f, sans_setup=False):
-    chart = tv("embed-widget-advanced-chart.js", {
-        "autosize": True, "symbol": TV_OR, "interval": "15", "timezone": FUSEAU, "theme": "dark", "style": "1",
-        "locale": "fr", "allow_symbol_change": True, "calendar": False, "hide_volume": True,
-        "backgroundColor": "#121b23", "gridColor": "rgba(34,50,66,0.45)", "support_host": "https://www.tradingview.com"},
-        f"Graphique {ACTIF['sym']} en direct (TradingView)")
-    minis = "".join(
-        f'<div class="panel">{tv("embed-widget-mini-symbol-overview.js", {"symbol": sym, "width": "100%", "height": "100%", "locale": "fr", "dateRange": "1D", "colorTheme": "dark", "isTransparent": True, "autosize": True, "largeChartUrl": "", "noTimeScale": True}, lib)}</div>'
-        for sym, lib in TV_MINIS)
-    news = tv("embed-widget-timeline.js", {"feedMode": "symbol", "symbol": TV_OR, "colorTheme": "dark", "isTransparent": True,
-                                           "displayMode": "compact", "width": "100%", "height": "100%",
-                                           "locale": TV_LANGUE_ACTUS}, "Fil d'actualité en direct (TradingView)")
-    return (f'<main class="cockpit">'
-            f'<div class="col col-g"><div class="panel" id="p-graph"><div class="ph"><span class="k">{esc(ACTIF["sym"])} en direct</span>'
-            f'<small>{fraicheur("live")} {esc(TV_OR)} · TradingView</small></div><div class="pb nopad">{chart}</div></div>'
-            f'<div class="minis analyst">{minis}</div></div>'
-            f'<div class="col col-c">'
-            + ("" if sans_setup else
-               f'<div class="panel" id="p-setup"><div class="ph"><span class="k">Setup A · balayage puis retournement</span>'
-               f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))}</small></div><div class="pb" data-zone="setup">{bloc_setup_a(a)}</div></div>')
-            + ('' if sans_setup else
-            f'<div class="panel analyst" id="p-vue"><div class="ph"><span class="k">Où va le marché</span>'
-            f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))} <a href="#analyse" data-aller="synthese">plan complet</a></small></div>'
-            f'<div class="pb" data-zone="vue">{bloc_vue_cockpit(a)}</div></div>')
-            + f'<div class="panel" id="p-ctl"><div class="ph"><span class="k">Contrôle avant l\'entrée</span>'
-            f'<small>touches A et V</small></div><div class="pb">{bloc_controle()}</div></div></div>'
-            f'<div class="col col-d"><div class="panel" id="p-evt"><div class="ph"><span class="k">Prochaine annonce à fort impact</span>'
-            f'<small><a href="#analyse" data-aller="annonces">scénarios</a></small></div>'
-            f'<div class="pb"><div id="evt-carte" data-cle="x"><p class="vide">Chargement...</p></div>'
-            f'<div class="k" style="margin-top:10px">Ensuite</div><ul class="suite" id="evt-suite"></ul></div></div>'
-            f'<div class="panel analyst" id="p-niv"><div class="ph"><span class="k">Niveaux de séance</span>'
-            f'<small>{fraicheur("rel", (a.get("seance") or {}).get("maj"))} {esc(ACTIF["spot"]) if a.get("base") is not None else esc(ACTIF["future"])}, écart au prix</small></div>'
-            f'<div class="pb" data-zone="niv">{bloc_niveaux_compact(a)}</div></div>'
-            f'<div class="panel analyst" id="p-news"><div class="ph"><span class="k">Fil d\'actualité en direct</span>'
-            f'<small>{fraicheur("live")} TradingView</small></div><div class="pb nopad">{news}</div></div></div></main>')
-
-
-ONGLETS = [("synthese", "Synthèse"), ("fondamental", "Fondamental"), ("technique", "Technique"),
-           ("annonces", "Annonces"), ("actus", "Actualités"), ("suivi", "Suivi et méthode")]
 
 
 def fondamental_jour_par_jour(y, f):
@@ -7601,13 +6722,6 @@ def eco_html(data, a):
                         plus='<details class="on-plus"><summary>Adjudications du Trésor américain</summary>' + bloc_adjudications(a) + '</details>')
 
 
-ONGLETS_V7 = [("marches", "Marchés"), ("data", "Données"), ("technique", "Technique"), ("fondamental", "Fondamental"), ("annonces", "Agenda éco"),
-              ("actus", "Actualités"), ("stat", "Statistiques"), ("labo", "Labo"), ("suivi", "Journal")]
-# Codes de fonction, à la Bloomberg : on les tape dans la barre de commande (touche « / ») puis Entrée
-CODES = {"accueil": "GO", "marches": "MKT", "data": "DATA", "technique": "TECH", "fondamental": "FA", "annonces": "ECO",
-         "actus": "NEWS", "stat": "STAT", "labo": "LAB", "suivi": "JRN"}
-
-
 def v7(a):
     dz = a.get("decision")
     return bool(decision is not None and dz and not dz.get("erreur"))
@@ -7619,48 +6733,28 @@ def note_ia(ia):
 
 def contenus_onglets(data, a, ia):
     y, f = data["yahoo"], data["fred"]
-    if v7(a):
-        return {
-            "technique": decision.bloc_technique(a["decision"])
-                         + ('<section><h2>Contrôle avant l\'entrée</h2><p class="pourquoi">Pour un trade que tu prends toi-même : '
-                            'le calculateur donne la taille selon ton risque et vérifie le trade contre chaque règle du plan '
-                            '(annonces, sens, zone, stop, gain / risque, limite du jour). Touche C ou commande CALC.</p>'
-                            '<button type="button" class="or" data-ouvrir="calc">Ouvrir le calculateur</button></section>'
-                            if direct else ''),
-            "stat": stats.bloc_stat(a.get("stat")) if stats else "",
-            "analyse": (f'<div class="ec-salle">{salle.bloc_liquidite(salle.liquidite(data.get("intraday"), AJUST))}{salle.bloc_saison(salle.saison(data.get("saison"), maintenant()))}</div>'
-                        f'<div style="margin-top:10px">{salle.bloc_heatmap(salle.heatmap(y))}</div>'
-                        if salle else ""),
-            "fondamental": (note_ia(ia) + (fondamental.bloc_html(a["fonda"], "") if a.get("fonda") else "")
-                            + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
-                            + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
-                            + bloc_devises(a) + '</details>'),
-            "annonces": (eco_html(data, a) if eco else onglets.bloc_annonces(
-                [fiche_annonce(e, a) for e in (data["cal"] or []) if e["impact"] == "High"
-                 and e["date"] >= maintenant() - timedelta(minutes=30)][:4],
-                data["cal"], a.get("reactions_evt"), a.get("reactions"), maintenant(), bloc_adjudications(a))
-                if onglets else bloc_reactions_evt(a) + bloc_calendrier(data["cal"], a) + bloc_reactions(a) + bloc_adjudications(a)),
-            "actus": (onglets.bloc_actus(data.get("news"), data.get("fed_off"), a.get("barometre"), MOTS_BAROMETRE, maintenant())
-                      if onglets else bloc_actus(data.get("news"), data.get("fed_off"), a)),
-            "suivi": (onglets.bloc_suivi(a["decision"].get("histo"), COMPTE, onglets.bloc_methode())
-                      if onglets else bloc_suivi(a) + bloc_methode()),
-            "labo": labo.bloc_labo(labo.charger()) if labo else "",
-            "marches": marches.bloc_marches(y, f) if marches else "",
-            "data": donnees.bloc_donnees(a, AJUST) if donnees else "",
-        }
+    dz_ok = v7(a)
     return {
-        # 1. Le lien entre les deux : ce qu'il faut faire maintenant
-        "synthese": (bloc_synthese_tech(a) + bloc_intermarket(a) + bloc_regimes(a, compact=True) + bloc_plan(a) +
-                     f'<section>{bloc_routine()}</section>'),
-        # 2. Tout le fondamental
-        "fondamental": (bloc_regimes(a) + bloc_lecture(a) + bloc_devises(a) + bloc_biais_detail(a) + bloc_ia(ia) + bloc_moteurs(a) + bloc_risque(a) +
-                        f'<section>{bloc_correlations(a)}</section>' + bloc_fed(y, f, a) + bloc_marches(y, f, a) +
-                        bloc_flux(a) + bloc_graphiques(y, f, data["cot"], a)),
-        # 3. Toute la technique
-        "technique": bloc_technique(a, data),
-        "annonces": bloc_reactions_evt(a) + bloc_calendrier(data["cal"], a) + bloc_reactions(a) + bloc_adjudications(a),
-        "actus": bloc_actus(data.get("news"), data.get("fed_off"), a),
-        "suivi": bloc_suivi(a) + bloc_methode(),
+        "technique": (decision.bloc_technique(a["decision"]) if dz_ok else
+                      '<section><h2>Technique du plan</h2><p class="pourquoi">En pause : bougies intraday indisponibles.</p></section>')
+                     + ('<section><h2>Contrôle avant l\'entrée</h2><p class="pourquoi">Pour un trade que tu prends toi-même : '
+                        'le calculateur donne la taille selon ton risque et vérifie le trade contre chaque règle du plan '
+                        '(annonces, sens, zone, stop, gain / risque, limite du jour). Touche C ou commande CALC.</p>'
+                        '<button type="button" class="or" data-ouvrir="calc">Ouvrir le calculateur</button></section>'
+                        ),
+        "stat": stats.bloc_stat(a.get("stat")),
+        "analyse": (f'<div class="ec-salle">{salle.bloc_liquidite(salle.liquidite(data.get("intraday"), AJUST))}{salle.bloc_saison(salle.saison(data.get("saison"), maintenant()))}</div>'
+                    f'<div style="margin-top:10px">{salle.bloc_heatmap(salle.heatmap(y))}</div>'),
+        "fondamental": (note_ia(ia) + (fondamental.bloc_html(a["fonda"], "") if a.get("fonda") else "")
+                        + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
+                        + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
+                        + bloc_devises(a) + '</details>'),
+        "annonces": eco_html(data, a),
+        "actus": onglets.bloc_actus(data.get("news"), data.get("fed_off"), a.get("barometre"), MOTS_BAROMETRE, maintenant()),
+        "suivi": onglets.bloc_suivi((a["decision"] or {}).get("histo") if dz_ok else None, COMPTE, onglets.bloc_methode()),
+        "labo": labo.bloc_labo(labo.charger()),
+        "marches": marches.bloc_marches(y, f),
+        "data": donnees.bloc_donnees(a, AJUST),
     }
 
 
@@ -7721,58 +6815,6 @@ def bloc_ecrans(data, a, ia, accueil):
             f'<div class="contenu">{panneaux}<div data-zone="sources">{bloc_sources()}</div></div>')
 
 
-def bloc_onglets(data, a, ia, accueil=None):
-    if accueil is not None and v7(a):
-        return bloc_ecrans(data, a, ia, accueil)
-    contenus = contenus_onglets(data, a, ia)
-    onglets = ONGLETS_V7 if v7(a) else ONGLETS
-    if accueil is not None:   # v8 : la vue d'ensemble (décision, graphique, cockpit) devient le premier onglet
-        onglets = [("accueil", "Vue d'ensemble")] + list(onglets)
-        contenus["accueil"] = accueil
-    nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false">{esc(t)}<kbd>{(k + 1) % 10}</kbd></button>'
-                  for k, (i, t) in enumerate(onglets))
-    ta_tv = tv("embed-widget-technical-analysis.js", {"interval": "15m", "width": "100%", "height": "100%",
-                                                        "isTransparent": True, "symbol": TV_OR, "showIntervalTabs": True,
-                                                        "displayMode": "multiple", "locale": "fr", "colorTheme": "dark"},
-               "Consensus technique en direct (TradingView)")
-    cal_tv = tv("embed-widget-events.js", {"colorTheme": "dark", "isTransparent": True, "width": "100%", "height": "100%",
-                                           "locale": "fr", "importanceFilter": "0,1", "countryFilter": ACTIF["tv_pays"]},
-                "Calendrier économique en direct (TradingView)")
-    panneaux = ""
-    for i, t in onglets:
-        extra = ""
-        if i == "annonces" and v7(a):
-            extra = (f'<details class="on-plus"><summary>Calendrier en direct (TradingView)</summary>'
-                     f'<div class="tv-cal">{cal_tv}</div></details>')
-        elif i == "annonces":
-            extra = (f'<section><h2>Calendrier en direct</h2><p class="pourquoi">Les chiffres réels s\'affichent ici dès '
-                     f'leur publication (TradingView).</p><div class="tv-cal">{cal_tv}</div></section>')
-        if i == "technique" and not v7(a):
-            extra = (f'<section><h2>Consensus technique en direct</h2><p class="pourquoi">Synthèse des moyennes mobiles et '
-                     f'oscillateurs sur plusieurs unités de temps (TradingView). À utiliser comme confluence, pas comme '
-                     f'signal d\'entrée.</p><div class="tv-cal" style="height:460px">{ta_tv}</div></section>')
-        if i == "suivi" and journal is not None and v7(a):
-            extra = journal.bloc_journal() + extra        # saisie des vrais trades, jamais effacée par le robot
-            contenus[i] = f'<h2 class="jr-sep">Le plan rejoué sur 60 jours</h2>{contenus[i]}'
-            panneaux += (f'<div class="tabpanel" id="tab-{i}" role="tabpanel" aria-label="{esc(t)}">'
-                         f'{extra}<div data-zone="t-{i}">{contenus[i]}</div></div>')
-            continue
-        if i == "accueil":      # chaque bloc de la vue d'ensemble a sa propre zone ; le graphique en direct n'en a pas
-            panneaux += f'<div class="tabpanel" id="tab-{i}" role="tabpanel" aria-label="{esc(t)}">{contenus[i]}</div>'
-            continue
-        panneaux += (f'<div class="tabpanel" id="tab-{i}" role="tabpanel" aria-label="{esc(t)}">'
-                     f'<div data-zone="t-{i}">{contenus[i]}</div>{extra}</div>')
-    cl = "" if accueil is not None else " analyst"
-    if accueil is not None:   # navigation par fonctions : code + nom, barre de commande à droite
-        nav = "".join(f'<button type="button" role="tab" data-tab="{i}" aria-selected="false"><span class="fc">{CODES.get(i, "")}</span>'
-                      f'{esc(t)}</button>' for i, t in onglets)
-        nav += ('<form class="cmd" role="search" onsubmit="return false"><label for="cmd">Fonction</label>'
-                '<input id="cmd" autocomplete="off" spellcheck="false" placeholder="GO, TECH, AL 4100, CALC, AIDE" '
-                'aria-describedby="cmd-aide"><span id="cmd-aide" class="cmd-aide">touche / puis Entrée</span></form>')
-    return (f'<nav class="onglets{cl}" id="analyse" role="tablist" aria-label="Navigation">{nav}</nav>'
-            f'<div class="contenu{cl}">{panneaux}<div data-zone="sources">{bloc_sources()}</div></div>')
-
-
 def titre_verdict(a):
     if v7(a):
         o_ = a["decision"].get("ordre")
@@ -7787,47 +6829,27 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                       "site": bool(site), "seances": [[n, d, fn] for n, d, fn in SEANCES], **ACTIF["cfg_js"]},
                      ensure_ascii=False)
     ctx_json = json.dumps(contexte_controle(a), ensure_ascii=False).replace("</", "<\\/")
-    dec_html = (((labo.bandeau(labo.charger()) if labo else "") + decision.bloc_html(a["decision"]) + decision.bloc_graphique(a["decision"]))
-                if (decision is not None and a.get("decision")) else bloc_trader(a))
-    pro = theme is not None and v7(a)
-    if pro:
-        ps = ""
-        if poste is not None:
-            evt = next((e for e in (data.get("cal") or []) if e["impact"] == "High"
-                        and e["date"] >= maintenant() - timedelta(minutes=30)), None)
-            ps = poste.bloc_poste(a, data, AJUST, COMPTE, labo.strategie_en_direct(labo.charger()) if labo else None,
-                                  fiche_annonce(evt, a) if evt else None, MOTS_BAROMETRE, maintenant(),
-                                  echelle=direct.carte_echelle() if direct else None,
-                                  stat_html=stats.carte_maintenant(a.get("stat")) if stats else "",
-                                  note_html=analyste.carte_accueil(ia, ia_quand(ia)) if (analyste and ia) else "")
-            if ps and salle:      # salle des marchés en tête : squawk, sentiment, force des actifs, taux, horaires
-                ps = salle.bloc_salle(data, a, AJUST, maintenant()) + ps
-            if ps and direct:
-                ps = direct.sante(a["decision"], a, maintenant()) + ps
-            if ps and pourquoi and a.get("pourquoi"):
-                ps += pourquoi.bloc(a["pourquoi"], ((ia or {}).get("json") or {}).get("pourquoi_recent"))
-        if ps and ecran and salle and direct:     # v12 : poste de travail plein écran, sans défilement
-            st_ = labo.strategie_en_direct(labo.charger()) if labo else None
-            accueil = ecran.bloc(a, data, AJUST, COMPTE, st_, ((ia or {}).get("json") or {}).get("titre"), direct.carte_echelle(),
-                                 direct.sante(a["decision"], a, maintenant()), salle, decision,
-                                 salle.bloc_squawk(salle.squawk(data, data.get("intraday"), AJUST, maintenant()), maintenant()), maintenant())
-            a["_complements"] = {"graph_direct": decision.bloc_graphique(a["decision"]) + bloc_graphique_direct(),
-                                 "chiffres": f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}',
-                                 "salle": salle.bloc_risque_force(data, a),
-                                 "pourquoi": pourquoi.bloc(a["pourquoi"], ((ia or {}).get("json") or {}).get("pourquoi_recent")) if (pourquoi and a.get("pourquoi")) else ""}
-        elif ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
-            accueil = (ps + '<div class="ps-titre">Graphiques</div>' + decision.bloc_graphique(a["decision"]) + bloc_graphique_direct()
-                       + f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}')
-        else:
-            accueil = dec_html + bloc_strip(a, y, f) + bloc_bandeau_tv() + bloc_cockpit(a, y, f, sans_setup=True)
-        haut = f'{bloc_barre(a)}{bloc_reglages()}{bloc_onglets(data, a, ia, accueil=accueil)}'
-    else:
-        haut = (f'{bloc_barre(a)}{bloc_reglages()}{dec_html}{bloc_bandeau_tv()}{bloc_strip(a, y, f)}'
-                f'{bloc_cockpit(a, y, f, sans_setup=bool(a.get("decision")))}{bloc_onglets(data, a, ia)}')
+    pro = True
+    dz_ok = v7(a)
+    note_titre = ((ia or {}).get("json") or {}).get("titre")
+    pq_html = pourquoi.bloc(a["pourquoi"], ((ia or {}).get("json") or {}).get("pourquoi_recent")) if a.get("pourquoi") else ""
+    accueil = ""
+    if dz_ok:     # poste de travail plein écran, sans défilement
+        st_ = labo.strategie_en_direct(labo.charger()) if labo else None
+        accueil = ecran.bloc(a, data, AJUST, COMPTE, st_, note_titre, direct.carte_echelle(), direct.sante(a["decision"], a, maintenant()),
+                             salle, decision, salle.bloc_squawk(salle.squawk(data, data.get("intraday"), AJUST, maintenant()), maintenant()),
+                             maintenant())
+    if not accueil:   # mode dégradé (bougies intraday indisponibles) : marchés, explications et chiffres clés
+        accueil = ('<p class="ps-avert">Bougies de l\'or indisponibles : la décision du plan et les niveaux sont en pause jusqu\'au prochain passage.</p>'
+                   + salle.bloc_salle(data, a, AJUST, maintenant()) + pq_html)
+    a["_complements"] = {"graph_direct": (decision.bloc_graphique(a["decision"]) if dz_ok else "") + bloc_graphique_direct(),
+                         "chiffres": f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}',
+                         "salle": salle.bloc_risque_force(data, a), "pourquoi": pq_html}
+    haut = f'{bloc_barre(a)}{bloc_reglages()}{bloc_ecrans(data, a, ia, accueil)}'
     corps = (f'{haut}'
              f'<script type="application/json" id="evts" data-zone="evts">{evenements_json(data, a)}</script>'
              f'<script type="application/json" id="ctx" data-zone="ctx">{ctx_json}</script>'
-             + (f'<script type="application/json" id="direct-ctx" data-zone="direct-ctx">{direct.contexte(a, a["decision"], AJUST, COMPTE)}</script>'
+             + (f'<script type="application/json" id="direct-ctx" data-zone="direct-ctx">{direct.contexte(a, a["decision"], AJUST, COMPTE) if v7(a) else "{}"}</script>'
                 f'{direct.dialogues()}' if (pro and direct) else '') +
              f'<div data-zone="brief" hidden><textarea id="brief" style="display:none" aria-hidden="true">'
              f'{esc(brief)}</textarea></div>')
@@ -8204,31 +7226,6 @@ def donnees_demo():
     return {"saison": saison_demo, "yahoo": y, "fred": f, "cot": cot, "gld": gld, "cal": cal, "news": news, "zq": zq,
             "intraday": intraday, "courbe": courbe, "fed_off": fed_off, "tresor": {}, "nyfed": {}, "adjudic": adjudic,
             "oanda": None, "intermarche": intermarche_demo(barres), "xaus": xaus_demo(barres, 36.8), "devises": devises_demo()}
-
-
-def oanda_demo(spot, now):
-    import random
-    random.seed(11)
-    largeur = 1.0
-    seaux_o, seaux_p = [], []
-    for i in range(-400, 401):
-        p = round(spot + i * largeur, 1)
-        base = max(0.02, 0.35 - abs(i) / 1600)
-        lg = base * random.uniform(0.6, 1.4)
-        sh = base * random.uniform(0.6, 1.4)
-        if 55 <= i <= 60:
-            lg *= 4.5          # poche de stops acheteurs au-dessus
-        if -48 <= i <= -44:
-            sh *= 4.0          # poche de stops vendeurs en dessous
-        if 25 <= i <= 28:
-            sh *= 3.0          # mur d'ordres vendeurs
-        seaux_o.append({"price": str(p), "longCountPercent": f"{lg:.4f}", "shortCountPercent": f"{sh:.4f}"})
-        lp = base * random.uniform(0.8, 1.6) * (1.6 if 10 <= i <= 40 else 1.0)
-        sp = base * random.uniform(0.5, 1.0)
-        seaux_p.append({"price": str(p), "longCountPercent": f"{lp:.4f}", "shortCountPercent": f"{sp:.4f}"})
-    t = now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:00Z") if ZoneInfo else ""
-    return {"orderBook": {"price": str(round(spot, 2)), "bucketWidth": "1.0", "time": t, "buckets": seaux_o},
-            "positionBook": {"price": str(round(spot, 2)), "bucketWidth": "1.0", "time": t, "buckets": seaux_p}}
 
 
 def xaus_demo(barres, base):
