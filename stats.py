@@ -239,46 +239,49 @@ def carte_maintenant(S, ajust=0.0):
             f'<p class="ps-mini">Fréquences sur {S["n"]} jours. Un ordre de grandeur, pas une prévision.</p></div>')
 
 
-def svg_heures(S, w=1000, h=300):
-    """Profil de la journée : amplitude médiane par heure, et fréquence du plus haut / plus bas du jour."""
+def svg_heures(S, w=1000, h=320):
+    """Profil de la journée : amplitude médiane par heure (barres fines), sessions en bandes discrètes,
+    et fréquence du plus haut (au-dessus de l'axe) et du plus bas du jour (en dessous) en miroir."""
     hs = S["heures"]
     amax = max([x["amp"] or 0 for x in hs] + [1])
     fmax = max([max(x["haut"], x["bas"]) for x in hs] + [0.01])
-    g, d, top = 44, 12, 26
+    g, d, top = 78, 14, 30
     pw = w - g - d
     pas = pw / 24
-    h1 = 150                     # hauteur du panneau des amplitudes
-    y0 = top + h1                # base des amplitudes
-    y1 = y0 + 34                 # ligne médiane du panneau haut / bas
-    hf = 62                      # hauteur max des barres de fréquence
+    h1 = 140
+    y0 = top + h1
+    ym = y0 + 64                 # axe du miroir plus haut / plus bas
+    hf = 40
     now = (S.get("jour") or {}).get("heure")
     out = [f'<svg viewBox="0 0 {w} {h}" class="st-svg" role="img" aria-label="Profil de la journée heure par heure">']
-    coul = {"Asie": "#3b6fb5", "Londres": "#8a6fd1", "New York": "#4f9a8f"}
     for nom, a, b in SEANCES:
-        out.append(f'<rect x="{g + a * pas:.1f}" y="{top - 16}" width="{(b - a) * pas - 2:.1f}" height="12" rx="3" fill="{coul[nom]}" opacity=".55"/>'
-                   f'<text x="{g + (a + b) / 2 * pas:.1f}" y="{top - 6.5}" class="st-se" text-anchor="middle">{esc(nom)}</text>')
-    for k in range(3):
-        v = amax * k / 2
-        y = y0 - v / amax * (h1 - 8)
+        x0, x1 = g + a * pas, g + b * pas
+        out.append(f'<line x1="{x0 + 2:.1f}" x2="{x1 - 2:.1f}" y1="{top - 14}" y2="{top - 14}" class="st-ses"/>'
+                   f'<line x1="{x0 + 2:.1f}" x2="{x0 + 2:.1f}" y1="{top - 18}" y2="{top - 10}" class="st-ses"/>'
+                   f'<text x="{x0 + 6:.1f}" y="{top - 19}" class="st-se">{esc(nom.upper())}</text>')
+    for k in range(4):
+        v = amax * k / 3
+        y = y0 - v / amax * (h1 - 6)
         out.append(f'<line x1="{g}" x2="{w - d}" y1="{y:.1f}" y2="{y:.1f}" class="st-gr"/>'
-                   f'<text x="{g - 6}" y="{y + 4:.1f}" class="st-ax" text-anchor="end">{fr(v, 0)} $</text>')
+                   f'<text x="{g - 8}" y="{y + 3:.1f}" class="st-ax" text-anchor="end">{fr(v, 0)} $</text>')
     for x in hs:
         cx = g + x["h"] * pas
         if now is not None and x["h"] == now:
-            out.append(f'<rect x="{cx:.1f}" y="{top}" width="{pas:.1f}" height="{h - top - 22}" class="st-now"/>')
+            out.append(f'<rect x="{cx:.1f}" y="{top - 4}" width="{pas:.1f}" height="{h - top - 18}" class="st-now"/>')
         if x["amp"]:
-            ha = x["amp"] / amax * (h1 - 8)
-            out.append(f'<rect x="{cx + 3:.1f}" y="{y0 - ha:.1f}" width="{pas - 6:.1f}" height="{ha:.1f}" rx="2" class="st-amp">'
+            ha = x["amp"] / amax * (h1 - 6)
+            out.append(f'<rect x="{cx + pas * .3:.1f}" y="{y0 - ha:.1f}" width="{pas * .4:.1f}" height="{ha:.1f}" class="st-amp">'
                        f'<title>{x["h"]} h : amplitude médiane {fr(x["amp"], 1)} $</title></rect>')
-        hh, hb_ = x["haut"] / fmax * hf / 2, x["bas"] / fmax * hf / 2
-        out.append(f'<rect x="{cx + 3:.1f}" y="{y1 + 26 - hh:.1f}" width="{pas / 2 - 4:.1f}" height="{max(hh, 0.5):.1f}" class="st-up">'
+        hh, hb_ = x["haut"] / fmax * hf, x["bas"] / fmax * hf
+        out.append(f'<rect x="{cx + pas * .3:.1f}" y="{ym - hh:.1f}" width="{pas * .4:.1f}" height="{max(hh, .6):.1f}" class="st-up">'
                    f'<title>{x["h"]} h : plus haut du jour {x["haut"] * 100:.0f} % des jours</title></rect>'
-                   f'<rect x="{cx + pas / 2 + 1:.1f}" y="{y1 + 26 - hb_:.1f}" width="{pas / 2 - 4:.1f}" height="{max(hb_, 0.5):.1f}" class="st-dn">'
+                   f'<rect x="{cx + pas * .3:.1f}" y="{ym:.1f}" width="{pas * .4:.1f}" height="{max(hb_, .6):.1f}" class="st-dn">'
                    f'<title>{x["h"]} h : plus bas du jour {x["bas"] * 100:.0f} % des jours</title></rect>')
         if x["h"] % 2 == 0:
-            out.append(f'<text x="{cx + pas / 2:.1f}" y="{h - 6}" class="st-ax" text-anchor="middle">{x["h"]} h</text>')
-    out.append(f'<text x="{g - 6}" y="{y1 + 14}" class="st-ax" text-anchor="end">{fmax * 100:.0f} %</text>')
-    out.append(f'<line x1="{g}" x2="{w - d}" y1="{y1 + 26}" y2="{y1 + 26}" class="st-gr"/>')
+            out.append(f'<text x="{cx + pas / 2:.1f}" y="{h - 4}" class="st-ax" text-anchor="middle">{x["h"]:02d}</text>')
+    out.append(f'<line x1="{g}" x2="{w - d}" y1="{ym}" y2="{ym}" class="st-gr"/>'
+               f'<text x="{g - 8}" y="{ym - hf + 8}" class="st-ax" text-anchor="end">plus haut</text>'
+               f'<text x="{g - 8}" y="{ym + hf - 2}" class="st-ax" text-anchor="end">plus bas</text>')
     out.append("</svg>")
     return "".join(out)
 
@@ -319,7 +322,7 @@ def bloc_stat(S):
     else:
         h.append(f'<section><h2>Statistiques de séance</h2>{intro}<p class="vide">Pas de journée en cours (week-end ou début de séance).</p></section>')
 
-    h.append('<section><h2>Profil de la journée, heure par heure</h2><p class="pourquoi">Barres orange : amplitude médiane de la bougie '
+    h.append('<section><h2>Profil de la journée, heure par heure</h2><p class="pourquoi">Barres bleues : amplitude médiane de la bougie '
              'd\'une heure (combien le prix bouge). En bas, la fréquence à laquelle le plus haut du jour (vert) et le plus bas du jour '
              '(rouge) se font dans cette heure. L\'heure en cours est surlignée.</p>'
              f'<div class="st-graph">{svg_heures(S)}</div></section>')
@@ -376,10 +379,10 @@ CSS = """
 .st-kpis small{font-size:12.5px;color:var(--mute);line-height:1.45}
 .st-graph{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;overflow-x:auto}
 .st-svg{display:block;width:100%;height:auto;min-width:640px}
-.st-svg .st-gr{stroke:#24242b;stroke-width:1} .st-svg .st-ax{fill:var(--mute);font:500 11px var(--mono)}
-.st-svg .st-se{fill:#fff;font:600 9.5px var(--text)}
-.st-svg .st-amp{fill:var(--brass)} .st-svg .st-up{fill:var(--up)} .st-svg .st-dn{fill:var(--down)}
-.st-svg .st-now{fill:rgba(126,166,214,.13)}
+.st-svg .st-gr{stroke:#1f232b;stroke-width:1} .st-svg .st-ax{fill:var(--mute);font:500 10px var(--mono)}
+.st-svg .st-se{fill:#9ba3b1;font:600 9.5px var(--mono);letter-spacing:.12em} .st-svg .st-ses{stroke:#4b5260;stroke-width:1}
+.st-svg .st-amp{fill:#7ea6d6} .st-svg .st-up{fill:#2fd27d;opacity:.85} .st-svg .st-dn{fill:#ff5a5f;opacity:.85}
+.st-svg .st-now{fill:rgba(126,166,214,.08)}
 .st-tab{width:100%;border-collapse:collapse;font-size:13.5px}
 .st-tab th{text-align:left;font:600 10.5px var(--text);letter-spacing:.07em;text-transform:uppercase;color:var(--mute);padding:8px 10px;border-bottom:1px solid var(--line)}
 .st-tab tbody th{font:600 13.5px var(--text);letter-spacing:0;text-transform:none;color:var(--ink)}

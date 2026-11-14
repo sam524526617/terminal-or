@@ -147,7 +147,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.1"
+VERSION = "12.2"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -7628,7 +7628,8 @@ def contenus_onglets(data, a, ia):
                             '<button type="button" class="or" data-ouvrir="calc">Ouvrir le calculateur</button></section>'
                             if direct else ''),
             "stat": stats.bloc_stat(a.get("stat")) if stats else "",
-            "analyse": (f'<div class="ec-salle">{salle.bloc_heatmap(salle.heatmap(y))}{salle.bloc_saison(salle.saison(data.get("saison"), maintenant()))}</div>'
+            "analyse": (f'<div class="ec-salle">{salle.bloc_liquidite(salle.liquidite(data.get("intraday"), AJUST))}{salle.bloc_saison(salle.saison(data.get("saison"), maintenant()))}</div>'
+                        f'<div style="margin-top:10px">{salle.bloc_heatmap(salle.heatmap(y))}</div>'
                         if salle else ""),
             "fondamental": (note_ia(ia) + (fondamental.bloc_html(a["fonda"], "") if a.get("fonda") else "")
                             + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
@@ -7666,7 +7667,7 @@ def contenus_onglets(data, a, ia):
 # v10 : cinq écrans, dans l'ordre de la méthode. Chaque écran regroupe plusieurs rubriques (code de fonction, titre).
 ECRANS = [
     ("accueil", "GO", "Vue d'ensemble", [("accueil", "GO", "Vue d'ensemble")]),
-    ("technique", "TECH", "Technique", [("direct", "CHART", "Graphiques"), ("technique", "TECH", "Structure et zones du plan"), ("analyse", "HEAT", "Heatmap et saisonnalité"),
+    ("technique", "TECH", "Technique", [("direct", "CHART", "Graphiques"), ("technique", "TECH", "Structure et zones du plan"), ("analyse", "HEAT", "Liquidité, heatmap et saisonnalité"),
                                         ("stat", "STAT", "Statistiques de séance")]),
     ("fondamental", "FA", "Fondamental", [("pourquoi", "WHY", "Pourquoi l'or bouge"), ("fondamental", "FA", "Analyste et fondamental"),
                                            ("salle", "RISK", "Risque, force des actifs, Fed"), ("marches", "MKT", "Marchés"),
@@ -7812,7 +7813,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                                  salle.bloc_squawk(salle.squawk(data, data.get("intraday"), AJUST, maintenant()), maintenant()), maintenant())
             a["_complements"] = {"graph_direct": decision.bloc_graphique(a["decision"]) + bloc_graphique_direct(),
                                  "chiffres": f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}',
-                                 "salle": salle.bloc_salle(data, a, AJUST, maintenant()),
+                                 "salle": salle.bloc_risque_force(data, a),
                                  "pourquoi": pourquoi.bloc(a["pourquoi"], ((ia or {}).get("json") or {}).get("pourquoi_recent")) if (pourquoi and a.get("pourquoi")) else ""}
         elif ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
             accueil = (ps + '<div class="ps-titre">Graphiques</div>' + decision.bloc_graphique(a["decision"]) + bloc_graphique_direct()

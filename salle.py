@@ -162,7 +162,9 @@ def bloc_sentiment(S):
     cl = {"RISK-OFF": "down", "RISK-ON": "up", "NEUTRE": "neutre"}[S["etat"]]
     ev = lambda p, lib: (f'<div><span>{lib}</span><b class="{"up" if S["score"] > p else "down"}">{"▲" if S["score"] > p else "▼"} '
                          f'{abs(S["score"] - p):.0f}</b><i>(était {p:.0f})</i></div>' if p is not None else "")
-    comp = "".join(f'<div class="sl-cp"><span>{esc(k)}</span><i class="{"up" if z > 0 else "down"}" style="width:{min(100, abs(z) / 3 * 100):.0f}%"></i></div>'
+    comp = "".join(f'<div class="mk-cl"><span>{esc(k)}</span><div class="mk-cb"><i class="{"up" if z > 0 else "down"}" '
+                   f'style="{"left:50%" if z > 0 else "right:50%"};width:{min(50, abs(z) / 3 * 50):.0f}%"></i></div>'
+                   f'<b class="{"up" if z > 0 else "down"}">{"+" if z > 0 else "−"}{abs(z):.1f}</b></div>'
                    for k, z in sorted(S["comp"].items(), key=lambda x: -abs(x[1])))
     corps = (f'<div class="sl-sent"><div class="sl-sg">{svg_jauge(S["score"])}<b class="sl-et {cl}">{S["etat"]}</b>'
              f'<div class="sl-ev">{ev(S["s1"], "1 sem.")}{ev(S["s4"], "1 mois")}</div></div>'
@@ -178,8 +180,8 @@ def bloc_sentiment(S):
 # FORCE DES ACTIFS
 # ---------------------------------------------------------------------------
 
-ACTIFS = [("or", "OR", "#7ea6d6", 1), ("argent", "ARGENT", "#c7ccd6", 1), ("dxy", "DOLLAR", "#2fd27d", 1), ("spx", "S&P 500", "#7c8cff", 1),
-          ("wti", "PÉTROLE", "#b07cff", 1), ("cuivre", "CUIVRE", "#ff8f6b", 1), ("usdjpy", "YEN", "#5fd18a", -1), ("eurusd", "EURO", "#ff6fae", 1)]
+ACTIFS = [("or", "Or", "#f1f1f3", 1), ("dxy", "Dollar", "#7ea6d6", 1), ("argent", "Argent", "#8d96a5", 1), ("spx", "S&P 500", "#5f7fa8", 1),
+          ("wti", "Pétrole", "#6f7684", 1), ("cuivre", "Cuivre", "#5a6170", 1), ("usdjpy", "Yen", "#4f6f96", -1), ("eurusd", "Euro", "#3f5675", 1)]
 FENETRES = [("5j", 5), ("1m", 21), ("3m", 63)]
 
 
@@ -200,30 +202,38 @@ def force(y):
 
 
 def svg_force(L, w=640, h=250):
-    g, d, ht, b = 8, 92, 10, 18
+    """Performance comparée : l'or en blanc, épais ; les autres en tons froids ; valeurs à droite, en texte."""
+    g, d, ht, b = 36, 118, 10, 20
     vals = [float(v) for l in L for v in l["perf"].to_numpy()] + [0.0]
     mn, mx = min(vals), max(vals)
     et = (mx - mn) or 1.0
     n = max(len(l["perf"]) for l in L)
     x = lambda i: g + i / max(1, n - 1) * (w - g - d)
     y = lambda v: ht + (mx - v) / et * (h - ht - b)
-    out = [f'<svg viewBox="0 0 {w} {h}" class="sl-svg" role="img" aria-label="Force des actifs">',
-           f'<line x1="{g}" x2="{w - d}" y1="{y(0):.1f}" y2="{y(0):.1f}" class="z"/>']
+    pas = 10 ** math.floor(math.log10(et / 3 or 1))
+    pas = pas * (2 if et / pas > 8 else 1) * (2.5 if et / pas > 20 else 1)
+    out = [f'<svg viewBox="0 0 {w} {h}" class="sl-svg" role="img" aria-label="Force des actifs">']
+    k = math.ceil(mn / pas)
+    while k * pas <= mx:
+        v = k * pas
+        out.append(f'<line x1="{g}" x2="{w - d}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="{"z" if abs(v) < 1e-9 else "gr"}"/>'
+                   f'<text x="{g - 5}" y="{y(v) + 3:.1f}" class="ax" text-anchor="end">{fr(v, 1 if pas < 1 else 0, True)}</text>')
+        k += 1
     fins = []
-    for l in sorted(L, key=lambda l: l["lib"] != "OR"):
+    for l in sorted(L, key=lambda l: l["lib"] == "Or"):
         p = l["perf"].to_numpy()
         pts = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(p))
-        out.append(f'<polyline points="{pts}" fill="none" stroke="{l["col"]}" stroke-width="{2.6 if l["lib"] == "OR" else 1.5}" stroke-linejoin="round"/>')
+        out.append(f'<polyline points="{pts}" fill="none" stroke="{l["col"]}" stroke-width="{2.2 if l["lib"] == "Or" else 1.2}" '
+                   f'stroke-linejoin="round" opacity="{1 if l["lib"] == "Or" else .85}"/>')
         fins.append((float(p[-1]), l))
     fins.sort(key=lambda t: -t[0])
-    ys, prec = [], -99
+    prec = -99
     for v, l in fins:
-        yy = max(y(v), prec + 15)
-        ys.append((yy, v, l))
+        yy = max(y(v), prec + 13)
         prec = yy
-    for yy, v, l in ys:
-        out.append(f'<rect x="{w - d + 6}" y="{yy - 7:.1f}" width="{d - 8}" height="14" rx="2" fill="{l["col"]}"/>'
-                   f'<text x="{w - d + 10}" y="{yy + 3.5:.1f}" class="tg">{esc(l["lib"])} {fr(v, 2, True)} %</text>')
+        out.append(f'<circle cx="{x(n - 1):.1f}" cy="{y(v):.1f}" r="2.2" fill="{l["col"]}"/>'
+                   f'<text x="{w - d + 8}" y="{yy + 3.5:.1f}" class="fl{" fl-or" if l["lib"] == "Or" else ""}">{esc(l["lib"])}</text>'
+                   f'<text x="{w - 4}" y="{yy + 3.5:.1f}" class="fv {"up" if v > 0 else "down"}" text-anchor="end">{fr(v, 2, True)} %</text>')
     out.append("</svg>")
     return "".join(out)
 
@@ -299,21 +309,25 @@ def bloc_squawk(E, now):
 # PROBABILITÉS DE TAUX
 # ---------------------------------------------------------------------------
 
+def lignes_fed(fw, n=6):
+    """Une ligne par réunion : barre empilée baisse / statu quo / hausse, valeurs à droite."""
+    h = ""
+    for r in fw["reunions"][:n]:
+        pb, ps, ph = r["p_baisse"] * 100, r["p_statu"] * 100, r["p_hausse"] * 100
+        dom = max((pb, "baisse"), (ps, "statu quo"), (ph, "hausse"))
+        h += (f'<div class="fd-r"><span class="fd-d">{r["date"]:%d/%m/%y}</span>'
+              f'<div class="fd-b" title="baisse {pb:.0f} % · statu quo {ps:.0f} % · hausse {ph:.0f} %">'
+              f'<i class="b" style="width:{pb:.1f}%"></i><i class="s" style="width:{ps:.1f}%"></i><i class="h" style="width:{ph:.1f}%"></i></div>'
+              f'<span class="fd-v">{dom[0]:.0f} % {dom[1]}</span><span class="fd-t">{fr(r["taux"], 2)} %</span></div>')
+    return (f'<div class="fd-leg"><span><i class="b"></i>baisse</span><span><i class="s"></i>statu quo</span><span><i class="h"></i>hausse</span>'
+            f'<span class="fd-leg-t">taux attendu</span></div>{h}')
+
+
 def bloc_taux(fw):
     if not fw or not fw.get("reunions"):
         return panneau("Probabilités de taux · Fed", '<p class="sl-vide">Futures fed funds indisponibles.</p>')
-    r0 = fw["reunions"][0]
-    barres = ""
-    for lib, p, cl in (("Baisse", r0["p_baisse"], "down"), ("Statu quo", r0["p_statu"], "neutre"), ("Hausse", r0["p_hausse"], "up")):
-        barres += (f'<div class="tx-b"><b>{p * 100:.0f} %</b><i class="{cl}" style="height:{max(2, p * 100):.0f}%"></i><span>{lib}</span></div>')
-    lig = "".join(f'<tr><td>{r["date"]:%d/%m/%y}</td><td class="num">{fr(r["taux"], 2)} %</td><td class="num down">{r["p_baisse"] * 100:.0f} %</td>'
-                  f'<td class="num">{r["p_statu"] * 100:.0f} %</td><td class="num up">{r["p_hausse"] * 100:.0f} %</td>'
-                  f'<td class="num">{fr(r["cumul_pb"], 0, True)}</td></tr>' for r in fw["reunions"][:6])
-    lecture = ("Une hausse des taux pèse sur l'or (il ne rapporte rien) ; une baisse le soutient. Ce qui compte, c'est la surprise par rapport "
-               "à ces probabilités.")
-    corps = (f'<div class="tx"><div class="tx-g"><span class="sl-sous">Prochaine réunion · {r0["date"]:%d/%m}</span><div class="tx-bs">{barres}</div></div>'
-             f'<div class="tx-t"><table class="sl-tab"><thead><tr><th>Réunion</th><th>Taux</th><th>Baisse</th><th>Statu</th><th>Hausse</th>'
-             f'<th>Cumul pb</th></tr></thead><tbody>{lig}</tbody></table></div></div><p class="sl-lect">{lecture}</p>')
+    corps = (lignes_fed(fw) + '<p class="sl-lect">Une hausse des taux pèse sur l\'or (il ne rapporte rien) ; une baisse le soutient. '
+             'Ce qui fait bouger le prix, c\'est la surprise par rapport à ces probabilités.</p>')
     return panneau("Probabilités de taux · Fed", corps, "Calculées à partir des futures fed funds, comme l'outil FedWatch du CME.",
                    f'taux effectif {fr(fw["effr"], 2)} %')
 
@@ -430,8 +444,122 @@ def bloc_heatmap(H):
 
 
 # ---------------------------------------------------------------------------
+# CARTE DE LIQUIDITÉ
+# ---------------------------------------------------------------------------
+
+def liquidite(intra, ajust=0.0):
+    """Où dorment les ordres stop : plus hauts et plus bas journaliers jamais retouchés, sommets et creux égaux en 1 h,
+    plus haut et plus bas de la semaine, chiffres ronds. Au-dessus du prix : les stops des vendeurs (achats déclenchés) ;
+    en dessous : les stops des acheteurs (ventes déclenchées). Le prix est souvent attiré par ces poches."""
+    hb = (intra or {}).get("heures")
+    if hb is None or len(hb) < 24 * 30:
+        return None
+    df = hb[["open", "high", "low", "close"]].dropna()
+    px = float(df["close"].iloc[-1])
+    tr = (df["high"] - df["low"]).tail(24 * 20)
+    atr = float(tr.mean()) or 1.0
+    jours = df.groupby(df.index.date).agg({"high": "max", "low": "min"})
+    jours = jours[[pd.Timestamp(d).weekday() < 5 for d in jours.index]]
+    P_ = []
+    # plus hauts / plus bas journaliers non retouchés (20 dernières séances, hors séance en cours)
+    passe = jours.iloc[-21:-1]
+    for k, (d, r) in enumerate(passe.iterrows()):
+        apres = df[df.index.date > d]
+        if not len(apres):
+            continue
+        if r["high"] > apres["high"].max():
+            P_.append({"v": float(r["high"]), "type": "Plus haut journalier intact", "cote": 1, "n": 1, "age": len(passe) - k, "poids": 2})
+        if r["low"] < apres["low"].min():
+            P_.append({"v": float(r["low"]), "type": "Plus bas journalier intact", "cote": -1, "n": 1, "age": len(passe) - k, "poids": 2})
+    # sommets et creux égaux en 1 h (5 derniers jours) encore intacts
+    r5 = df[df.index >= df.index[-1] - pd.Timedelta(days=7)]
+    hi, lo = r5["high"].to_numpy(), r5["low"].to_numpy()
+    tol = 0.18 * atr
+    for arr, cote, lib in ((hi, 1, "Sommets égaux (1 h)"), (lo, -1, "Creux égaux (1 h)")):
+        pivots = [arr[i] for i in range(2, len(arr) - 2)
+                  if (cote > 0 and arr[i] == max(arr[i - 2:i + 3])) or (cote < 0 and arr[i] == min(arr[i - 2:i + 3]))]
+        vus = []
+        for v in pivots:
+            groupe = [w for w in pivots if abs(w - v) <= tol]
+            niv = float(np.mean(groupe))
+            if len(groupe) >= 2 and not any(abs(niv - x) <= tol for x in vus):
+                intact = (niv > px and r5["high"].iloc[-6:].max() < niv + tol) or (niv < px and r5["low"].iloc[-6:].min() > niv - tol)
+                if intact and ((cote > 0 and niv > px) or (cote < 0 and niv < px)):
+                    vus.append(niv)
+                    P_.append({"v": niv, "type": lib, "cote": cote, "n": len(groupe), "age": 0, "poids": 1 + 0.6 * len(groupe)})
+    # semaine en cours et précédente
+    sem = df[df.index >= df.index[-1] - pd.Timedelta(days=df.index[-1].weekday())].copy()
+    for lib, v, c in (("Plus haut de la semaine", float(sem["high"].max()), 1), ("Plus bas de la semaine", float(sem["low"].min()), -1)):
+        if (c > 0 and v > px) or (c < 0 and v < px):
+            P_.append({"v": v, "type": lib, "cote": c, "n": 1, "age": 0, "poids": 2.2})
+    pas_r = 50 if px > 2000 else 10
+    for k in range(-2, 2):          # chiffres ronds du prix affiché (spot), ramenés sur l'échelle du future
+        v = (math.floor((px + ajust) / pas_r) + k + (1 if k >= 0 else 0)) * pas_r - ajust
+        if abs(v - px) < 6 * atr * 4:
+            P_.append({"v": float(v), "type": "Chiffre rond", "cote": 1 if v > px else -1, "n": 1, "age": 0, "poids": 1.2 if v % (pas_r * 2) == 0 else 0.8})
+    # regroupement des niveaux proches et score
+    P_.sort(key=lambda z: z["v"])
+    poches = []
+    for z in P_:
+        if poches and abs(z["v"] - poches[-1]["v"]) <= tol and z["cote"] == poches[-1]["cote"]:
+            q = poches[-1]
+            q["types"].append(z["type"])
+            q["poids"] += z["poids"]
+            q["n"] += z["n"]
+            q["v"] = max(q["v"], z["v"]) if z["cote"] > 0 else min(q["v"], z["v"])
+        else:
+            poches.append({"v": z["v"], "cote": z["cote"], "types": [z["type"]], "poids": z["poids"], "n": z["n"]})
+    for q in poches:
+        q["dist"] = q["v"] - px
+        q["datr"] = abs(q["dist"]) / atr
+        q["score"] = q["poids"] / (1 + 0.15 * q["datr"])
+        q["v"] += ajust
+    haut = sorted([q for q in poches if q["v"] - ajust > px], key=lambda q: q["dist"])[:7]
+    bas = sorted([q for q in poches if q["v"] - ajust < px], key=lambda q: -q["dist"])[:7]
+    smax = max([q["score"] for q in haut + bas] + [1])
+    for q in haut + bas:
+        q["force"] = q["score"] / smax
+    return {"px": px + ajust, "atr": atr, "haut": haut, "bas": bas}
+
+
+def bloc_liquidite(L):
+    if not L:
+        return panneau("Carte de liquidité", '<p class="sl-vide">Données insuffisantes.</p>')
+    def ligne(q):
+        cl = "lq-h" if q["cote"] > 0 else "lq-b"
+        return (f'<tr class="{cl}"><td class="num">{fr(q["v"], 1)}</td><td class="num {"up" if q["dist"] > 0 else "down"}">{fr(q["dist"], 1, True)}</td>'
+                f'<td><div class="lq-bar"><i style="width:{q["force"] * 100:.0f}%"></i></div></td>'
+                f'<td class="lq-t">{esc(" + ".join(dict.fromkeys(q["types"])))}{(" · " + str(q["n"]) + " touches") if q["n"] > 2 else ""}</td></tr>')
+    proche_h = L["haut"][0] if L["haut"] else None
+    proche_b = L["bas"][0] if L["bas"] else None
+    fort = max(L["haut"] + L["bas"], key=lambda q: q["score"]) if (L["haut"] or L["bas"]) else None
+    lect = []
+    if proche_h:
+        lect.append(f"Au-dessus, la poche la plus proche est à {fr(proche_h['v'], 1)} ({fr(proche_h['dist'], 1, True)} $) : stops des vendeurs.")
+    if proche_b:
+        lect.append(f"En dessous, à {fr(proche_b['v'], 1)} ({fr(proche_b['dist'], 1, True)} $) : stops des acheteurs.")
+    if fort:
+        lect.append(f"La plus fournie : {fr(fort['v'], 1)}, {('au-dessus' if fort['cote'] > 0 else 'en dessous')}.")
+    corps = (f'<table class="lq"><thead><tr><th>Niveau</th><th>Écart</th><th>Concentration</th><th>Ce qui s\'y trouve</th></tr></thead><tbody>'
+             + "".join(ligne(q) for q in reversed(L["haut"]))
+             + f'<tr class="lq-px"><td class="num">{fr(L["px"], 1)}</td><td colspan="3">prix · amplitude moyenne d\'une heure {fr(L["atr"], 1)} $</td></tr>'
+             + "".join(ligne(q) for q in L["bas"]) + '</tbody></table>'
+             f'<p class="sl-lect">{esc(" ".join(lect))} Un balayage de ces niveaux suivi d\'un retour rapide est souvent un piège ; une clôture '
+             f'franche au-delà ouvre la voie à la poche suivante.</p>')
+    return panneau("Carte de liquidité", corps, "Où dorment les ordres stop : plus hauts et plus bas journaliers jamais retouchés, sommets et creux "
+                   "égaux en 1 h, extrêmes de la semaine et chiffres ronds. Le prix est souvent attiré vers ces poches avant de repartir. "
+                   "Concentration : nombre de raisons au même endroit, pondéré par la distance.", "or · 1 h", "sl-lq")
+
+
+# ---------------------------------------------------------------------------
 # ASSEMBLAGE
 # ---------------------------------------------------------------------------
+
+def bloc_risque_force(data, a):
+    """Rubrique de l'écran Fondamental : sentiment de risque et force des actifs en grand (sans le Squawk ni les horaires)."""
+    y, f = data["yahoo"], data["fred"]
+    return f'<div class="ec-salle">{bloc_sentiment(sentiment(y, f))}{bloc_force(force(y))}</div>'
+
 
 def bloc_salle(data, a, ajust, now):
     y, f = data["yahoo"], data["fred"]
@@ -458,6 +586,8 @@ CSS = """
 .sl-lect{margin:8px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink)}
 .sl-svg{display:block;width:100%;height:auto} .sl-svg .gr{stroke:#1c1f26} .sl-svg .z{stroke:#2a2f3a;stroke-dasharray:3 3}
 .sl-svg .ax{fill:var(--mute);font:500 9.5px var(--mono)} .sl-svg .tg{fill:#000000;font:700 9.5px var(--mono)}
+.sl-svg .fl{fill:#9ba3b1;font:500 10.5px var(--text)} .sl-svg .fl-or{fill:#fff;font-weight:700}
+.sl-svg .fv{font:600 10.5px var(--mono)} .sl-svg .fv.up{fill:#2fd27d} .sl-svg .fv.down{fill:#ff5a5f}
 /* sentiment */
 .sl-sent{display:grid;grid-template-columns:200px minmax(0,1fr);gap:12px;align-items:center}
 .sl-sg{display:flex;flex-direction:column;align-items:center} .sl-jauge{width:200px;height:auto} .sl-jv{font:600 28px var(--mono);letter-spacing:-.02em}
@@ -467,7 +597,7 @@ CSS = """
 .sl-ev i{font-style:normal;font-size:10px}
 .sl-leg{display:flex;gap:12px;font:600 9.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
 .sl-leg .down{color:var(--down)} .sl-leg .up{color:var(--up)}
-.sl-cps{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:3px 14px;margin-top:8px}
+.sl-cps{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:2px 24px;margin-top:10px}
 .sl-cp{display:grid;grid-template-columns:110px minmax(0,1fr);align-items:center;gap:6px;font-size:11px;color:var(--mute)}
 .sl-cp i{display:block;height:5px;border-radius:1px} .sl-cp i.up{background:var(--up)} .sl-cp i.down{background:var(--down)}
 /* force */
@@ -499,6 +629,20 @@ CSS = """
 .sl-tab th:first-child,.sl-tab td:first-child{text-align:left} .sl-tab td{padding:5px;border-bottom:1px solid var(--band2);font-family:var(--mono);white-space:nowrap}
 .tx-t{overflow-x:auto}
 .sl-tab td.num{text-align:right}
+/* liquidité */
+.lq{width:100%;border-collapse:collapse;font-size:12px}
+.lq th{font:600 9.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mute);text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
+.lq td{padding:5px 6px;border-bottom:1px solid var(--band2)} .lq td.num{font-family:var(--mono);white-space:nowrap;width:80px}
+.lq-t{color:var(--steel)} .lq-bar{height:6px;background:#15181e;width:120px} .lq-bar i{display:block;height:100%}
+.lq-h .lq-bar i{background:linear-gradient(90deg,rgba(47,210,125,.35),#2fd27d)} .lq-b .lq-bar i{background:linear-gradient(90deg,rgba(255,90,95,.35),#ff5a5f)}
+.lq-px td{border-top:1px solid var(--brass);border-bottom:1px solid var(--brass);color:var(--brass);font:600 12px var(--mono);background:rgba(126,166,214,.06)}
+/* fed */
+.fd-leg{display:flex;gap:12px;font:500 10px var(--mono);color:var(--mute);margin-bottom:6px} .fd-leg i{display:inline-block;width:8px;height:8px;margin-right:4px;vertical-align:-1px}
+.fd-leg-t{margin-left:auto}
+.fd-r{display:grid;grid-template-columns:62px minmax(0,1fr) 100px 52px;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--band2);font:500 11px var(--mono)}
+.fd-d{color:var(--steel)} .fd-v{color:var(--ink);text-align:right;white-space:nowrap} .fd-t{text-align:right;color:var(--mute)}
+.fd-b{display:flex;height:8px;background:#15181e;overflow:hidden} .fd-b i{display:block;height:100%}
+.fd-b i.b,.fd-leg i.b{background:#2fd27d} .fd-b i.s,.fd-leg i.s{background:#4b5260} .fd-b i.h,.fd-leg i.h{background:#ff5a5f}
 /* horaires */
 .mh-l{display:flex;flex-direction:column;gap:5px;position:relative}
 .mh-r{display:grid;grid-template-columns:76px minmax(0,1fr) 100px;align-items:center;gap:8px;font:600 11px var(--mono)}
@@ -511,11 +655,11 @@ CSS = """
 .mh-axe{display:flex;justify-content:space-between;margin:4px 108px 0 84px;font:500 9.5px var(--mono);color:var(--mute)}
 /* saison */
 .sa{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:4px}
-.sa-c{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 2px;border:1px solid var(--band2);background:#0c0d11;cursor:help}
+.sa-c{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 2px;border:0;border-bottom:1px solid var(--band2);background:none;cursor:help}
 .sa-c span{font:600 10px var(--mono);color:var(--mute);text-transform:uppercase} .sa-c b{font:700 11.5px var(--mono)} .sa-c small{font:500 9.5px var(--mono);color:var(--mute)}
-.sa-bar{position:relative;width:60%;height:70px} .sa-bar i{position:absolute;left:0;right:0} .sa-bar i.up{background:var(--up)} .sa-bar i.down{background:var(--down)}
+.sa-bar{position:relative;width:14px;height:80px} .sa-bar i{position:absolute;left:0;right:0} .sa-bar i.up{background:var(--up)} .sa-bar i.down{background:var(--down)}
 .sa-bar::after{content:"";position:absolute;left:-4px;right:-4px;top:50%;border-top:1px solid #2a2f3a}
-.sa-c.sa-now{border-color:var(--brass);background:rgba(126,166,214,.08)} .sa-c.sa-next{border-style:dashed;border-color:var(--brass)}
+.sa-c.sa-now{background:rgba(126,166,214,.08);border-bottom:2px solid var(--brass)} .sa-c.sa-next{border-bottom:2px dashed var(--brass)}
 /* heatmap */
 .hm{width:100%;border-collapse:separate;border-spacing:3px;font:600 11.5px var(--mono)}
 .hm th{font:600 9.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--mute);padding:3px 4px;text-align:center}

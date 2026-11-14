@@ -138,13 +138,11 @@ def p_marche(salle, y, f, fw):
                   + f'<p>{salle.esc(S["lecture"])}</p></div>')
     else:
         risque = '<p class="ws-vide">Données insuffisantes.</p>'
-    force = "".join(f'<div class="sl-fv" data-fen="{k}"{"" if k == "1m" else " hidden"}>{salle.svg_force(L, 620, 230)}</div>' for k, L in (F or {}).items())
+    force = "".join(f'<div class="sl-fv" data-fen="{k}"{"" if k == "1m" else " hidden"}>{salle.svg_force(L, 640, 250)}</div>' for k, L in (F or {}).items())
     force = ((f'<div class="sl-btns">' + "".join(f'<button type="button" data-fen="{k}" class="{"on" if k == "1m" else ""}">{k.upper()}</button>' for k in (F or {}))
               + f'</div>{force}') if F else '<p class="ws-vide">Données insuffisantes.</p>')
     if fw and fw.get("reunions"):
-        lig = "".join(f'<tr><td>{r["date"]:%d/%m/%y}</td><td class="num">{fr(r["taux"], 2)} %</td><td class="num down">{r["p_baisse"] * 100:.0f} %</td>'
-                      f'<td class="num">{r["p_statu"] * 100:.0f} %</td><td class="num up">{r["p_hausse"] * 100:.0f} %</td></tr>' for r in fw["reunions"][:6])
-        fed = f'<table class="sl-tab"><thead><tr><th>Réunion</th><th>Taux</th><th>Baisse</th><th>Statu</th><th>Hausse</th></tr></thead><tbody>{lig}</tbody></table>'
+        fed = salle.lignes_fed(fw)
     else:
         fed = '<p class="ws-vide">Futures fed funds indisponibles.</p>'
     corps = (f'{onglets}<div class="mk-v sl-p-nu" data-mk="risque">{risque}</div><div class="mk-v sl-p-nu" data-mk="force" hidden>{force}</div>'
