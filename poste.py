@@ -428,7 +428,7 @@ CSS = """
 .ps-tete .k{margin-right:auto}
 .ps-maj,.ps-mini{font-size:12px;color:var(--mute)}
 p.ps-mini{margin:6px 0 0}
-.ps-demo{font:700 10.5px var(--text);letter-spacing:.05em;color:var(--amber);border:1px solid rgba(245,166,35,.5);border-radius:4px;padding:2px 7px;cursor:help}
+.ps-demo{font:700 10.5px var(--text);letter-spacing:.05em;color:var(--amber);border:1px solid rgba(214,190,120,.5);border-radius:4px;padding:2px 7px;cursor:help}
 .ps-dec{display:flex;flex-direction:column;gap:10px}
 .ps-dec.ps-achat{border-color:rgba(52,195,143,.55);background:linear-gradient(180deg,rgba(52,195,143,.10),var(--panel) 55%)}
 .ps-dec.ps-vente{border-color:rgba(240,97,109,.55);background:linear-gradient(180deg,rgba(240,97,109,.10),var(--panel) 55%)}
@@ -501,7 +501,7 @@ p.ps-mini{margin:6px 0 0}
 .ps-actus{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 .ps-actus li{font-size:13px;line-height:1.4}
 .ps-actus a{color:var(--ink)} .ps-age{font:500 11.5px var(--mono);color:var(--mute);margin-right:6px}
-.ps-actus em{font:600 10.5px var(--text);font-style:normal;margin-left:6px;padding:1px 6px;border-radius:4px;border:1px solid currentColor}
+.ps-actus em{white-space:nowrap;font:600 10.5px var(--text);font-style:normal;margin-left:6px;padding:1px 6px;border-radius:4px;border:1px solid currentColor}
 .ps-actus em.up{color:var(--up)} .ps-actus em.down{color:var(--down)}
 .ps-lien{font-size:12px;color:var(--brass)}
 .ps-tv{margin:0 0 12px;padding-bottom:14px}

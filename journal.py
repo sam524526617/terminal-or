@@ -58,7 +58,7 @@ CSS = """
 .jr-form label.jr-large{grid-column:span 5}
 .jr-form input,.jr-form select{background:#000;border:1px solid var(--line);border-radius:6px;color:var(--ink);font:500 14px var(--mono);
   padding:8px 9px;min-width:0;width:100%;color-scheme:dark}
-.jr-form input:focus,.jr-form select:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(255,159,26,.25)}
+.jr-form input:focus,.jr-form select:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(126,166,214,.25)}
 .jr-form input.err{border-color:var(--down)}
 .jr-actions{grid-column:span 3;display:flex;align-items:center;gap:10px}
 .jr-msg{font-size:12.5px;color:var(--mute)} .jr-msg.err{color:var(--down)}

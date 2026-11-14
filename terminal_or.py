@@ -227,7 +227,7 @@ TV_BANDEAU = [("OANDA:XAUUSD", "XAU/USD"), ("OANDA:XAGUSD", "XAG/USD"), ("CAPITA
               ("FX:USDJPY", "USD/JPY")]
 TV_MINIS = [("CAPITALCOM:DXY", "Dollar index"), ("OANDA:USB10YUSD", "T-Note 10 ans (monte si les taux baissent)"),
             ("TVC:UKOIL", "Brent"), ("FOREXCOM:SPXUSD", "S&P 500")]
-TV_LANGUE_ACTUS = "en"   # le fil d'actualité en direct est plus fourni en anglais
+TV_LANGUE_ACTUS = "fr"
 
 # Taille de position, utilisée par le contrôle Achat / Vente. Valeurs par défaut : tu peux les changer
 # directement dans la page (bouton « Réglages »), sans toucher à ce fichier.
@@ -281,11 +281,17 @@ FENETRE_NEWS = (15, 10)
 
 # Thèmes d'actualité (Google News) : (titre affiché, requête)
 THEMES_NEWS = [
-    ("Or", "gold price"),
-    ("Fed et taux", "Federal Reserve OR Treasury yields"),
-    ("Pétrole et géopolitique", "Iran OR Hormuz OR oil prices"),
-    ("Flux et banques centrales", "central bank gold OR gold ETF"),
+    ("Or", "\"cours de l'or\" OR \"prix de l'or\" OR \"once d'or\""),
+    ("Fed et taux", "Fed taux OR \"Réserve fédérale\" OR \"taux américains\""),
+    ("Pétrole et géopolitique", "\"prix du pétrole\" OR Iran OR Ormuz"),
+    ("Flux et banques centrales", "\"banques centrales\" or OR \"ETF or\" OR \"réserves d'or\""),
 ]
+NEWS_FR = {"hl": "fr", "gl": "FR", "ceid": "FR:fr"}       # titres de presse en français (page or)
+NEWS_EN = {"hl": "en-US", "gl": "US", "ceid": "US:en"}
+
+
+def langue_news():
+    return NEWS_FR if ACTIF["sym"] == "XAU/USD" else NEWS_EN
 
 # Analyste IA (optionnel). Deux fournisseurs possibles, choisis selon la clé présente dans les secrets GitHub :
 #   GEMINI_API_KEY    -> Gemini de Google, offre gratuite (quelques dizaines d'analyses par jour)
@@ -826,7 +832,7 @@ def charger_news():
     for theme, requete in THEMES_NEWS:
         try:
             out[theme] = lire_rss("https://news.google.com/rss/search",
-                                  {"q": requete + " when:2d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+                                  {"q": requete + " when:2d", **langue_news()})
         except Exception:
             out[theme] = []
     noter("Google News", any(out.values()))
@@ -836,9 +842,10 @@ def charger_news():
 def charger_news_7j():
     """Titres sur l'or des 7 derniers jours, pour expliquer les séances passées."""
     out = []
-    for q in ("gold price when:7d", "gold falls OR gold slumps OR gold rallies OR gold surges when:7d"):
+    for q in ("\"cours de l'or\" OR \"prix de l'or\" OR \"once d'or\" when:7d",
+              "\"l'or\" chute OR recule OR plonge OR bondit OR grimpe OR rebondit when:7d"):
         try:
-            out += lire_rss("https://news.google.com/rss/search", {"q": q, "hl": "en-US", "gl": "US", "ceid": "US:en"}, ttl_min=60, n=40)
+            out += lire_rss("https://news.google.com/rss/search", {"q": q, **NEWS_FR}, ttl_min=60, n=40)
         except Exception:
             pass
     return out
@@ -857,11 +864,11 @@ def charger_fed_officiel():
         noter("Réserve fédérale (RSS)", True)
         return out
     # Secours : les mêmes informations via Google News
-    for cle, q in (("communiques", "Federal Reserve statement OR FOMC decision"),
-                   ("discours", "Fed governor OR Fed chair speech")):
+    for cle, q in (("communiques", "Fed décision taux OR FOMC" if ACTIF["sym"] == "XAU/USD" else "Federal Reserve statement OR FOMC decision"),
+                   ("discours", "Fed gouverneur OR Powell discours" if ACTIF["sym"] == "XAU/USD" else "Fed governor OR Fed chair speech")):
         try:
             out[cle] = lire_rss("https://news.google.com/rss/search",
-                                {"q": q + " when:7d", "hl": "en-US", "gl": "US", "ceid": "US:en"}, n=6)
+                                {"q": q + " when:7d", **langue_news()}, n=6)
         except Exception:
             out[cle] = []
     noter("Réserve fédérale (RSS)", any(out.values()), "via Google News (flux officiel indisponible)"
@@ -1717,10 +1724,14 @@ def cot_etendu(cot, or_s):
 
 MOTS_BAROMETRE = {
     "hawk": ["hike", "hikes", "hawkish", "tighten", "tightening", "higher for longer", "raise rates", "rate increase",
-             "sticky inflation", "hot inflation"],
-    "dove": ["rate cut", "rate cuts", "dovish", "easing", "pause", "slowdown", "cooling inflation", "cut rates"],
-    "esc": ["attack", "strike", "strikes", "missile", "escalat", "blockade", "sanction", "invasion", "threat", "clash"],
-    "desc": ["ceasefire", "truce", "peace", "agreement", "de-escalat", "reopen", "talks", "deal"],
+             "sticky inflation", "hot inflation", "hausse des taux", "hausse de taux", "relèvement", "relever ses taux", "restrictif",
+             "resserrement", "inflation persistante", "inflation plus forte", "inflation accélère"],
+    "dove": ["rate cut", "rate cuts", "dovish", "easing", "pause", "slowdown", "cooling inflation", "cut rates",
+             "baisse des taux", "baisse de taux", "baisser ses taux", "assouplissement", "ralentissement", "désinflation", "inflation ralentit"],
+    "esc": ["attack", "strike", "strikes", "missile", "escalat", "blockade", "sanction", "invasion", "threat", "clash",
+            "attaque", "frappe", "escalade", "blocus", "menace", "affrontement", "riposte"],
+    "desc": ["ceasefire", "truce", "peace", "agreement", "de-escalat", "reopen", "talks", "deal",
+             "cessez-le-feu", "trêve", "paix", "accord", "désescalade", "négociation", "pourparlers"],
 }
 
 
@@ -8073,10 +8084,10 @@ def donnees_demo():
                (28, "ISM Manufacturing PMI", "High", "52.4", "51.8", ""),
                (74, "Non-Farm Employment Change", "High", "95K", "142K", ""),
                (74, "Unemployment Rate", "High", "4.1%", "4.1%", ""))]
-    titres = ["Gold slips as Treasury yields climb on hawkish Fed bets", "Fed officials signal another rate hike",
-              "Oil jumps after missile strike near Hormuz", "Iran and US resume talks on ceasefire deal",
-              "Central bank gold buying stays strong", "Dollar firm ahead of PCE data", "Gold ETF outflows continue"]
-    news = {t: [{"titre": titres[(k + i) % len(titres)], "lien": "#", "source": "Reuters",
+    titres = ["L'or recule alors que les taux américains montent sur fond de Fed plus dure", "La Fed laisse entendre une nouvelle hausse des taux",
+              "Le pétrole bondit après une frappe de missile près d'Ormuz", "L'Iran et les États-Unis reprennent les négociations sur un cessez-le-feu",
+              "Les banques centrales achètent de l'or pour le douzième mois d'affilée", "L'or rebondit après une inflation américaine plus faible que prévu"]
+    news = {t: [{"titre": titres[(k + i) % len(titres)], "lien": "#", "source": "Les Échos",
                  "date": now - timedelta(hours=i * 3)} for i in range(5)] for k, (t, _) in enumerate(THEMES_NEWS)}
     fed_off = {"communiques": [{"titre": "Federal Reserve issues FOMC statement", "lien": "#", "source": "",
                                 "date": now - timedelta(days=9)}],

@@ -227,7 +227,7 @@ CSS = """
 .dx-niv tr.dx-za td:first-child{color:var(--up)} .dx-niv tr.dx-zv td:first-child{color:var(--down)}
 .dx-niv tr.dx-str td:first-child{color:#8fa8d4} .dx-niv tr.dx-ref td{color:var(--mute)}
 .dx-niv tr.dx-perso td:first-child{color:var(--amber);font-weight:600}
-.dx-niv tr.dx-proche td{background:rgba(255,159,26,.09)}
+.dx-niv tr.dx-proche td{background:rgba(126,166,214,.09)}
 .dx-niv tr.ps-px td{color:var(--brass);font-weight:700;border-top:1px solid var(--brass);border-bottom:1px solid var(--brass)}
 .dx-niv tr.ps-px small{display:inline;color:var(--mute);font-weight:500;margin-left:6px}
 .dx-niv .dx-suppr{border:0;background:none;color:var(--mute);padding:0 4px;font-size:13px;line-height:1;cursor:pointer}
@@ -235,12 +235,12 @@ CSS = """
 .dx-al{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:5px}
 .dx-al div{display:flex;gap:6px}
 .dx-al input{flex:1;min-width:0;background:#000;border:1px solid var(--line);border-radius:6px;color:var(--ink);font:500 13px var(--mono);padding:7px 9px}
-.dx-al input:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(255,159,26,.25)}
+.dx-al input:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(126,166,214,.25)}
 .dx-al input.err{border-color:var(--down)}
 .dx-al button{flex:none}
 .dx-al-liste{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
 .dx-al-liste:empty{display:none}
-.dx-al-liste li{display:inline-flex;align-items:center;gap:4px;font:600 12px var(--mono);color:var(--amber);border:1px solid rgba(255,179,64,.45);
+.dx-al-liste li{display:inline-flex;align-items:center;gap:4px;font:600 12px var(--mono);color:var(--amber);border:1px solid rgba(214,190,120,.45);
   border-radius:6px;padding:2px 4px 2px 8px}
 .dx-al-liste button{border:0;background:none;color:var(--mute);padding:0 4px;font-size:13px}
 .dx-opts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
@@ -268,7 +268,7 @@ CSS = """
 .dx-champs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 .dx-champs label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mute)}
 .dx-champs input{background:#000;border:1px solid var(--line);border-radius:6px;color:var(--ink);font:600 15px var(--mono);padding:9px 10px;min-width:0;width:100%}
-.dx-champs input:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(255,159,26,.25)}
+.dx-champs input:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(126,166,214,.25)}
 .dx-c-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 14px}
 .dx-c-actions button{font-size:12.5px}
 .dx-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:12px}
@@ -276,13 +276,13 @@ CSS = """
 .dx-kpis span{font-size:11.5px;color:var(--mute)} .dx-kpis b{font:700 17px var(--mono);letter-spacing:-.02em}
 .dx-kpis small{font-size:11.5px;color:var(--mute)}
 .dx-verdict{font:800 15px var(--text);letter-spacing:.04em;padding:9px 12px;border-radius:8px;margin-bottom:10px;border:1px solid currentColor}
-.dx-verdict.ok{color:var(--up);background:rgba(47,210,125,.08)} .dx-verdict.att{color:var(--amber);background:rgba(255,179,64,.08)}
+.dx-verdict.ok{color:var(--up);background:rgba(47,210,125,.08)} .dx-verdict.att{color:var(--amber);background:rgba(214,190,120,.08)}
 .dx-verdict.non{color:var(--down);background:rgba(255,90,95,.08)}
 .dx-verdict small{display:block;font:500 12.5px var(--text);letter-spacing:0;color:var(--ink);margin-top:2px}
 .dx-ctl{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:6px}
 .dx-ctl li{display:grid;grid-template-columns:20px minmax(0,1fr);gap:8px;font-size:13.5px;line-height:1.4}
 .dx-ctl i{font-style:normal;width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;font:700 11px var(--text)}
-.dx-ctl .ok i{color:var(--up);background:rgba(47,210,125,.15)} .dx-ctl .att i{color:var(--amber);background:rgba(255,179,64,.15)}
+.dx-ctl .ok i{color:var(--up);background:rgba(47,210,125,.15)} .dx-ctl .att i{color:var(--amber);background:rgba(214,190,120,.15)}
 .dx-ctl .non i{color:var(--down);background:rgba(255,90,95,.17)} .dx-ctl .non{color:var(--down)}
 .dx-fin{display:flex;flex-wrap:wrap;gap:8px}
 .dx-x{font-size:12.5px}
@@ -290,7 +290,7 @@ CSS = """
 .dx-aide-g table{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px}
 .dx-aide-g td{padding:5px 0;border-bottom:1px solid var(--band2);vertical-align:top}
 .dx-aide-g td:first-child{white-space:nowrap;padding-right:12px}
-.dx-aide-g kbd{font:600 11.5px var(--mono);color:var(--brass);background:rgba(255,159,26,.1);border:1px solid rgba(255,159,26,.35);border-radius:4px;padding:1px 6px}
+.dx-aide-g kbd{font:600 11.5px var(--mono);color:var(--brass);background:rgba(126,166,214,.1);border:1px solid rgba(126,166,214,.35);border-radius:4px;padding:1px 6px}
 .dx-k2{display:block;margin-top:14px}
 .dx-outils{display:flex;gap:6px}
 @media (max-width:640px){.dx-champs,.dx-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.dx-aide-g{grid-template-columns:1fr}

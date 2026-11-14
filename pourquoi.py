@@ -217,12 +217,15 @@ def analyser(y, f, intra, cal, annonces_hist, titres, regime, now, ajust=0.0):
                 continue
             t_ = re.sub(r"\s+", " ", it["titre"]).strip()
             bas_ = t_.lower()
-            if "gold" not in bas_ or re.search(r"\betf\b|miner|mining|bitcoin|crypto|stock to|shares|jewel|rate today|price today|current price|futures overview|per gram|karat", bas_):
+            if not re.search(r"\bl[’']or\b|\bor\b|once|métal jaune|gold", bas_) or re.search(
+                    r"\betf\b|minière|mines? d|bitcoin|crypto|bijou|gramme|carat|napoléon|lingot|prix de l[’']or aujourd|cours de l[’']or aujourd|"
+                    r"miner|mining|shares|jewel|price today|current price|futures overview|per gram|karat", bas_):
                 continue
-            # un titre qui donne une cause (« gold falls as... », « after », « on ») vaut plus qu'un titre de prévision
-            score = (2 if re.search(r"\b(as|after|amid|on|following)\b", bas_) else 0) \
-                + (2 if re.search(r"fall|drop|slump|slide|sink|tumble|plunge|rise|surge|jump|rall|climb|gain|low|high|record|week", bas_) else 0) \
-                - (2 if re.search(r"forecast|prediction|outlook|can gold|will gold|should you", bas_) else 0)
+            # un titre qui donne une cause (« l'or recule après... », « plombé par ») vaut plus qu'un titre de prévision
+            score = (2 if re.search(r"\b(après|alors que|sur fond|face à|en raison|plombé|pénalisé|soutenu|porté par|dopé|sous l[’']effet|as|after|amid|following)\b", bas_) else 0) \
+                + (2 if re.search(r"chute|recul|baisse|plonge|dégringole|repli|cède|hausse|bond|grimpe|rebond|progresse|record|plus bas|plus haut|semaine|"
+                                  r"fall|drop|slump|slide|plunge|rise|surge|jump|rall|climb|low|high|week", bas_) else 0) \
+                - (2 if re.search(r"prévision|va-t-il|faut-il|pourrait|jusqu[’']où|forecast|prediction|outlook|can gold|will gold", bas_) else 0)
             cands.append((score, t_, it))
         vus_ = set()
         for score, t_, it in sorted(cands, key=lambda x: -x[0]):

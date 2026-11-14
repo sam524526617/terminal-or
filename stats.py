@@ -253,7 +253,7 @@ def svg_heures(S, w=1000, h=300):
     hf = 62                      # hauteur max des barres de fréquence
     now = (S.get("jour") or {}).get("heure")
     out = [f'<svg viewBox="0 0 {w} {h}" class="st-svg" role="img" aria-label="Profil de la journée heure par heure">']
-    coul = {"Asie": "#3b6fb5", "Londres": "#8a6fd1", "New York": "#c9793a"}
+    coul = {"Asie": "#3b6fb5", "Londres": "#8a6fd1", "New York": "#4f9a8f"}
     for nom, a, b in SEANCES:
         out.append(f'<rect x="{g + a * pas:.1f}" y="{top - 16}" width="{(b - a) * pas - 2:.1f}" height="12" rx="3" fill="{coul[nom]}" opacity=".55"/>'
                    f'<text x="{g + (a + b) / 2 * pas:.1f}" y="{top - 6.5}" class="st-se" text-anchor="middle">{esc(nom)}</text>')
@@ -379,7 +379,7 @@ CSS = """
 .st-svg .st-gr{stroke:#24242b;stroke-width:1} .st-svg .st-ax{fill:var(--mute);font:500 11px var(--mono)}
 .st-svg .st-se{fill:#fff;font:600 9.5px var(--text)}
 .st-svg .st-amp{fill:var(--brass)} .st-svg .st-up{fill:var(--up)} .st-svg .st-dn{fill:var(--down)}
-.st-svg .st-now{fill:rgba(255,159,26,.13)}
+.st-svg .st-now{fill:rgba(126,166,214,.13)}
 .st-tab{width:100%;border-collapse:collapse;font-size:13.5px}
 .st-tab th{text-align:left;font:600 10.5px var(--text);letter-spacing:.07em;text-transform:uppercase;color:var(--mute);padding:8px 10px;border-bottom:1px solid var(--line)}
 .st-tab tbody th{font:600 13.5px var(--text);letter-spacing:0;text-transform:none;color:var(--ink)}
