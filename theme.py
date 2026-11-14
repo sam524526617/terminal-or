@@ -57,6 +57,26 @@ button.or{background:var(--brass);border-color:var(--brass);color:#000000;font-w
 .actions{gap:6px;flex-wrap:nowrap}
 .actions button{padding:6px 10px;font-size:12.5px;white-space:nowrap}
 #btn-mode,#btn-notif{display:none}
+/* Écrans secondaires : chaque section devient un panneau, comme la Vue d'ensemble */
+.ec-sec>div[data-zone]>section,.ec-sec>div[data-zone]>details,.ec-sec>section.jr{position:relative;background:linear-gradient(180deg,#0d0f13,#090a0d);
+  border:1px solid var(--line);border-radius:2px;padding:12px 16px 14px;margin:0 0 12px;overflow-x:auto}
+.ec-sec>div[data-zone]>section::before,.ec-sec>div[data-zone]>section::after,.ec-sec>section.jr::before,.ec-sec>section.jr::after{content:"";position:absolute;
+  width:10px;height:10px;border-color:var(--brass);border-style:solid;opacity:.7;pointer-events:none}
+.ec-sec>div[data-zone]>section::before,.ec-sec>section.jr::before{top:-1px;left:-1px;border-width:1px 0 0 1px}
+.ec-sec>div[data-zone]>section::after,.ec-sec>section.jr::after{bottom:-1px;right:-1px;border-width:0 1px 1px 0}
+.ec-sec>div[data-zone]>section>h2,.ec-sec>section.jr>h2,.ec-sec>div[data-zone]>h2{font:700 12px var(--titre)!important;letter-spacing:.16em!important;
+  text-transform:uppercase;color:var(--brass)!important;margin:0 0 8px!important;padding-bottom:8px;border-bottom:1px solid var(--band2)}
+.ec-sec>div[data-zone]>section>h2::before,.ec-sec>section.jr>h2::before{content:"◆ ";font-size:8px;vertical-align:2px}
+.ec-sec .pourquoi{font-size:12px!important;line-height:1.5;color:var(--mute);max-width:130ch;margin:0 0 10px}
+.ec-sec>div[data-zone]>details>summary{font:700 11px var(--titre);letter-spacing:.14em;text-transform:uppercase;color:var(--brass);cursor:pointer;padding:2px 0}
+.ec-sec h3{font:700 11px var(--mono)!important;letter-spacing:.1em;text-transform:uppercase;color:var(--steel)}
+.ec-sec table th{font:600 9.5px var(--mono)!important;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.ec-sec table td{font-size:12.5px}
+.ec-sec .dt-carte,.ec-sec .fd-carte,.ec-sec .fd-comp,.ec-sec .mk-carte,.ec-sec .on-carte,.ec-sec .lb-carte,.ec-sec .fd-hero,.ec-sec .on-hero,
+.ec-sec .fd-kpis div,.ec-sec .on-kpis div,.ec-sec .strip .it,.ec-sec .dz-panneau,.ec-sec .panel{border-radius:2px!important;background:#0b0c10!important;border-color:var(--band2)!important}
+.ec-sec .dz-graph{border-radius:2px;background:#07080b}
+.ec-sec .dt-carte{overflow-x:auto;min-width:0}
+.ec-sec .jr-kpis div,.ec-sec .jr-courbe,.ec-sec .jr-lecture,.ec-sec .jr-form,.ec-sec .st-kpis div{border-radius:2px!important;background:#0b0c10!important}
 /* Écrans regroupés : sommaire et titres de rubrique */
 .ec-som{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 18px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
 .ec-som a{display:inline-flex;align-items:center;gap:7px;font:600 13px var(--text);color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:5px 10px;background:var(--band)}
