@@ -258,7 +258,7 @@ def bloc_squawk(E, now):
     n = {k: sum(1 for e in E if e["type"] == k) for k in ("actu", "chiffre", "mouvement")}
     filtres = (f'<div class="sq-f" role="group" aria-label="Filtrer le fil"><button type="button" data-sq="tout" class="on">TOUT {len(E)}</button>'
                f'<button type="button" data-sq="actu">ACTUS {n["actu"]}</button><button type="button" data-sq="chiffre">CHIFFRES {n["chiffre"]}</button>'
-               f'<button type="button" data-sq="mouvement">MOUVEMENTS {n["mouvement"]}</button></div>')
+               f'<button type="button" data-sq="mouvement">PRIX {n["mouvement"]}</button></div>')
     lig = ""
     for e in E:
         m = int((now - e["t"]).total_seconds() // 60)

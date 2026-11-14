@@ -189,7 +189,7 @@ try {
 } catch(e){}
 /* Barre de commande : un code de fonction puis Entrée ; « / » pour y aller depuis n'importe où */
 var CODES = {GO:'accueil', ACCUEIL:'accueil', MKT:'marches', MARCHES:'marches', DATA:'data', DONNEES:'data', TECH:'technique', FA:'fondamental', FONDA:'fondamental',
-  ECO:'annonces', CAL:'annonces', NEWS:'actus', N:'actus', STAT:'stat', STATS:'stat', LAB:'labo', JRN:'suivi', JOURNAL:'suivi'};
+  ECO:'annonces', CAL:'annonces', NEWS:'actus', N:'actus', STAT:'stat', STATS:'stat', WHY:'pourquoi', POURQUOI:'pourquoi', RISK:'salle', CHART:'direct', HEAT:'analyse', LAB:'labo', JRN:'suivi', JOURNAL:'suivi'};
 var cmd = document.getElementById('cmd');
 function aller(code){
   var T = window.terminalOr; if (T && T.commande && T.commande(code)) return true;   /* AL 4100, CALC, AIDE */

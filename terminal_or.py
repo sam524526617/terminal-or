@@ -72,6 +72,11 @@ except ImportError:
     analyste = None
 
 try:
+    import ecran  # poste de travail plein écran : la Vue d'ensemble tient sur un seul écran
+except ImportError:
+    ecran = None
+
+try:
     import salle  # salle des marchés : squawk, sentiment de risque, force des actifs, taux, horaires, saisonnalité, heatmap
 except ImportError:
     salle = None
@@ -142,7 +147,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "11.0"
+VERSION = "12.0"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -7661,9 +7666,10 @@ def contenus_onglets(data, a, ia):
 # v10 : cinq écrans, dans l'ordre de la méthode. Chaque écran regroupe plusieurs rubriques (code de fonction, titre).
 ECRANS = [
     ("accueil", "GO", "Vue d'ensemble", [("accueil", "GO", "Vue d'ensemble")]),
-    ("technique", "TECH", "Technique", [("technique", "TECH", "Structure et zones du plan"), ("analyse", "HEAT", "Heatmap et saisonnalité"),
+    ("technique", "TECH", "Technique", [("direct", "CHART", "Graphiques"), ("technique", "TECH", "Structure et zones du plan"), ("analyse", "HEAT", "Heatmap et saisonnalité"),
                                         ("stat", "STAT", "Statistiques de séance")]),
-    ("fondamental", "FA", "Fondamental", [("fondamental", "FA", "Analyste et fondamental"), ("marches", "MKT", "Marchés"),
+    ("fondamental", "FA", "Fondamental", [("pourquoi", "WHY", "Pourquoi l'or bouge"), ("fondamental", "FA", "Analyste et fondamental"),
+                                           ("salle", "RISK", "Risque, force des actifs, Fed"), ("marches", "MKT", "Marchés"),
                                            ("data", "DATA", "Positionnement et données")]),
     ("annonces", "ECO", "Agenda et actus", [("annonces", "ECO", "Agenda économique"), ("actus", "NEWS", "Actualités")]),
     ("suivi", "JRN", "Journal", [("suivi", "JRN", "Journal et plan"), ("labo", "LAB", "Stratégies testées")]),
@@ -7674,6 +7680,11 @@ def bloc_ecrans(data, a, ia, accueil):
     """Navigation regroupée : 5 onglets, un sommaire en haut de chaque écran, chaque rubrique dans sa propre zone."""
     contenus = contenus_onglets(data, a, ia)
     contenus["accueil"] = accueil
+    comp = a.get("_complements") or {}
+    if comp:
+        contenus["direct"] = comp["graph_direct"]
+        contenus["pourquoi"] = comp["pourquoi"]
+        contenus["salle"] = comp["salle"] + comp["chiffres"]
     cal_tv = tv("embed-widget-events.js", {"colorTheme": "dark", "isTransparent": True, "width": "100%", "height": "100%",
                                            "locale": "fr", "importanceFilter": "0,1", "countryFilter": ACTIF["tv_pays"]},
                 "Calendrier économique en direct (TradingView)")
@@ -7794,7 +7805,16 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                 ps = direct.sante(a["decision"], a, maintenant()) + ps
             if ps and pourquoi and a.get("pourquoi"):
                 ps += pourquoi.bloc(a["pourquoi"], ((ia or {}).get("json") or {}).get("pourquoi_recent"))
-        if ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
+        if ps and ecran and salle and direct:     # v12 : poste de travail plein écran, sans défilement
+            st_ = labo.strategie_en_direct(labo.charger()) if labo else None
+            accueil = ecran.bloc(a, data, AJUST, COMPTE, st_, ((ia or {}).get("json") or {}).get("titre"), direct.carte_echelle(),
+                                 direct.sante(a["decision"], a, maintenant()), salle, decision,
+                                 salle.bloc_squawk(salle.squawk(data, data.get("intraday"), AJUST, maintenant()), maintenant()), maintenant())
+            a["_complements"] = {"graph_direct": decision.bloc_graphique(a["decision"]) + bloc_graphique_direct(),
+                                 "chiffres": f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}',
+                                 "salle": salle.bloc_salle(data, a, AJUST, maintenant()),
+                                 "pourquoi": pourquoi.bloc(a["pourquoi"], ((ia or {}).get("json") or {}).get("pourquoi_recent")) if (pourquoi and a.get("pourquoi")) else ""}
+        elif ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
             accueil = (ps + '<div class="ps-titre">Graphiques</div>' + decision.bloc_graphique(a["decision"]) + bloc_graphique_direct()
                        + f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}')
         else:
@@ -7820,14 +7840,15 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}{pourquoi.CSS if (pro and pourquoi) else ""}{salle.CSS if (pro and salle) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}{pourquoi.CSS if (pro and pourquoi) else ""}{salle.CSS if (pro and salle) else ""}{ecran.CSS if (pro and ecran) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
             f'{"<script>" + theme.JS + "</script>" if pro else ""}'
             f'{"<script>" + direct.JS + "</script>" if (pro and direct) else ""}'
             f'{"<script>" + journal.JS + "</script>" if (pro and journal) else ""}'
-            f'{"<script>" + salle.JS + "</script>" if (pro and salle) else ""}</body></html>')
+            f'{"<script>" + salle.JS + "</script>" if (pro and salle) else ""}'
+            f'{"<script>" + ecran.JS + "</script>" if (pro and ecran) else ""}</body></html>')
 
 
 # ---------------------------------------------------------------------------
