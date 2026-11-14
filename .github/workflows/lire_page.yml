@@ -1,0 +1,25 @@
+# Lecture d'une page web publique de référence (lancement manuel).
+name: Lire une page
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Adresse de la page"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  lire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Lire la page
+        run: python outils/lire_page.py "${{ inputs.url }}"
