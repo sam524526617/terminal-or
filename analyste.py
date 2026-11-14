@@ -20,7 +20,7 @@ from datetime import timedelta
 import plan as P
 
 MODELE_CLAUDE = "claude-opus-5-5"
-FORMAT = 2            # version du format de la note (une note d'un ancien format est régénérée)
+FORMAT = 3            # version du format de la note (une note d'un ancien format est régénérée)
 
 
 def esc(x):
@@ -41,7 +41,7 @@ def fr(x, d=1, signe=False, unite=""):
 JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
-def brief(a, data, ajust, now, niveaux=None, labo_statut=None):
+def brief(a, data, ajust, now, niveaux=None, labo_statut=None, mouvements=None):
     """Texte du relevé : tout ce que la page affiche d'utile à la décision, en prix spot."""
     dz, s = a["decision"], a.get("seance") or {}
     t = dz.get("tech") or {}
@@ -61,6 +61,8 @@ def brief(a, data, ajust, now, niveaux=None, labo_statut=None):
     if dz.get("en_retard"):
         L.append(f"ATTENTION : bougies en retard de {dz.get('retard_min', 0):.0f} min.")
 
+    if mouvements:
+        L += ["", "== DERNIÈRES SÉANCES (variation, ce qui a bougé le même jour, annonces, technique, titres de presse) =="] + list(mouvements)
     L += ["", "== DÉCISION DU PLAN (règles fixes du trader) =="]
     o = dz.get("ordre")
     if o:
@@ -162,6 +164,7 @@ Ce qui compte pour lui :
 - Quand les signaux se contredisent, expose la contradiction au lieu de trancher artificiellement, et indique ton niveau de conviction.
 - Écris en français simple, avec des phrases complètes. Explique chaque terme technique la première fois en quelques mots. Pas de jargon inutile, pas de formules creuses.
 - Les titres d'actualité ne sont qu'un contexte : ne leur fais pas dire plus qu'ils ne disent.
+- Il veut comprendre pourquoi l'or monte ou baisse. Quand tu expliques un mouvement, donne la cause la plus probable d'après le relevé et dis si elle est fondamentale (dollar, taux, annonce, peur) ou technique (cassure d'un niveau, prises de bénéfices, stops qui sautent). Deux choses qui bougent ensemble ne prouvent rien : parle de cause probable.
 
 Longueur : une note qui se lit en une minute. Chaque champ va droit au fait."""
 
@@ -170,6 +173,7 @@ SCHEMA = {
     "properties": {
         "titre": {"type": "string", "description": "Une phrase : la situation de l'or maintenant et ce que ça implique."},
         "synthese": {"type": "string", "description": "3 à 4 phrases : ce qui se passe, pourquoi, et quel moteur domine."},
+        "pourquoi_recent": {"type": "string", "description": "3 à 4 phrases : pourquoi l'or a monté ou baissé ces derniers jours. Explique d'abord le mouvement le plus fort des dernières séances (cause la plus probable, fondamentale ou technique), puis la séance en cours. Si le relevé ne permet pas de le savoir, dis-le."},
         "biais": {"type": "string", "enum": ["haussier", "baissier", "neutre"], "description": "Ta lecture à quelques heures."},
         "conviction": {"type": "string", "enum": ["faible", "moyenne", "forte"]},
         "accord_plan": {"type": "string", "enum": ["d'accord", "nuancé", "en désaccord"], "description": "Ton avis sur la décision du plan."},
@@ -183,7 +187,7 @@ SCHEMA = {
         "risques": {"type": "array", "items": {"type": "string"}, "description": "2 à 3 choses qui invalideraient ta lecture."},
         "discipline": {"type": "string", "description": "Une phrase : l'erreur à ne pas commettre aujourd'hui dans ce contexte précis."},
     },
-    "required": ["titre", "synthese", "biais", "conviction", "accord_plan", "accord_explication", "scenario_principal",
+    "required": ["titre", "synthese", "pourquoi_recent", "biais", "conviction", "accord_plan", "accord_explication", "scenario_principal",
                  "scenario_alternatif", "achat", "vente", "niveaux", "annonces", "risques", "discipline"],
     "additionalProperties": False,
 }
@@ -305,6 +309,9 @@ DEMO = json.dumps({
     "synthese": "Le Daily et le H4 pointent vers le haut, mais le H1 a cassé vers le bas et n'a pas encore repris son dernier sommet. "
                 "Le fondamental du plan est neutre : ni les taux réels ni le dollar ne poussent franchement. Ce sont donc les flux et la "
                 "technique qui mènent, et la technique est partagée.",
+    "pourquoi_recent": "La forte baisse de la semaine vient surtout de prises de bénéfices après une longue hausse : le dollar et les taux "
+                       "ont peu bougé ce jour-là, et le plus bas de 20 jours a cédé, ce qui a déclenché des ventes en chaîne. "
+                       "Aujourd'hui l'or se stabilise sans nouvelle cause visible.",
     "biais": "neutre", "conviction": "faible", "accord_plan": "d'accord",
     "accord_explication": "Tant que le H1 contredit le Daily et le H4, acheter revient à parier contre le mouvement en cours.",
     "scenario_principal": "Consolidation sous le dernier sommet 1 h, puis reprise si une bougie d'une heure clôture au-dessus.",

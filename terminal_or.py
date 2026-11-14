@@ -72,6 +72,11 @@ except ImportError:
     analyste = None
 
 try:
+    import pourquoi  # rubrique « Pourquoi l'or bouge » : l'explication de chaque séance
+except ImportError:
+    pourquoi = None
+
+try:
     import stats  # fonction STAT : statistiques de séance (probabilités de base)
 except ImportError:
     stats = None
@@ -828,6 +833,17 @@ def charger_news():
     return out
 
 
+def charger_news_7j():
+    """Titres sur l'or des 7 derniers jours, pour expliquer les séances passées."""
+    out = []
+    for q in ("gold price when:7d", "gold falls OR gold slumps OR gold rallies OR gold surges when:7d"):
+        try:
+            out += lire_rss("https://news.google.com/rss/search", {"q": q, "hl": "en-US", "gl": "US", "ceid": "US:en"}, ttl_min=60, n=40)
+        except Exception:
+            pass
+    return out
+
+
 def charger_fed_officiel():
     """Communiqués et discours officiels de la Réserve fédérale (flux RSS du Board)."""
     out = {}
@@ -1274,6 +1290,7 @@ def collecter():
         "gld": (charger_gld, "SPDR Gold Shares (GLD)"),
         "cal": (charger_calendrier, "ForexFactory (calendrier)"),
         "news": (charger_news, "Google News"),
+        "news_7j": (charger_news_7j, "Google News (7 jours)"),
         "fed_off": (charger_fed_officiel, "Réserve fédérale (RSS)"),
         "intraday": (charger_intraday, "Yahoo intraday"),
         "zq": (charger_zq, "Futures fed funds"),
@@ -4194,6 +4211,14 @@ def analyser(data):
             a["fonda"] = fondamental.analyser(y, f, a, data.get("cal"), maintenant())
         except Exception as e:
             noter("Fondamental du plan", False, str(e)[:120])
+    a["pourquoi"] = None
+    if pourquoi is not None and ACTIF["sym"] == "XAU/USD":
+        try:
+            titres_ = list(data.get("news_7j") or []) + [it for l in (data.get("news") or {}).values() for it in l]
+            a["pourquoi"] = pourquoi.analyser(y, f, data.get("intraday"), data.get("cal"), (data.get("hist") or {}).get("annonces"),
+                                              titres_, (a.get("fonda") or {}).get("regime"), maintenant(), AJUST)
+        except Exception as e:
+            noter("Pourquoi l'or bouge", False, str(e)[:100])
     a["stat"] = None
     if stats is not None:
         try:
@@ -7679,6 +7704,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                                   note_html=analyste.carte_accueil(ia, ia_quand(ia)) if (analyste and ia) else "")
             if ps and direct:
                 ps = direct.sante(a["decision"], a, maintenant()) + ps
+            if ps and pourquoi and a.get("pourquoi"):
+                ps += pourquoi.bloc(a["pourquoi"], ((ia or {}).get("json") or {}).get("pourquoi_recent"))
         if ps:   # le poste de pilotage remplace les cartes de décision et l'ancien cockpit (plus de doublons)
             accueil = (ps + decision.bloc_graphique(a["decision"]) + bloc_graphique_direct()
                        + f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}')
@@ -7705,7 +7732,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}{pourquoi.CSS if (pro and pourquoi) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
@@ -8164,7 +8191,8 @@ def generer(demo=False, watch_min=None, site_dir=None):
     if note:      # relevé centré sur le plan : ce que le trader a sous les yeux
         st_ = labo.strategie_en_direct(labo.charger()) if labo else None
         brief = note.brief(a, data, AJUST, maintenant(), direct.niveaux(a, a["decision"], AJUST) if direct else None,
-                           f"{st_['statut']} ({st_['nom']})" if st_ else None)
+                           f"{st_['statut']} ({st_['nom']})" if st_ else None,
+                           pourquoi.releve(a.get("pourquoi")) if pourquoi else None)
         ia = ({"texte": note.DEMO, "json": note.lire(note.DEMO), "modele": "démonstration", "heure": maintenant().isoformat(),
                "raison": "démonstration"} if demo else analyste_ia(brief, a, data, note=note))
     else:
