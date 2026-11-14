@@ -22,4 +22,4 @@ jobs:
           python-version: "3.12"
       - run: pip install requests
       - name: Lire la page
-        run: python outils/lire_page.py "${{ inputs.url }}"
+        run: python outils/lire_page.py ${{ inputs.url }}

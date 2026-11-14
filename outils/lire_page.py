@@ -38,16 +38,36 @@ def lire(url):
     return liens
 
 
-if __name__ == "__main__":
-    depart = sys.argv[1]
-    liens = lire(depart)
-    print("\n-- liens internes :", "\n".join(liens[:80]))
-    pris = 0
-    for l in liens:
-        if pris >= 6 or l.rstrip("/") == depart.rstrip("/") or re.search(r"\.(png|jpg|svg|css|js|ico|xml|pdf)$|login|signin|register|legal|privacy|cgu|cookie", l, re.I):
+def images(url, page_html):
+    """Images de captures d'écran de la page, en base64 (pour les regarder hors ligne)."""
+    import base64
+    vues = set()
+    for src in re.findall(r'(?:src|srcSet|srcset|href)="([^"]+\.(?:webp|png|jpg)[^"]*)"', page_html):
+        u = urljoin(url, src.split(" ")[0])
+        if "screen" not in u.lower() or u in vues or len(vues) >= 12:
             continue
+        vues.add(u)
         try:
-            lire(l)
-            pris += 1
+            r = requests.get(u, headers=UA, timeout=30)
+            print(f"\n@@IMAGE {u} {len(r.content)}")
+            b = base64.b64encode(r.content).decode()
+            for k in range(0, len(b), 3000):
+                print("@@B64 " + b[k:k + 3000])
+            print("@@FIN")
         except Exception as e:
-            print(f"\n######## {l} : échec {e}")
+            print(f"@@ECHEC {u} {e}")
+
+
+if __name__ == "__main__":
+    for u in sys.argv[1:]:
+        try:
+            lire(u)
+            images(u, requests.get(u, headers=UA, timeout=30).text)
+        except Exception as e:
+            print(f"\n######## {u} : échec {e}")
+    # couleurs et polices du site (variables CSS)
+    t = requests.get(sys.argv[1], headers=UA, timeout=30).text
+    for css in dict.fromkeys(re.findall(r'href="([^"]+\.css[^"]*)"', t)):
+        c = requests.get(urljoin(sys.argv[1], css), headers=UA, timeout=30).text
+        print("\n-- CSS", css[:60], ":", " ".join(dict.fromkeys(re.findall(r"--[\w-]+:\s*[^;}{]{1,40}", c)))[:4000])
+        print("-- familles :", " | ".join(dict.fromkeys(re.findall(r"font-family:\s*([^;}]+)", c)))[:600])
