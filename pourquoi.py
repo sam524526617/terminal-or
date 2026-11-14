@@ -218,7 +218,7 @@ def analyser(y, f, intra, cal, annonces_hist, titres, regime, now, ajust=0.0):
             t_ = re.sub(r"\s+", " ", it["titre"]).strip()
             bas_ = t_.lower()
             if not re.search(r"\bl[’']or\b|\bor\b|once|métal jaune|gold", bas_) or re.search(
-                    r"\betf\b|minière|mines? d|bitcoin|crypto|bijou|gramme|carat|napoléon|lingot|prix de l[’']or aujourd|cours de l[’']or aujourd|"
+                    r"\betf\b|minière|aurifère|actions? des|mines? d|bitcoin|crypto|bijou|gramme|carat|napoléon|lingot|prix de l[’']or aujourd|cours de l[’']or aujourd|"
                     r"miner|mining|shares|jewel|price today|current price|futures overview|per gram|karat", bas_):
                 continue
             # un titre qui donne une cause (« l'or recule après... », « plombé par ») vaut plus qu'un titre de prévision
