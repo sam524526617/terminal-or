@@ -162,8 +162,7 @@ def analyser(y, f, intra, cal, annonces_hist, titres, regime, now, ajust=0.0):
             corps = (hj["close"] - hj["open"])
             k = corps.abs().idxmax()
             if abs(corps.loc[k]) >= 2 * amp_h:
-                ev = next((x for x in X["evts"] if abs((x["t"] - k.to_pydatetime()).total_seconds()) <= 3600
-                           or 0 <= (x["t"] - k.to_pydatetime()).total_seconds() < 3600), None)
+                ev = next((x for x in X["evts"] if -1800 <= (pd.Timestamp(x["t"]) - k).total_seconds() < 3600), None)
                 X["choc"] = {"heure": k.hour, "var": float(corps.loc[k]), "evt": ev["titre"] if ev else None}
             par = []
             for nom, a0, a1 in SEANCES:
@@ -209,12 +208,27 @@ def analyser(y, f, intra, cal, annonces_hist, titres, regime, now, ajust=0.0):
                 T.append(("Longue mèche haute", f"le prix est monté à {fr(r['high'] + ajust)} puis a été vendu : des vendeurs défendent ce niveau", -1))
 
         # ---- titres du jour
+        cands = []
         for it in titres or []:
             d_ = it.get("date")
-            if d_ is not None and d_.date() == jour.date() and len(X["titres"]) < 3:
-                t_ = re.sub(r"\s+", " ", it["titre"]).strip()
-                if t_ and t_.lower() not in [x["titre"].lower() for x in X["titres"]]:
-                    X["titres"].append({"titre": t_, "source": it.get("source") or "", "lien": it.get("lien") or "#"})
+            if d_ is None or d_.date() != jour.date():
+                continue
+            t_ = re.sub(r"\s+", " ", it["titre"]).strip()
+            bas_ = t_.lower()
+            if "gold" not in bas_ or re.search(r"\betf\b|miner|mining|bitcoin|crypto|stock to|shares|jewel|rate today|price today|current price|futures overview|per gram|karat", bas_):
+                continue
+            # un titre qui donne une cause (« gold falls as... », « after », « on ») vaut plus qu'un titre de prévision
+            score = (2 if re.search(r"\b(as|after|amid|on|following)\b", bas_) else 0) \
+                + (2 if re.search(r"fall|drop|slump|slide|sink|tumble|plunge|rise|surge|jump|rall|climb|gain|low|high|record|week", bas_) else 0) \
+                - (2 if re.search(r"forecast|prediction|outlook|can gold|will gold|should you", bas_) else 0)
+            cands.append((score, t_, it))
+        vus_ = set()
+        for score, t_, it in sorted(cands, key=lambda x: -x[0]):
+            cle_ = re.sub(r"\W+", " ", t_.lower())[:40]
+            if cle_ in vus_ or len(X["titres"]) >= 3 or score < 2:
+                continue
+            vus_.add(cle_)
+            X["titres"].append({"titre": t_, "source": it.get("source") or "", "lien": it.get("lien") or "#"})
         X["clair"] = en_clair(X)
         out.append(X)
     return out
