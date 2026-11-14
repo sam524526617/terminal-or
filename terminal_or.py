@@ -72,6 +72,11 @@ except ImportError:
     analyste = None
 
 try:
+    import salle  # salle des marchés : squawk, sentiment de risque, force des actifs, taux, horaires, saisonnalité, heatmap
+except ImportError:
+    salle = None
+
+try:
     import pourquoi  # rubrique « Pourquoi l'or bouge » : l'explication de chaque séance
 except ImportError:
     pourquoi = None
@@ -137,7 +142,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "10.0"
+VERSION = "11.0"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -839,6 +844,16 @@ def charger_news():
     return out
 
 
+def charger_saison():
+    """Clôtures mensuelles de l'or depuis le début de l'historique Yahoo (saisonnalité sur 20 ans)."""
+    c = extraire_close(telecharger_yahoo("GC=F", "max", "1mo"), ["GC=F"])
+    if c.empty:
+        return None
+    s = c.iloc[:, 0].dropna()
+    noter("Yahoo historique mensuel", len(s) > 60, f"{len(s)} mois")
+    return s
+
+
 def charger_news_7j():
     """Titres sur l'or des 7 derniers jours, pour expliquer les séances passées."""
     out = []
@@ -1298,6 +1313,7 @@ def collecter():
         "cal": (charger_calendrier, "ForexFactory (calendrier)"),
         "news": (charger_news, "Google News"),
         "news_7j": (charger_news_7j, "Google News (7 jours)"),
+        "saison": (charger_saison, "Yahoo historique mensuel"),
         "fed_off": (charger_fed_officiel, "Réserve fédérale (RSS)"),
         "intraday": (charger_intraday, "Yahoo intraday"),
         "zq": (charger_zq, "Futures fed funds"),
@@ -7607,6 +7623,8 @@ def contenus_onglets(data, a, ia):
                             '<button type="button" class="or" data-ouvrir="calc">Ouvrir le calculateur</button></section>'
                             if direct else ''),
             "stat": stats.bloc_stat(a.get("stat")) if stats else "",
+            "analyse": (f'<div class="ec-salle">{salle.bloc_heatmap(salle.heatmap(y))}{salle.bloc_saison(salle.saison(data.get("saison"), maintenant()))}</div>'
+                        if salle else ""),
             "fondamental": (note_ia(ia) + (fondamental.bloc_html(a["fonda"], "") if a.get("fonda") else "")
                             + '<details class="fd-plus"><summary>Graphiques longs, corrélations et devises</summary>'
                             + bloc_graphiques(y, f, data["cot"], a) + f'<section>{bloc_correlations(a)}</section>'
@@ -7643,7 +7661,8 @@ def contenus_onglets(data, a, ia):
 # v10 : cinq écrans, dans l'ordre de la méthode. Chaque écran regroupe plusieurs rubriques (code de fonction, titre).
 ECRANS = [
     ("accueil", "GO", "Vue d'ensemble", [("accueil", "GO", "Vue d'ensemble")]),
-    ("technique", "TECH", "Technique", [("technique", "TECH", "Structure et zones du plan"), ("stat", "STAT", "Statistiques de séance")]),
+    ("technique", "TECH", "Technique", [("technique", "TECH", "Structure et zones du plan"), ("analyse", "HEAT", "Heatmap et saisonnalité"),
+                                        ("stat", "STAT", "Statistiques de séance")]),
     ("fondamental", "FA", "Fondamental", [("fondamental", "FA", "Analyste et fondamental"), ("marches", "MKT", "Marchés"),
                                            ("data", "DATA", "Positionnement et données")]),
     ("annonces", "ECO", "Agenda et actus", [("annonces", "ECO", "Agenda économique"), ("actus", "NEWS", "Actualités")]),
@@ -7769,6 +7788,8 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                                   echelle=direct.carte_echelle() if direct else None,
                                   stat_html=stats.carte_maintenant(a.get("stat")) if stats else "",
                                   note_html=analyste.carte_accueil(ia, ia_quand(ia)) if (analyste and ia) else "")
+            if ps and salle:      # salle des marchés en tête : squawk, sentiment, force des actifs, taux, horaires
+                ps = salle.bloc_salle(data, a, AJUST, maintenant()) + ps
             if ps and direct:
                 ps = direct.sante(a["decision"], a, maintenant()) + ps
             if ps and pourquoi and a.get("pourquoi"):
@@ -7799,13 +7820,14 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
             f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
-            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}{pourquoi.CSS if (pro and pourquoi) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
+            f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}{pourquoi.CSS if (pro and pourquoi) else ""}{salle.CSS if (pro and salle) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
             f'{"<script>" + decision.JS + "</script>" if decision is not None else ""}'
             f'{"<script>" + onglets.JS + "</script>" if onglets is not None else ""}'
             f'{"<script>" + theme.JS + "</script>" if pro else ""}'
             f'{"<script>" + direct.JS + "</script>" if (pro and direct) else ""}'
-            f'{"<script>" + journal.JS + "</script>" if (pro and journal) else ""}</body></html>')
+            f'{"<script>" + journal.JS + "</script>" if (pro and journal) else ""}'
+            f'{"<script>" + salle.JS + "</script>" if (pro and salle) else ""}</body></html>')
 
 
 # ---------------------------------------------------------------------------
@@ -8110,6 +8132,9 @@ def donnees_demo():
     cl = y["or"].iloc[-250:].values
     jours = pd.DataFrame({"open": cl * 0.998, "high": cl * 1.009, "low": cl * 0.991, "close": cl}, index=jidx)
     intraday = {"barres": barres, "jours": jours, "heures": heures}
+    rng_ = np.random.default_rng(9)
+    m_idx = pd.date_range(end=pd.Timestamp(now.date()), periods=300, freq="ME")
+    saison_demo = pd.Series(float(y["or"].iloc[-1]) * np.exp(np.cumsum(rng_.normal(0.006, 0.045, 300))[::-1] * -1 + 0), index=m_idx)
 
     zq = {}
     for i in range(16):
@@ -8154,7 +8179,7 @@ def donnees_demo():
                 "Réserve fédérale (RSS)", "Trésor américain (courbes)", "Fed de New York (EFFR, SOFR)",
                 "TreasuryDirect (adjudications)", "Yahoo intermarché 15 min", "XAUS (spot XAU/USD)"):
         noter(nom, True, "données de démonstration")
-    return {"yahoo": y, "fred": f, "cot": cot, "gld": gld, "cal": cal, "news": news, "zq": zq,
+    return {"saison": saison_demo, "yahoo": y, "fred": f, "cot": cot, "gld": gld, "cal": cal, "news": news, "zq": zq,
             "intraday": intraday, "courbe": courbe, "fed_off": fed_off, "tresor": {}, "nyfed": {}, "adjudic": adjudic,
             "oanda": None, "intermarche": intermarche_demo(barres), "xaus": xaus_demo(barres, 36.8), "devises": devises_demo()}
 
