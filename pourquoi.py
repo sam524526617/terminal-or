@@ -95,7 +95,9 @@ def analyser(y, f, intra, cal, annonces_hist, titres, regime, now, ajust=0.0):
     D["avant10"] = (D["close"].shift(1) / D["close"].shift(11) - 1) * 100
     amp_h = float((hb["high"] - hb["low"]).tail(24 * 20).median())
     br, bd = (regime or {}).get("beta_reel"), (regime or {}).get("beta_dxy")
-    evts = [e for e in (cal or []) if e.get("date") is not None and e.get("impact") == "High"]
+    # annonces fortes d'abord, puis les moyennes (inscriptions au chômage, etc.) : elles aussi font bouger l'or
+    evts = sorted([e for e in (cal or []) if e.get("date") is not None and e.get("impact") in ("High", "Medium")],
+                  key=lambda e: (e.get("impact") != "High", e["date"]))
     out = []
     for jour in D.index[-NB_JOURS:][::-1]:
         r, p = D.loc[jour], D.index.get_loc(jour)
