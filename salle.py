@@ -93,42 +93,64 @@ def sentiment(y, f):
     return {"score": v, "etat": etat, "s1": prec(7), "s4": prec(30), "hist": sc, "comp": der, "lecture": lecture}
 
 
-def svg_jauge(v, w=220, h=150):
-    cx, cy, r = w / 2, 118, 92
-    pt = lambda a, rr: (cx + rr * math.cos(math.pi * (1 - a)), cy - rr * math.sin(math.pi * (1 - a)))
-    out = [f'<svg viewBox="0 0 {w} {h}" class="sl-jauge" role="img" aria-label="Sentiment de risque {v:.0f} sur 100">']
-    for k in range(40):
-        a0, a1 = k / 40 + 0.004, (k + 1) / 40 - 0.004
-        col = "#ff5a5f" if k < 16 else ("#e8c35a" if k < 24 else "#35c9d6")
-        op = 1.0 if (k + 0.5) / 40 <= v / 100 else 0.18
-        x0, y0 = pt(a0, r)
-        x1, y1 = pt(a1, r)
-        x2, y2 = pt(a1, r - 16)
-        x3, y3 = pt(a0, r - 16)
-        out.append(f'<path d="M{x0:.1f},{y0:.1f} L{x1:.1f},{y1:.1f} L{x2:.1f},{y2:.1f} L{x3:.1f},{y3:.1f} Z" fill="{col}" opacity="{op}"/>')
-    xa, ya = pt(v / 100, r - 26)
-    col = "#ff5a5f" if v < 40 else ("#e8c35a" if v <= 60 else "#35c9d6")
-    out.append(f'<line x1="{cx}" y1="{cy}" x2="{xa:.1f}" y2="{ya:.1f}" stroke="{col}" stroke-width="3" stroke-linecap="round"/>'
-               f'<circle cx="{cx}" cy="{cy}" r="6" fill="{col}"/>'
-               f'<text x="{cx}" y="{cy + 26}" text-anchor="middle" class="sl-jv" fill="{col}">{v:.0f}</text></svg>')
+def couleur_zone(v):
+    return "#ff5a5f" if v < 40 else ("#2fd27d" if v > 60 else "#9fb3cc")
+
+
+def svg_jauge(v, w=220, h=156):
+    """Jauge sobre : arc fin gradué, zones discrètes, aiguille fine, valeur au centre."""
+    cx, cy, r = w / 2, h - 34, min(w / 2 - 24, h - 48)
+    pol = lambda a, rr: (cx + rr * math.cos(math.pi * (1 - a)), cy - rr * math.sin(math.pi * (1 - a)))
+    col = couleur_zone(v)
+
+    def arc(a0, a1, rr):
+        x0, y0 = pol(a0, rr)
+        x1, y1 = pol(a1, rr)
+        return f"M{x0:.1f},{y0:.1f} A{rr},{rr} 0 0 1 {x1:.1f},{y1:.1f}"
+    out = [f'<svg viewBox="0 0 {w} {h}" class="sl-jauge" role="img" aria-label="Sentiment de risque {v:.0f} sur 100">',
+           f'<path d="{arc(0, 1, r)}" fill="none" stroke="#1f232c" stroke-width="10" stroke-linecap="butt"/>']
+    for a0, a1, c in ((0, .4, "rgba(255,90,95,.22)"), (.4, .6, "rgba(159,179,204,.18)"), (.6, 1, "rgba(47,210,125,.22)")):
+        out.append(f'<path d="{arc(a0 + .002, a1 - .002, r)}" fill="none" stroke="{c}" stroke-width="10"/>')
+    out.append(f'<path d="{arc(0, max(.005, v / 100), r)}" fill="none" stroke="{col}" stroke-width="3" opacity=".95"/>')
+    for k in range(51):
+        a = k / 50
+        lg = 9 if k % 5 == 0 else 4
+        x0, y0 = pol(a, r - 9)
+        x1, y1 = pol(a, r - 9 - lg)
+        out.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="{"#c4ccd8" if a <= v / 100 else "#3a404c"}" '
+                   f'stroke-width="{1.4 if k % 5 == 0 else .8}"/>')
+    for val in (0, 40, 60, 100):
+        x, y = pol(val / 100, r + 10)
+        out.append(f'<text x="{x:.1f}" y="{y + 3:.1f}" text-anchor="middle" class="sl-jt">{val}</text>')
+    xa, ya = pol(v / 100, r - 22)
+    out.append(f'<line x1="{cx}" y1="{cy}" x2="{xa:.1f}" y2="{ya:.1f}" stroke="#e9edf3" stroke-width="1.6"/>'
+               f'<circle cx="{cx}" cy="{cy}" r="4.5" fill="#0b0b0d" stroke="#e9edf3" stroke-width="1.4"/>'
+               f'<text x="{cx}" y="{cy + 27}" text-anchor="middle" class="sl-jv" fill="{col}">{v:.0f}</text></svg>')
     return "".join(out)
 
 
 def svg_histo(sc, w=520, h=170):
+    """Historique : une seule courbe, zone ombrée dessous, seuils 40 et 60 en pointillés."""
     v = sc.to_numpy()
-    g, d, ht, b = 26, 6, 8, 18
+    g, d, ht, b = 24, 30, 8, 18
     x = lambda i: g + i / max(1, len(v) - 1) * (w - g - d)
     y = lambda val: ht + (100 - val) / 100 * (h - ht - b)
+    pts = " ".join(f"{x(i):.1f},{y(val):.1f}" for i, val in enumerate(v))
+    col = couleur_zone(float(v[-1]))
+    uid = f"sg{abs(hash((len(v), round(float(v[-1]), 3)))) % 10**6}"
     out = [f'<svg viewBox="0 0 {w} {h}" class="sl-svg" preserveAspectRatio="none" role="img" aria-label="Historique du sentiment sur un an">',
-           f'<rect x="{g}" y="{y(100):.1f}" width="{w - g - d}" height="{y(60) - y(100):.1f}" fill="rgba(53,201,214,.05)"/>',
-           f'<rect x="{g}" y="{y(40):.1f}" width="{w - g - d}" height="{y(0) - y(40):.1f}" fill="rgba(255,90,95,.05)"/>']
-    for lv in (20, 40, 60, 80):
-        out.append(f'<line x1="{g}" x2="{w - d}" y1="{y(lv):.1f}" y2="{y(lv):.1f}" class="gr"/><text x="{g - 4}" y="{y(lv) + 3:.1f}" class="ax" text-anchor="end">{lv}</text>')
-    for k in range(1, len(v)):
-        col = "#ff5a5f" if v[k] < 40 else ("#e8c35a" if v[k] <= 60 else "#35c9d6")
-        out.append(f'<line x1="{x(k - 1):.1f}" y1="{y(v[k - 1]):.1f}" x2="{x(k):.1f}" y2="{y(v[k]):.1f}" stroke="{col}" stroke-width="1.6"/>')
+           f'<defs><linearGradient id="{uid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7ea6d6" stop-opacity=".28"/>'
+           f'<stop offset="1" stop-color="#7ea6d6" stop-opacity="0"/></linearGradient></defs>']
+    for lv in (20, 80):
+        out.append(f'<line x1="{g}" x2="{w - d}" y1="{y(lv):.1f}" y2="{y(lv):.1f}" class="gr"/>')
+    for lv, c in ((40, "#ff5a5f"), (60, "#2fd27d")):
+        out.append(f'<line x1="{g}" x2="{w - d}" y1="{y(lv):.1f}" y2="{y(lv):.1f}" stroke="{c}" stroke-opacity=".45" stroke-dasharray="3 4"/>'
+                   f'<text x="{w - d + 4}" y="{y(lv) + 3:.1f}" class="ax" fill="{c}">{lv}</text>')
+    out.append(f'<polygon points="{x(0):.1f},{y(0):.1f} {pts} {x(len(v) - 1):.1f},{y(0):.1f}" fill="url(#{uid})"/>'
+               f'<polyline points="{pts}" fill="none" stroke="#9fbde3" stroke-width="1.3" stroke-linejoin="round"/>'
+               f'<circle cx="{x(len(v) - 1):.1f}" cy="{y(float(v[-1])):.1f}" r="3" fill="{col}"/>')
     mois = [i for i in range(1, len(sc)) if sc.index[i].month != sc.index[i - 1].month]
-    for i in mois:
+    for i in mois[::2]:
         out.append(f'<text x="{x(i):.1f}" y="{h - 4}" class="ax" text-anchor="middle">{MOIS_C[sc.index[i].month - 1]}</text>')
     out.append("</svg>")
     return "".join(out)
@@ -144,8 +166,8 @@ def bloc_sentiment(S):
                    for k, z in sorted(S["comp"].items(), key=lambda x: -abs(x[1])))
     corps = (f'<div class="sl-sent"><div class="sl-sg">{svg_jauge(S["score"])}<b class="sl-et {cl}">{S["etat"]}</b>'
              f'<div class="sl-ev">{ev(S["s1"], "1 sem.")}{ev(S["s4"], "1 mois")}</div></div>'
-             f'<div class="sl-sh"><div class="sl-leg"><span class="down">■ risk-off &lt; 40</span><span class="neutre">■ neutre 40–60</span>'
-             f'<span class="up">■ risk-on &gt; 60</span></div>{svg_histo(S["hist"])}</div></div>'
+             f'<div class="sl-sh"><div class="sl-leg"><span class="down">— risk-off sous 40</span>'
+             f'<span class="up">— risk-on au-dessus de 60</span></div>{svg_histo(S["hist"])}</div></div>'
              f'<p class="sl-lect">{esc(S["lecture"])}</p><div class="sl-cps">{comp}</div>')
     return panneau("Sentiment de risque", corps, "Score de 0 à 100 : moyenne des variations sur 10 jours de 7 marchés (actions, VIX, crédit, "
                    "yen, cuivre/or, MOVE, pétrole), chacune rapportée à sa variation habituelle. Sous 40 : peur. Au-dessus de 60 : appétit pour le risque.",
@@ -156,7 +178,7 @@ def bloc_sentiment(S):
 # FORCE DES ACTIFS
 # ---------------------------------------------------------------------------
 
-ACTIFS = [("or", "OR", "#e8c35a", 1), ("argent", "ARGENT", "#c7ccd6", 1), ("dxy", "DOLLAR", "#35c9d6", 1), ("spx", "S&P 500", "#7c8cff", 1),
+ACTIFS = [("or", "OR", "#7ea6d6", 1), ("argent", "ARGENT", "#c7ccd6", 1), ("dxy", "DOLLAR", "#2fd27d", 1), ("spx", "S&P 500", "#7c8cff", 1),
           ("wti", "PÉTROLE", "#b07cff", 1), ("cuivre", "CUIVRE", "#ff8f6b", 1), ("usdjpy", "YEN", "#5fd18a", -1), ("eurusd", "EURO", "#ff6fae", 1)]
 FENETRES = [("5j", 5), ("1m", 21), ("3m", 63)]
 
@@ -434,27 +456,28 @@ CSS = """
 .sl-live{font:700 10px var(--mono);letter-spacing:.08em;color:#000;background:var(--brass);padding:2px 6px;border-radius:2px}
 .sl-vide{color:var(--mute);font-size:13px} .sl-sous{margin:0 0 6px;font-size:11.5px;color:var(--mute)}
 .sl-lect{margin:8px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink)}
-.sl-svg{display:block;width:100%;height:auto} .sl-svg .gr{stroke:#1f1c14} .sl-svg .z{stroke:#3a3424;stroke-dasharray:3 3}
-.sl-svg .ax{fill:var(--mute);font:500 9.5px var(--mono)} .sl-svg .tg{fill:#050402;font:700 9.5px var(--mono)}
+.sl-svg{display:block;width:100%;height:auto} .sl-svg .gr{stroke:#1c1f26} .sl-svg .z{stroke:#2a2f3a;stroke-dasharray:3 3}
+.sl-svg .ax{fill:var(--mute);font:500 9.5px var(--mono)} .sl-svg .tg{fill:#000000;font:700 9.5px var(--mono)}
 /* sentiment */
 .sl-sent{display:grid;grid-template-columns:200px minmax(0,1fr);gap:12px;align-items:center}
-.sl-sg{display:flex;flex-direction:column;align-items:center} .sl-jauge{width:200px;height:auto} .sl-jv{font:700 30px var(--mono)}
-.sl-et{font:800 13px var(--titre);letter-spacing:.14em} .sl-et.up{color:var(--up)} .sl-et.down{color:var(--down)} .sl-et.neutre{color:var(--brass)}
+.sl-sg{display:flex;flex-direction:column;align-items:center} .sl-jauge{width:200px;height:auto} .sl-jv{font:600 28px var(--mono);letter-spacing:-.02em}
+.sl-jt{fill:#6b7180;font:500 9px var(--mono)}
+.sl-et{font:600 11px var(--mono);letter-spacing:.18em} .sl-et.up{color:var(--up)} .sl-et.down{color:var(--down)} .sl-et.neutre{color:#9fb3cc}
 .sl-ev{display:flex;gap:14px;margin-top:6px;font:500 11px var(--mono);color:var(--mute)} .sl-ev div{display:flex;flex-wrap:wrap;gap:0 4px;align-items:baseline;max-width:90px}
 .sl-ev i{font-style:normal;font-size:10px}
 .sl-leg{display:flex;gap:12px;font:600 9.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
-.sl-leg .down{color:var(--down)} .sl-leg .neutre{color:var(--brass)} .sl-leg .up{color:var(--up)}
+.sl-leg .down{color:var(--down)} .sl-leg .up{color:var(--up)}
 .sl-cps{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:3px 14px;margin-top:8px}
 .sl-cp{display:grid;grid-template-columns:110px minmax(0,1fr);align-items:center;gap:6px;font-size:11px;color:var(--mute)}
 .sl-cp i{display:block;height:5px;border-radius:1px} .sl-cp i.up{background:var(--up)} .sl-cp i.down{background:var(--down)}
 /* force */
 .sl-btns{display:inline-flex;gap:3px} .sl-btns button{font:600 10.5px var(--mono);padding:2px 7px;border-radius:2px;background:transparent;border:1px solid var(--line);color:var(--mute)}
-.sl-btns button.on{background:var(--brass);border-color:var(--brass);color:#050402}
+.sl-btns button.on{background:var(--brass);border-color:var(--brass);color:#000000}
 /* squawk */
 .sl-squawk{display:flex;flex-direction:column;height:100%;min-height:640px}
 .sq-f{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
 .sq-f button{font:600 10.5px var(--mono);letter-spacing:.04em;padding:3px 8px;border-radius:2px;background:transparent;border:1px solid var(--line);color:var(--mute)}
-.sq-f button.on{background:rgba(232,195,90,.14);border-color:var(--brass);color:var(--brass)}
+.sq-f button.on{background:rgba(126,166,214,.14);border-color:var(--brass);color:var(--brass)}
 .sq-l{list-style:none;margin:0;padding:0;overflow-y:auto;flex:1;max-height:760px}
 .sq-l li{display:grid;grid-template-columns:42px 14px minmax(0,1fr);grid-template-rows:auto auto;column-gap:6px;padding:7px 2px;border-bottom:1px solid var(--band2);font-size:12.5px;line-height:1.45}
 .sq-l li[hidden]{display:none}
@@ -479,27 +502,27 @@ CSS = """
 /* horaires */
 .mh-l{display:flex;flex-direction:column;gap:5px;position:relative}
 .mh-r{display:grid;grid-template-columns:76px minmax(0,1fr) 100px;align-items:center;gap:8px;font:600 11px var(--mono)}
-.mh-r .mh-n{color:var(--ink)} .mh-r .mh-n i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#3a3424;margin-right:6px}
+.mh-r .mh-n{color:var(--ink)} .mh-r .mh-n i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#2a2f3a;margin-right:6px}
 .mh-r.ouvert .mh-n i{background:var(--up);box-shadow:0 0 6px var(--up)}
-.mh-tr{position:relative;height:12px;background:#0f0d09;border:1px solid var(--band2)}
-.mh-tr b{position:absolute;top:0;bottom:0;background:rgba(232,195,90,.28)} .mh-r.ouvert .mh-tr b{background:rgba(53,201,214,.45)}
+.mh-tr{position:relative;height:12px;background:#0e1015;border:1px solid var(--band2)}
+.mh-tr b{position:absolute;top:0;bottom:0;background:rgba(126,166,214,.28)} .mh-r.ouvert .mh-tr b{background:rgba(47,210,125,.45)}
 .mh-tr u{position:absolute;top:-3px;bottom:-3px;width:2px;background:#fff;text-decoration:none}
 .mh-r .mh-c{text-align:right;color:var(--mute);font-weight:500}
 .mh-axe{display:flex;justify-content:space-between;margin:4px 108px 0 84px;font:500 9.5px var(--mono);color:var(--mute)}
 /* saison */
 .sa{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:4px}
-.sa-c{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 2px;border:1px solid var(--band2);background:#0c0b08;cursor:help}
+.sa-c{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 2px;border:1px solid var(--band2);background:#0c0d11;cursor:help}
 .sa-c span{font:600 10px var(--mono);color:var(--mute);text-transform:uppercase} .sa-c b{font:700 11.5px var(--mono)} .sa-c small{font:500 9.5px var(--mono);color:var(--mute)}
 .sa-bar{position:relative;width:60%;height:70px} .sa-bar i{position:absolute;left:0;right:0} .sa-bar i.up{background:var(--up)} .sa-bar i.down{background:var(--down)}
-.sa-bar::after{content:"";position:absolute;left:-4px;right:-4px;top:50%;border-top:1px solid #3a3424}
-.sa-c.sa-now{border-color:var(--brass);background:rgba(232,195,90,.08)} .sa-c.sa-next{border-style:dashed;border-color:var(--brass)}
+.sa-bar::after{content:"";position:absolute;left:-4px;right:-4px;top:50%;border-top:1px solid #2a2f3a}
+.sa-c.sa-now{border-color:var(--brass);background:rgba(126,166,214,.08)} .sa-c.sa-next{border-style:dashed;border-color:var(--brass)}
 /* heatmap */
 .hm{width:100%;border-collapse:separate;border-spacing:3px;font:600 11.5px var(--mono)}
 .hm th{font:600 9.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--mute);padding:3px 4px;text-align:center}
 .hm tbody th{text-align:left;font:600 12px var(--text);letter-spacing:0;text-transform:none;color:var(--ink);white-space:nowrap}
 .hm td{text-align:center;padding:7px 4px;white-space:nowrap}
-.hm .hm-u{background:rgba(53,201,214,.22);color:#9feef5} .hm .hm-d{background:rgba(255,90,95,.2);color:#ffb3b5}
-.hm .hm-n{background:#15130e;color:var(--mute)} .hm .hm-hv{background:rgba(232,195,90,.22);color:#f3dc9a} .hm .hm-lv{background:#100f0b;color:#77715f}
+.hm .hm-u{background:rgba(47,210,125,.22);color:#9feef5} .hm .hm-d{background:rgba(255,90,95,.2);color:#ffb3b5}
+.hm .hm-n{background:#14161b;color:var(--mute)} .hm .hm-hv{background:rgba(126,166,214,.22);color:#c9dcf3} .hm .hm-lv{background:#0f1014;color:#6b7180}
 .hm tr.hm-or th{color:var(--brass)}
 .ec-salle{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
 @media (max-width:1400px){.sl{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr)}.sl-col:nth-child(3){grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}

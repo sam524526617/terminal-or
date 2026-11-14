@@ -147,7 +147,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.0"
+VERSION = "12.1"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -328,7 +328,7 @@ ACTIF = {"nom": "l'or", "Nom": "L'or", "sym": "XAU/USD", "de": "de l'or", "cfg_j
           "semaine": "Annonces à fort impact, décision de la Fed et adjudications du Trésor.",
          "reg_spread": "Spread moyen de ton broker sur XAU/USD ($)",
          # Sélecteur entre les pages : (libellé, lien relatif, page courante)
-         "pages": [("Or", "./", True), ("EUR/USD", "eurusd/", False)]}
+         "pages": [("Or", "./", True)]}
 
 
 def nav_pages():
@@ -4415,7 +4415,7 @@ def appeler_gemini(cle, brief, consigne=None, schema=None):
 
 
 def analyste_ia(brief, a=None, data=None, note=None):
-    # note : module analyste (note du plan) ; sans lui, l'ancienne consigne et l'ancien format sont utilisés (page EUR/USD)
+    # note : module analyste (note du plan) ; sans lui, l'ancienne consigne et l'ancien format sont utilisés (ancien format)
     """Analyse rédigée par Claude. Régénérée toutes les IA_INTERVALLE_MIN minutes en séance, et aussitôt après une
     annonce forte ou un changement de direction de la vue de marché. Sans clé ANTHROPIC_API_KEY : rien n'est appelé."""
     fournisseur, cle = cle_ia()
@@ -8493,22 +8493,6 @@ def alerte_telephone(a, hist, data=None):
             break
 
 
-def page_eurusd(site, demo=False):
-    """Génère la page EUR/USD (terminal_eurusd.py, s'il est présent) dans site/eurusd, dans un processus séparé."""
-    script = DOSSIER / "terminal_eurusd.py"
-    if not script.exists():
-        return
-    import subprocess
-    cmd = [sys.executable, str(script), "--site", str(site / "eurusd")] + (["--demo"] if demo else [])
-    print("Page EUR/USD...")
-    try:
-        r = subprocess.run(cmd, timeout=600)
-        if r.returncode:
-            print(f"Page EUR/USD non publiée (code {r.returncode}) : la page de l'or reste en ligne.")
-    except Exception as e:
-        print(f"Page EUR/USD non publiée ({e}) : la page de l'or reste en ligne.")
-
-
 def main():
     if os.name == "nt":
         os.system("")  # active les couleurs dans le terminal Windows
@@ -8529,7 +8513,6 @@ def main():
         print(f"Site généré : {Path(args.site).resolve() / 'index.html'}")
         for nom, st in sorted(STATUT.items()):
             print(f"  {nom} : {'ok' if st['ok'] else 'EN PANNE'} {st['message']}")
-        page_eurusd(Path(args.site), args.demo)
         return
 
     print("Collecte des données en cours...")

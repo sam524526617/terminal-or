@@ -14,8 +14,8 @@ POLICES = ('<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;
 CSS = """
 /* ===================== Thème professionnel v8 ===================== */
 :root{
-  --bg:#050402; --panel:#0b0a07; --band:#12100b; --band2:#1a170f; --line:#2b2616; --ink:#ece8dc; --mute:#8f8a7a;
-  --brass:#e8c35a; --steel:#b9b4a4; --up:#35c9d6; --down:#ff5a5f; --amber:#e8c35a;
+  --bg:#000000; --panel:#0b0b0d; --band:#141418; --band2:#1c1c21; --line:#2a2a31; --ink:#f1f1f3; --mute:#9b9ba3;
+  --brass:#7ea6d6; --steel:#b4b4bc; --up:#2fd27d; --down:#ff5a5f; --amber:#d6be78;
   --titre:"Rajdhani","Inter",system-ui,sans-serif;
   --cond:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --text:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
   --mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
@@ -30,16 +30,16 @@ body{font:14px/1.5 var(--text);letter-spacing:-.003em;font-feature-settings:"cv1
 a{color:inherit}
 button{font:500 13px var(--text);border-radius:6px;padding:6px 12px;background:var(--band);border:1px solid var(--line);color:var(--ink);transition:border-color .15s,background .15s}
 button:hover{border-color:#3a4554;background:var(--band2)}
-button.or{background:var(--brass);border-color:var(--brass);color:#050402;font-weight:700}
+button.or{background:var(--brass);border-color:var(--brass);color:#000000;font-weight:700}
 
 /* Barre du haut : une seule ligne */
-.barre{background:rgba(5,4,2,.94);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.barre{background:rgba(6,8,12,.94);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
 .barre .ligne{flex-wrap:nowrap;gap:16px;padding:8px 20px;min-height:56px;overflow-x:auto;scrollbar-width:none}
 .barre .ligne::-webkit-scrollbar{display:none}
 .barre .ligne>*{flex:none;white-space:nowrap}
 .barre .ligne .k{white-space:nowrap}
 .logo{font:800 15px var(--text);letter-spacing:.06em;display:flex;align-items:center;gap:2px}
-.logo i{width:10px;height:18px;border-radius:1px;background:linear-gradient(180deg,#f6dc8f,var(--brass))}
+.logo i{width:10px;height:18px;border-radius:1px;background:linear-gradient(180deg,#b7cfec,var(--brass))}
 .logo small{font:500 11px var(--mono);color:var(--mute)}
 .prix-live{display:flex;flex-direction:column;line-height:1.1;padding-left:16px;border-left:1px solid var(--line)}
 .prix-live b{font:600 22px var(--mono);color:var(--ink)}
@@ -61,7 +61,7 @@ button.or{background:var(--brass);border-color:var(--brass);color:#050402;font-w
 .ec-som{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 18px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
 .ec-som a{display:inline-flex;align-items:center;gap:7px;font:600 13px var(--text);color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:5px 10px;background:var(--band)}
 .ec-som a:hover{border-color:var(--brass)}
-.ec-som .fc,.ec-titre .fc{font:700 10.5px var(--mono);color:var(--brass);background:rgba(232,195,90,.1);border:1px solid rgba(232,195,90,.35);border-radius:4px;padding:1px 5px;letter-spacing:.04em}
+.ec-som .fc,.ec-titre .fc{font:700 10.5px var(--mono);color:var(--brass);background:rgba(126,166,214,.1);border:1px solid rgba(126,166,214,.35);border-radius:4px;padding:1px 5px;letter-spacing:.04em}
 .ec-sec{scroll-margin-top:calc(var(--haut-barre,57px) + 60px)}
 .ec-sec+.ec-sec{margin-top:34px;padding-top:26px;border-top:2px solid var(--line)}
 .ec-titre{display:flex;align-items:center;gap:10px;margin:0 0 14px}
@@ -69,21 +69,21 @@ button.or{background:var(--brass);border-color:var(--brass);color:#050402;font-w
 .tape{border-bottom:1px solid var(--line);background:#0c1016}
 
 /* Navigation : onglets fixés sous la barre */
-.onglets{position:sticky;top:var(--haut-barre,57px);z-index:25;background:rgba(5,4,2,.96);backdrop-filter:blur(8px);
+.onglets{position:sticky;top:var(--haut-barre,57px);z-index:25;background:rgba(6,8,12,.96);backdrop-filter:blur(8px);
   -webkit-backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:0 20px;gap:4px;scrollbar-width:none}
 .onglets::-webkit-scrollbar{display:none}
 .onglets button{font:600 13px var(--text);color:var(--mute);padding:14px 10px 12px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;white-space:nowrap;flex:none}
 .onglets button:hover{color:var(--ink);background:none}
 .onglets button.actif,.onglets button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--brass)}
 .onglets kbd{display:none}
-.onglets .fc{font:700 10.5px var(--mono);color:var(--brass);background:rgba(232,195,90,.1);border:1px solid rgba(232,195,90,.35);
+.onglets .fc{font:700 10.5px var(--mono);color:var(--brass);background:rgba(126,166,214,.1);border:1px solid rgba(126,166,214,.35);
   border-radius:4px;padding:1px 5px;margin-right:8px;letter-spacing:.04em}
 .onglets button.actif .fc,.onglets button[aria-selected=true] .fc{background:var(--brass);color:#000;border-color:var(--brass)}
 .cmd{margin-left:auto;display:flex;align-items:center;gap:8px;padding:8px 0}
 .cmd label{font:700 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--brass)}
 .cmd input{width:190px;background:#000;border:1px solid var(--line);border-radius:6px;color:var(--brass);font:600 13px var(--mono);
   padding:7px 10px;text-transform:uppercase}
-.cmd input:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(232,195,90,.25)}
+.cmd input:focus{outline:none;border-color:var(--brass);box-shadow:0 0 0 2px rgba(126,166,214,.25)}
 .cmd input.err{border-color:var(--down)}
 .cmd-aide{font-size:11.5px;color:var(--mute);white-space:nowrap}
 /* Titres de panneaux en ambre, comme sur un terminal Bloomberg */

@@ -129,7 +129,13 @@ def p_marche(salle, y, f, fw):
     if S:
         cl = {"RISK-OFF": "down", "RISK-ON": "up", "NEUTRE": "neutre"}[S["etat"]]
         risque = (f'<div class="mk-r"><div class="mk-g">{salle.svg_jauge(S["score"], 220, 156)}<b class="sl-et {cl}">{S["etat"]}</b></div>'
-                  f'<div class="mk-h">{salle.svg_histo(S["hist"], 460, 150)}</div></div>')
+                  f'<div class="mk-h">{salle.svg_histo(S["hist"], 460, 150)}</div></div>'
+                  f'<div class="mk-c"><span class="mk-ct">Ce qui fait le score</span>'
+                  + "".join(f'<div class="mk-cl"><span>{salle.esc(k)}</span><div class="mk-cb"><i class="{"up" if z > 0 else "down"}" '
+                            f'style="{"left:50%" if z > 0 else "right:50%"};width:{min(50, abs(z) / 3 * 50):.0f}%"></i></div>'
+                            f'<b class="{"up" if z > 0 else "down"}">{"+" if z > 0 else "−"}{abs(z):.1f}</b></div>'
+                            for k, z in sorted(S["comp"].items(), key=lambda x: -abs(x[1])))
+                  + f'<p>{salle.esc(S["lecture"])}</p></div>')
     else:
         risque = '<p class="ws-vide">Données insuffisantes.</p>'
     force = "".join(f'<div class="sl-fv" data-fen="{k}"{"" if k == "1m" else " hidden"}>{salle.svg_force(L, 620, 230)}</div>' for k, L in (F or {}).items())
@@ -194,31 +200,31 @@ CSS = """
 .ws>div{display:grid;gap:8px;min-height:0;min-width:0}
 .ws-c1{grid-template-rows:minmax(0,1fr)} .ws-c2{grid-template-rows:minmax(0,1.05fr) minmax(0,1fr)}
 .ws-c3{grid-template-rows:minmax(0,1.1fr) minmax(0,1fr)} .ws-c4{grid-template-rows:minmax(0,1.15fr) minmax(0,1fr)}
-.ws-p{position:relative;display:flex;flex-direction:column;min-height:0;background:linear-gradient(180deg,#0d0b07,#080705);
+.ws-p{position:relative;display:flex;flex-direction:column;min-height:0;background:linear-gradient(180deg,#0d0f13,#090a0d);
   border:1px solid var(--line);border-radius:2px;padding:0;overflow:hidden}
 .ws-p::before,.ws-p::after{content:"";position:absolute;width:10px;height:10px;border-color:var(--brass);border-style:solid;opacity:.75;pointer-events:none;z-index:2}
 .ws-p::before{top:-1px;left:-1px;border-width:1px 0 0 1px} .ws-p::after{bottom:-1px;right:-1px;border-width:0 1px 1px 0}
-.ws-h{flex:none;display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--band2);background:rgba(232,195,90,.03)}
+.ws-h{flex:none;display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--band2);background:rgba(126,166,214,.03)}
 .ws-t{font:700 11.5px var(--titre);letter-spacing:.16em;text-transform:uppercase;color:var(--brass);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ws-t::before{content:"◆ ";font-size:8px;vertical-align:2px}
 .ws-i{flex:none;font:600 9.5px var(--mono);color:var(--mute);border:1px solid var(--line);border-radius:50%;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;cursor:help;position:relative}
-.ws-i:hover::after,.ws-i:focus::after{content:attr(data-aide);position:absolute;top:20px;left:-10px;z-index:30;width:260px;padding:8px 10px;background:#15120b;
+.ws-i:hover::after,.ws-i:focus::after{content:attr(data-aide);position:absolute;top:20px;left:-10px;z-index:30;width:260px;padding:8px 10px;background:#12151b;
   border:1px solid var(--brass);color:var(--ink);font:500 12px/1.45 var(--text);letter-spacing:0;text-transform:none;white-space:normal}
 .ws-d{margin-left:auto;font:500 11px var(--mono);color:var(--mute);white-space:nowrap} .ws-d a{color:var(--brass);text-decoration:none}
-.ws-b{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 10px;scrollbar-width:thin;scrollbar-color:#3a3424 transparent}
-.ws-b::-webkit-scrollbar{width:6px} .ws-b::-webkit-scrollbar-thumb{background:#3a3424}
+.ws-b{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 10px;scrollbar-width:thin;scrollbar-color:#2a2f3a transparent}
+.ws-b::-webkit-scrollbar{width:6px} .ws-b::-webkit-scrollbar-thumb{background:#2a2f3a}
 .ws-vide{color:var(--mute);font-size:12.5px}
 /* squawk dans la grille */
 .ws-sq .sq-f button{padding:2px 6px;font-size:10px}
 .contenu:has(#tab-accueil:not([hidden]))>[data-zone="sources"]{display:none}
 .contenu:has(#tab-accueil:not([hidden])){max-width:none}
 .ws-sq{display:grid;grid-template-rows:minmax(0,1fr);min-height:0}
-.ws-sq>.sl-p{position:relative;display:flex;flex-direction:column;min-height:0;background:linear-gradient(180deg,#0d0b07,#080705);border:1px solid var(--line);border-radius:2px;padding:0;overflow:hidden}
-.ws-c1 .sl-h{flex:none;margin:0;padding:7px 10px;background:rgba(232,195,90,.03)} .ws-c1 .sq-f{flex:none;padding:6px 10px 0}
+.ws-sq>.sl-p{position:relative;display:flex;flex-direction:column;min-height:0;background:linear-gradient(180deg,#0d0f13,#090a0d);border:1px solid var(--line);border-radius:2px;padding:0;overflow:hidden}
+.ws-c1 .sl-h{flex:none;margin:0;padding:7px 10px;background:rgba(126,166,214,.03)} .ws-c1 .sq-f{flex:none;padding:6px 10px 0}
 .ws-c1 .sq-l{flex:1;min-height:0;max-height:none;padding:0 10px} .ws-c1 .sl-squawk{min-height:0}
 /* décision */
 .dc-v{display:flex;align-items:center;gap:12px;margin-bottom:8px}
-.dc-v>b{font:700 44px/1 var(--titre);letter-spacing:.02em} .dc-v.up>b{color:var(--up);text-shadow:0 0 18px rgba(53,201,214,.35)}
+.dc-v>b{font:700 44px/1 var(--titre);letter-spacing:.02em} .dc-v.up>b{color:var(--up);text-shadow:0 0 18px rgba(47,210,125,.35)}
 .dc-v.down>b{color:var(--down);text-shadow:0 0 18px rgba(255,90,95,.35)} .dc-v.flat>b{color:var(--steel)}
 .dc-v div{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--mute)} .dc-v em{font:600 11px var(--mono);font-style:normal;color:var(--brass)}
 .ws-tag{align-self:flex-start;font:700 9.5px var(--mono);letter-spacing:.08em;border:1px solid currentColor;padding:1px 5px} .ws-tag.warn{color:var(--amber)}
@@ -227,12 +233,12 @@ CSS = """
 .dc-f i{font-style:normal;font:700 10px var(--mono);text-align:center} .dc-f b{font-weight:600}
 .dc-f span{color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-f .f-ok i{color:var(--up)} .dc-f .f-ko i,.dc-f .f-ko b{color:var(--down)} .dc-f .f-wait i,.dc-f .f-wait b{color:var(--mute)}
-.dc-deb,.dc-ia{border-left:2px solid var(--brass);padding:4px 8px;margin-bottom:8px;background:rgba(232,195,90,.04)}
+.dc-deb,.dc-ia{border-left:2px solid var(--brass);padding:4px 8px;margin-bottom:8px;background:rgba(126,166,214,.04)}
 .dc-ia{border-left-color:#7c8cff;background:rgba(124,140,255,.05)}
 .dc-deb span,.dc-ia span{font:700 9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--brass)} .dc-ia span{color:#9aa6ff}
 .dc-deb p,.dc-ia p{margin:2px 0 0;font-size:12.5px;line-height:1.45}
 .dc-o{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-bottom:6px}
-.dc-o div{display:flex;flex-direction:column;background:#100e09;border:1px solid var(--band2);padding:4px 6px} .dc-o span{font-size:10px;color:var(--mute)} .dc-o b{font:700 13px var(--mono)}
+.dc-o div{display:flex;flex-direction:column;background:#101217;border:1px solid var(--band2);padding:4px 6px} .dc-o span{font-size:10px;color:var(--mute)} .dc-o b{font:700 13px var(--mono)}
 .dc-dist{margin:0 0 6px;font:500 11.5px var(--mono);color:var(--mute)}
 .dc-j{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;border-top:1px solid var(--line);padding-top:6px}
 .dc-j div{display:flex;flex-direction:column} .dc-j span{font:600 9.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--mute)} .dc-j b{font:700 13px var(--mono)}
@@ -256,23 +262,30 @@ CSS = """
 .pq-ws details p{color:var(--ink)}
 /* marchés */
 .mk-o{display:flex;gap:3px;margin-bottom:8px} .mk-o button{font:700 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:3px 10px;border-radius:2px;background:transparent;border:1px solid var(--line);color:var(--mute)}
-.mk-o button.on{background:var(--brass);border-color:var(--brass);color:#050402}
+.mk-o button.on{background:var(--brass);border-color:var(--brass);color:#000000}
 .mk-r{display:grid;grid-template-columns:minmax(120px,36%) minmax(0,1fr);gap:10px;align-items:center}
 .mk-g{display:flex;flex-direction:column;align-items:center} .mk-g svg{width:100%;max-width:190px;height:auto}
 .ws-mk .sl-btns{margin-bottom:6px}
+.mk-c{margin-top:10px;border-top:1px solid var(--band2);padding-top:8px}
+.mk-ct{display:block;font:700 9.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin-bottom:5px}
+.mk-cl{display:grid;grid-template-columns:150px minmax(0,1fr) 38px;align-items:center;gap:8px;font-size:11.5px;padding:2px 0}
+.mk-cl span{color:var(--steel);white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .mk-cl b{font:600 11px var(--mono);text-align:right}
+.mk-cb{position:relative;height:6px;background:#15181e} .mk-cb::after{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;border-left:1px solid #3a404c}
+.mk-cb i{position:absolute;top:0;bottom:0} .mk-cb i.up{background:var(--up)} .mk-cb i.down{background:var(--down)}
+.mk-c p{margin:8px 0 0;font-size:12px;line-height:1.45;color:var(--mute)}
 /* agenda */
-.ag-n{border:1px solid var(--line);background:#100e09;padding:7px 9px;margin-bottom:8px;display:flex;flex-direction:column;gap:2px}
+.ag-n{border:1px solid var(--line);background:#101217;padding:7px 9px;margin-bottom:8px;display:flex;flex-direction:column;gap:2px}
 .ag-n span{font:700 9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--brass)} .ag-n b{font:700 14px var(--text)}
 .ag-n em{font-style:normal;font-size:11.5px;color:var(--mute)} .ag-n i{font-style:normal;font:600 11px var(--mono);color:var(--amber)}
 .ag-t{width:100%;border-collapse:collapse;font-size:11.5px;margin-bottom:10px} .ag-t td{padding:4px 2px;border-bottom:1px solid var(--band2)}
 .ag-t td:first-child{font:600 10.5px var(--mono);color:var(--mute);white-space:nowrap;width:70px} .ag-t td.num{text-align:right;font-family:var(--mono)}
-.ag-t i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#3a3424;margin-right:6px;vertical-align:1px} .ag-t i.fort{background:var(--brass)}
-.ag-t tr.passe td{color:#5e5a4c}
+.ag-t i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#2a2f3a;margin-right:6px;vertical-align:1px} .ag-t i.fort{background:var(--brass)}
+.ag-t tr.passe td{color:#5c606b}
 /* niveaux */
 .ws-niv .dx-ech{border:0;background:none;padding:0} .ws-niv .dx-opts button{white-space:normal;text-align:left} .ws-niv .dx-ech>.ps-tete{display:none}
 .ws-niv .dx-ech::before,.ws-niv .dx-ech::after{display:none}
 /* barre d'état */
-.ws-etat{display:flex;align-items:center;gap:14px;margin-top:8px;padding:6px 10px;border:1px solid var(--line);background:#080705;font:500 11px var(--mono);color:var(--mute);min-height:30px;overflow:hidden}
+.ws-etat{display:flex;align-items:center;gap:14px;margin-top:8px;padding:6px 10px;border:1px solid var(--line);background:#090a0d;font:500 11px var(--mono);color:var(--mute);min-height:30px;overflow:hidden}
 .ws-etat .dx-sante{display:flex;gap:16px;border:0;background:none;padding:0;margin:0;font:500 11px var(--mono);flex-wrap:nowrap;overflow:hidden;white-space:nowrap;min-width:0;flex:1}
 .ws-etat .dx-sante span{min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1} .ws-etat .dx-sante i{flex:none}
 .ws-src{margin-left:auto;white-space:nowrap}
