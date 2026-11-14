@@ -4329,6 +4329,8 @@ def appeler_gemini(cle, brief, consigne=None, schema=None):
         cand = (r.json().get("candidates") or [{}])[0]
         texte = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []) if not p.get("thought")).strip()
         if texte:
+            if echecs:
+                print("  Gemini : " + " ; ".join(echecs) + f" → note écrite par {modele}")
             return texte, modele
         echecs.append(f"{modele} réponse vide ({cand.get('finishReason', 'n.d.')})")
     raise RuntimeError(" ; ".join(echecs) or "aucun modèle Gemini disponible")
