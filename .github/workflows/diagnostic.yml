@@ -3,6 +3,10 @@ name: Diagnostic des données
 
 on:
   workflow_dispatch:
+    inputs:
+      script:
+        description: Script à lancer
+        default: outils/diagnostic_yahoo.py
 
 permissions:
   contents: read
@@ -17,5 +21,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - name: Diagnostic Yahoo
-        run: python outils/diagnostic_yahoo.py
+      - name: Diagnostic
+        env:
+          SCRIPT: ${{ inputs.script }}
+        run: python "$SCRIPT"
