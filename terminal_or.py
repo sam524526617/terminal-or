@@ -83,7 +83,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.5"
+VERSION = "12.6"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -6610,6 +6610,87 @@ def bloc_graphique_direct():
             f'peut différer de quelques centimes</span></div><div class="ps-tvbox">{chart}</div></section>')
 
 
+CSS_FIL = """
+.fil-b{display:flex;align-items:stretch;height:34px;margin:0 0 4px;border:1px solid var(--line);border-left:3px solid var(--amber);background:#0b0c10;overflow:hidden}
+.fil-tag{flex:none;display:flex;align-items:center;padding:0 12px;font:700 11.5px var(--mono);letter-spacing:.08em;color:#000;background:var(--amber);white-space:nowrap}
+.fil-piste{flex:1;min-width:0;overflow:hidden;display:flex;align-items:center;-webkit-mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent)}
+.fil-defil{display:flex;flex:none;white-space:nowrap;animation:fil-go 60s linear infinite}
+.fil-piste:hover .fil-defil,.fil-piste:focus .fil-defil{animation-play-state:paused}
+.fil-lot{display:flex;flex:none}
+.fil-i{padding:0 22px;font-size:13.5px;color:var(--ink);border-right:1px solid var(--line)}
+.fil-i b{color:var(--amber);font-weight:700;margin-right:6px} .fil-i em{font-style:normal;font-weight:700} .fil-i em.up{color:var(--up)} .fil-i em.down{color:var(--down)} .fil-i em.flat{color:var(--steel)}
+.fil-i time{font:600 12px var(--mono);color:var(--brass);margin-right:6px} .fil-i small{color:var(--mute);font-size:12px}
+@keyframes fil-go{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+html:has(.fil-b){--haut-fil:38px}
+@media (prefers-reduced-motion:reduce){.fil-defil{animation:none}.fil-piste{overflow-x:auto}.fil-lot[aria-hidden]{display:none}}
+"""
+
+
+def graphique_tv_accueil():
+    """Graphique TradingView du poste de travail : compact, sans barre d'outils latérale."""
+    return tv("embed-widget-advanced-chart.js", {
+        "autosize": True, "symbol": TV_OR, "interval": "15", "timezone": FUSEAU, "theme": "dark", "style": "1",
+        "locale": "fr", "allow_symbol_change": False, "calendar": False, "hide_volume": True, "hide_side_toolbar": True,
+        "hide_legend": False, "save_image": False, "withdateranges": False, "details": False,
+        "backgroundColor": "#07080b", "gridColor": "rgba(42,42,49,0.5)", "support_host": "https://www.tradingview.com"},
+        f"Graphique {ACTIF['sym']} en direct (TradingView)", "height:100%;width:100%")
+
+
+def bloc_fil_annonce(data, now):
+    """Bandeau défilant après une annonce forte : résultat, effet habituel sur l'or, réaction du prix, titres parus depuis.
+    Affiché pendant 4 heures après la publication. La zone existe toujours (vide), pour que le rafraîchissement la remplisse."""
+    vide = '<div class="fil" data-zone="fil-annonce"></div>'
+    try:
+        evs = [e for e in (data.get("cal") or []) if e.get("impact") == "High" and e.get("date") is not None
+               and timedelta(0) <= now - e["date"] <= timedelta(hours=4)]
+        if not evs:
+            return vide
+        evs.sort(key=lambda e: e["date"], reverse=True)
+        debut = min(e["date"] for e in evs)
+        items = []
+        for e in evs[:3]:
+            kb = next((k for k in KB_ANNONCES if re.search(k[0], e["titre"], re.I)), None)
+            nom = kb[1] if kb else e["titre"]
+            if e.get("reel"):
+                ec, u, sens = eco.surprise(e)
+                effet = {1: ("up", "soutien pour l'or"), -1: ("down", "pression sur l'or")}.get(sens, ("flat", "conforme aux attentes" if ec == 0 else "effet incertain"))
+                items.append(f'<span class="fil-i"><b>{esc(nom)}</b> {esc(e["reel"])} · prévu {esc(e.get("prevision") or "n.d.")} · précédent '
+                             f'{esc(e.get("precedent") or "n.d.")} <em class="{effet[0]}">{effet[1]}</em></span>')
+            else:
+                discours = bool(re.search(r"speaks|speech|press conference|testif", e["titre"], re.I))
+                items.append(f'<span class="fil-i"><b>{esc(nom)}</b> {"discours en cours ou terminé : pas de chiffre, ce sont les titres qui comptent" if discours else "résultat pas encore reçu"}</span>')
+        b = (data.get("intraday") or {}).get("barres")
+        if b is not None and len(b) > 10:
+            av = b[b.index < debut]
+            ap = b[b.index >= debut]
+            if len(av) and len(ap):
+                ref, der = float(av["close"].iloc[-1]), float(ap["close"].iloc[-1])
+                v = der - ref
+                items.append(f'<span class="fil-i"><b>Réaction de l\'or</b> <em class="{"up" if v > 0 else "down" if v < 0 else "flat"}">{"+" if v > 0 else ""}{fp(v, 1)} $</em> depuis {debut:%H:%M} '
+                             f'· plus haut {fp(float(ap["high"].max()) + AJUST, 1)} · plus bas {fp(float(ap["low"].min()) + AJUST, 1)}</span>')
+        vus, titres = set(), []
+        tous = list(data.get("news_7j") or []) + [it for l in (data.get("news") or {}).values() for it in l]
+        for it in sorted((it for it in tous if it.get("date") is not None and it["date"] >= debut - timedelta(minutes=5)), key=lambda it: it["date"], reverse=True):
+            cle = re.sub(r"\W+", " ", it["titre"].lower())[:50]
+            if cle in vus:
+                continue
+            vus.add(cle)
+            titres.append(f'<span class="fil-i"><time>{it["date"]:%H:%M}</time> {esc(it["titre"])}'
+                          + (f' <small>{esc(it["source"])}</small>' if it.get("source") else "") + '</span>')
+            if len(titres) >= 8:
+                break
+        if not titres:
+            titres = ['<span class="fil-i"><small>aucun titre de presse paru depuis l\'annonce pour l\'instant</small></span>']
+        corps = "".join(items + titres)
+        duree = max(30, int(len(re.sub(r"<[^>]+>", "", corps)) / 7))
+        return (f'<div class="fil" data-zone="fil-annonce"><div class="fil-b" role="region" aria-label="Ce qui s\'est passé depuis l\'annonce">'
+                f'<span class="fil-tag">ANNONCE {debut:%H:%M}</span><div class="fil-piste" tabindex="0"><div class="fil-defil" style="animation-duration:{duree}s">'
+                f'<div class="fil-lot">{corps}</div><div class="fil-lot" aria-hidden="true">{corps}</div></div></div></div></div>')
+    except Exception as e:
+        noter("Bandeau d'annonce", False, str(e)[:100])
+        return vide
+
+
 def bloc_barre(a):
     maj = maintenant()
     horl = "".join(f'<div><span class="k">{v}</span><b id="{i}">--:--</b></div>'
@@ -6871,14 +6952,14 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
         st_ = labo.strategie_en_direct(labo.charger()) if labo else None
         accueil = ecran.bloc(a, data, AJUST, COMPTE, st_, note_titre, direct.carte_echelle(), direct.sante(a["decision"], a, maintenant()),
                              salle, decision, salle.bloc_squawk(salle.squawk(data, data.get("intraday"), AJUST, maintenant()), maintenant()),
-                             maintenant())
+                             maintenant(), graph_tv=graphique_tv_accueil())
     if not accueil:   # mode dégradé (bougies intraday indisponibles) : marchés, explications et chiffres clés
         accueil = ('<p class="ps-avert">Bougies de l\'or indisponibles : la décision du plan et les niveaux sont en pause jusqu\'au prochain passage.</p>'
                    + salle.bloc_salle(data, a, AJUST, maintenant()) + pq_html)
     a["_complements"] = {"graph_direct": (decision.bloc_graphique(a["decision"]) if dz_ok else "") + bloc_graphique_direct(),
                          "chiffres": f'<div class="ps-titre">Chiffres clés</div>{bloc_strip(a, y, f)}',
                          "salle": salle.bloc_risque_force(data, a), "pourquoi": pq_html}
-    haut = f'{bloc_barre(a)}{bloc_reglages()}{bloc_ecrans(data, a, ia, accueil)}'
+    haut = f'{bloc_barre(a)}{bloc_reglages()}{bloc_fil_annonce(data, maintenant())}{bloc_ecrans(data, a, ia, accueil)}'
     corps = (f'{haut}'
              f'<script type="application/json" id="evts" data-zone="evts">{evenements_json(data, a)}</script>'
              f'<script type="application/json" id="ctx" data-zone="ctx">{ctx_json}</script>'
@@ -6894,7 +6975,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             + (theme.POLICES if pro else
                f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
-            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{entrainement.CSS}{options.CSS}{labo.CSS if labo is not None else ""}'
+            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{CSS_FIL}{entrainement.CSS}{options.CSS}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
             f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}{pourquoi.CSS if (pro and pourquoi) else ""}{salle.CSS if (pro and salle) else ""}{ecran.CSS if (pro and ecran) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
@@ -7239,6 +7320,7 @@ def donnees_demo():
                (-50, "Final GDP q/q", "Medium", "2.1%", "2.1%", "2.4%"),
                (-30, "Core Durable Goods Orders m/m", "Medium", "0.2%", "0.1%", "0.5%"),
                (-20, "Core CPI m/m", "High", "0.3%", "0.2%", "0.4%"),
+               (-1.5, "Core PPI m/m", "High", "0.2%", "0.3%", "0.4%"),
                (5, "Core PCE Price Index m/m", "High", "0.3%", "0.2%", ""),
                (28, "ISM Manufacturing PMI", "High", "52.4", "51.8", ""),
                (74, "Non-Farm Employment Change", "High", "95K", "142K", ""),

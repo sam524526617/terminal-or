@@ -87,8 +87,19 @@ def p_decision(dz, statut, compte, note_ia):
                    "en ACHAT ou VENTE que lorsque les cinq sont verts. Détail complet dans l'écran Technique.")
 
 
-def p_graphique(dz, decision):
+def p_graphique(dz, decision, graph_tv=None):
     t = dz.get("tech")
+    if graph_tv:      # graphique TradingView en direct : hors des zones rafraîchies (sinon il se rechargerait toutes les 15 min)
+        pied = ""
+        if t and not t.get("erreur"):
+            puces = "".join(f'<span class="{ {1: "up", -1: "down"}.get(l["tend"], "flat") }">{l["ut"]} {"▲" if l["tend"] > 0 else "▼" if l["tend"] < 0 else "–"}</span>'
+                            for l in t["lignes"])
+            pied = (f'<div class="gr-tf">{puces}</div><div class="gr-m"><span>RSI 15 {fr(t.get("rsi15"), 0)}</span>'
+                    f'<span>RSI 1h {fr(t.get("rsi_h1"), 0)}</span><span>ATR 15 {fr(t.get("atr15"), 1)} $</span></div>')
+        return panneau("gr", "XAU/USD · en direct", f'<div class="gr-svg gr-tv">{graph_tv}</div><div class="gr-pied" data-zone="ws-gr-pied">{pied}</div>',
+                       '<a href="#analyse" data-aller="technique">zones du plan ›</a>',
+                       "Graphique TradingView en direct : tu peux changer l'unité de temps et tracer dessus. Les zones OB / FVG et l'ordre du plan "
+                       "sont dans l'écran Technique. En dessous : tendance par unité de temps et momentum, selon le plan.", zone=False)
     if not t or t.get("erreur"):
         return panneau("gr", "XAU/USD · 15 min", '<p class="ws-vide">Graphique indisponible.</p>')
     zones = [z for z in t["zones"] if z["ut"] in ("H1", "H4", "M30")][:6]
@@ -175,7 +186,7 @@ def barre_etat(sante_html):
     return f'<footer class="ws-etat" data-zone="ws-etat">{sante_html}<span class="ws-src">Données : Yahoo, FRED, CFTC, ForexFactory, Google Actualités · prix en direct XAUS</span></footer>'
 
 
-def bloc(a, data, ajust, compte, statut, note_ia, echelle, sante_html, salle, decision, squawk_html, now):
+def bloc(a, data, ajust, compte, statut, note_ia, echelle, sante_html, salle, decision, squawk_html, now, graph_tv=None):
     dz = a.get("decision")
     if not dz or dz.get("erreur"):
         return ""
@@ -185,7 +196,7 @@ def bloc(a, data, ajust, compte, statut, note_ia, echelle, sante_html, salle, de
     return (f'<div class="ws" id="ws">'
             f'<div class="ws-c1"><div class="ws-sq" data-zone="ws-sq">{squawk_html}</div></div>'
             f'<div class="ws-c2">{p_decision(dz, statut, compte, note_ia)}{p_pourquoi(a.get("pourquoi"))}</div>'
-            f'<div class="ws-c3">{p_graphique(dz, decision)}{p_marche(salle, y, f, a.get("fedwatch"))}</div>'
+            f'<div class="ws-c3">{p_graphique(dz, decision, graph_tv)}{p_marche(salle, y, f, a.get("fedwatch"))}</div>'
             f'<div class="ws-c4">{niv}{p_agenda(data.get("cal"), now)}</div>'
             f'</div>{barre_etat(sante_html)}')
 
@@ -193,7 +204,7 @@ def bloc(a, data, ajust, compte, statut, note_ia, echelle, sante_html, salle, de
 CSS = """
 /* Poste de travail plein écran */
 #tab-accueil{padding-top:8px}
-.ws{--hws:calc(100vh - var(--haut-barre,57px) - 58px - 44px);display:grid;gap:8px;height:var(--hws);min-height:560px;
+.ws{--hws:calc(100vh - var(--haut-barre,57px) - 58px - 44px - var(--haut-fil,0px));display:grid;gap:8px;height:var(--hws);min-height:560px;
   grid-template-columns:minmax(0,1fr) minmax(0,1.05fr) minmax(0,1.45fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .ws>div{display:grid;gap:8px;min-height:0;min-width:0}
 .ws-c1{grid-template-rows:minmax(0,1fr)} .ws-c2{grid-template-rows:minmax(0,1.05fr) minmax(0,1fr)}
@@ -243,6 +254,7 @@ CSS = """
 /* graphique */
 .ws-gr .ws-b{display:flex;flex-direction:column;padding:6px 8px;overflow:hidden}
 .gr-svg{flex:1;min-height:0;display:flex;overflow:hidden} .gr-svg svg{width:100%;height:100%;display:block;min-width:0!important}
+.gr-tv>.tv{flex:1;min-width:0;min-height:0} .ws-gr .ws-b:has(.gr-tv){padding:0} .ws-gr .ws-b:has(.gr-tv) .gr-pied{padding:6px 8px}
 .gr-pied{flex:none;display:flex;justify-content:space-between;gap:8px;padding-top:6px;font:600 11px var(--mono)}
 .gr-tf,.gr-m{display:flex;gap:8px;flex-wrap:wrap} .gr-m{color:var(--mute)}
 .gr-tf .up{color:var(--up)} .gr-tf .down{color:var(--down)} .gr-tf .flat{color:var(--mute)}
