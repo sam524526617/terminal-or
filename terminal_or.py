@@ -788,7 +788,8 @@ def charger_saison():
 
 def charger_options():
     """Chaînes d'options du fonds GLD (carte des options), relues au plus toutes les 4 heures."""
-    d = options.charger(DOSSIER_CACHE, maintenant())
+    with VERROU_YAHOO:      # yfinance ne supporte pas plusieurs lectures en même temps
+        d = options.charger(DOSSIER_CACHE, maintenant())
     noter("Options du GLD (Yahoo)", True, f"{len(d['ech'])} échéances, {sum(sum(l[1] for l in e['calls'] + e['puts']) for e in d['ech']):,} contrats".replace(",", " "))
     return d
 

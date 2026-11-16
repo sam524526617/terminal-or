@@ -73,11 +73,22 @@ def charger(dossier_cache, maintenant=None):
         except Exception:
             out["or_ref"] = None
         for e in ech[:16]:
-            ch = t.option_chain(e)
+            ch = None
+            for _ in range(2):      # une échéance peut revenir vide : on réessaie une fois, puis on la saute
+                try:
+                    ch = t.option_chain(e)
+                    if ch is not None and ch.calls is not None and ch.puts is not None and len(ch.calls) and len(ch.puts):
+                        break
+                except Exception:
+                    pass
+                ch = None
+                time.sleep(1)
+            if ch is None:
+                continue
             lig = lambda df: [[_n(r.strike), int(_n(r.openInterest)), int(_n(r.volume)), _n(r.impliedVolatility), _n(r.bid), _n(r.ask),
                                _n(r.lastPrice)] for r in df.itertuples() if abs(_n(r.strike) / spot - 1) <= LARGEUR * 1.5]
             out["ech"].append({"date": e, "calls": lig(ch.calls), "puts": lig(ch.puts)})
-        if sum(sum(x[1] for x in e["calls"] + e["puts"]) for e in out["ech"]) < 1000:
+        if not out["ech"] or sum(sum(x[1] for x in e["calls"] + e["puts"]) for e in out["ech"]) < 1000:
             raise RuntimeError("contrats ouverts absents de la réponse")
         dossier_cache.mkdir(exist_ok=True)
         f.write_text(json.dumps(out), encoding="utf-8")
