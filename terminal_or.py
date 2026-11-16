@@ -70,6 +70,7 @@ import marches  # fonction MKT : tableau de tous les marchés et courbe des taux
 import poste  # poste de pilotage : tout l'essentiel sur le premier écran
 import theme  # thème professionnel v8 (police, grille, navigation en haut)
 import entrainement  # fonction TRAIN : entraînement à l'aveugle sur les vraies bougies, simulateur de risque
+import options  # fonction OPT : carte des options (murs, prix aimant, mouvement attendu)
 import labo  # labo des stratégies : résultats de backtest et statut
 import onglets  # onglets Annonces, Actualités et Suivi (v7)
 import fondamental  # onglet Fondamental (lecture macro reliée au filtre du plan)
@@ -82,7 +83,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.3"
+VERSION = "12.4"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -785,6 +786,13 @@ def charger_saison():
     return s
 
 
+def charger_options():
+    """Chaînes d'options du fonds GLD (carte des options), relues au plus toutes les 4 heures."""
+    d = options.charger(DOSSIER_CACHE, maintenant())
+    noter("Options du GLD (Yahoo)", True, f"{len(d['ech'])} échéances, {sum(sum(l[1] for l in e['calls'] + e['puts']) for e in d['ech']):,} contrats".replace(",", " "))
+    return d
+
+
 def charger_news_7j():
     """Titres sur l'or des 7 derniers jours, pour expliquer les séances passées."""
     out = []
@@ -1256,6 +1264,7 @@ def collecter():
         "xaus": (charger_spot_xaus, "XAUS (spot XAU/USD)"),
         "intermarche": (charger_intermarche, "Yahoo intermarché 15 min"),
         "devises": (charger_devises, "Yahoo devises"),
+        "options": (charger_options, "Options du GLD (Yahoo)"),
     }
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
         futs = {ex.submit(fn): (cle, nom) for cle, (fn, nom) in taches.items()}
@@ -4139,6 +4148,18 @@ def analyser(data):
             s_["niveaux"].append({"lib": lib, "niveau": v, "cfd": v_spot, "dist": v - s_["prix"],
                                   "dist_atr": ((v - s_["prix"]) / s_["atr"]) if s_.get("atr") else None, "carnet": True})
         s_["niveaux"].sort(key=lambda n: -n["niveau"])
+    a["options"] = None
+    try:
+        px_ = (s_["prix"] + AJUST) if s_ else ((a["or"]["prix"] or 0) + AJUST)
+        a["options"] = options.analyser(data.get("options"), px_, AJUST, maintenant())
+        if s_ and a["options"]:      # murs et prix aimant : aussi sur le graphique et dans les niveaux
+            for lib, v_spot in options.niveaux(a["options"]):
+                v = v_spot - AJUST
+                s_["niveaux"].append({"lib": lib, "niveau": v, "cfd": v_spot, "dist": v - s_["prix"],
+                                      "dist_atr": ((v - s_["prix"]) / s_["atr"]) if s_.get("atr") else None})
+            s_["niveaux"].sort(key=lambda n: -n["niveau"])
+    except Exception as e:
+        noter("Carte des options", False, str(e)[:100])
     a["intermarche"] = confirmation_intermarche(data.get("intermarche"), a.get("decomp"))
     a["matrice"] = matrice_tendance(data.get("intraday"))
     a["technique"] = analyse_technique(a, data)
@@ -6756,6 +6777,7 @@ def contenus_onglets(data, a, ia):
         "actus": onglets.bloc_actus(data.get("news"), data.get("fed_off"), a.get("barometre"), MOTS_BAROMETRE, maintenant()),
         "suivi": onglets.bloc_suivi((a["decision"] or {}).get("histo") if dz_ok else None, COMPTE, onglets.bloc_methode()),
         "labo": labo.bloc_labo(labo.charger()),
+        "options": options.bloc(a.get("options")),
         "entrainement": entrainement.bloc(data.get("intraday"), AJUST),
         "marches": marches.bloc_marches(y, f),
         "data": donnees.bloc_donnees(a, AJUST),
@@ -6766,6 +6788,7 @@ def contenus_onglets(data, a, ia):
 ECRANS = [
     ("accueil", "GO", "Vue d'ensemble", [("accueil", "GO", "Vue d'ensemble")]),
     ("technique", "TECH", "Technique", [("direct", "CHART", "Graphiques"), ("technique", "TECH", "Structure et zones du plan"), ("analyse", "HEAT", "Liquidité, heatmap et saisonnalité"),
+                                        ("options", "OPT", "Carte des options"),
                                         ("stat", "STAT", "Statistiques de séance")]),
     ("fondamental", "FA", "Fondamental", [("pourquoi", "WHY", "Pourquoi l'or bouge"), ("fondamental", "FA", "Analyste et fondamental"),
                                            ("salle", "RISK", "Risque, force des actifs, Fed"), ("marches", "MKT", "Marchés"),
@@ -6869,7 +6892,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             + (theme.POLICES if pro else
                f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
-            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{entrainement.CSS}{labo.CSS if labo is not None else ""}'
+            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{entrainement.CSS}{options.CSS}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
             f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}{pourquoi.CSS if (pro and pourquoi) else ""}{salle.CSS if (pro and salle) else ""}{ecran.CSS if (pro and ecran) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
@@ -7234,7 +7257,7 @@ def donnees_demo():
         noter(nom, True, "données de démonstration")
     return {"saison": saison_demo, "yahoo": y, "fred": f, "cot": cot, "gld": gld, "cal": cal, "news": news, "zq": zq,
             "intraday": intraday, "courbe": courbe, "fed_off": fed_off, "tresor": {}, "nyfed": {}, "adjudic": adjudic,
-            "oanda": None, "intermarche": intermarche_demo(barres), "xaus": xaus_demo(barres, 36.8), "devises": devises_demo()}
+            "oanda": None, "options": options.demo(float(barres["close"].iloc[-1]) + 36.8), "intermarche": intermarche_demo(barres), "xaus": xaus_demo(barres, 36.8), "devises": devises_demo()}
 
 
 def xaus_demo(barres, base):

@@ -80,6 +80,13 @@ def niveaux(a, dz, ajust):
     pv = s.get("profil_veille")
     if pv and pv.get("poc") is not None:
         nv.append({"v": pv["poc"] + ajust, "lib": "POC de la veille (prix le plus traité)", "t": "ref", "al": 0})
+    op = a.get("options") or {}      # carte des options : déjà au prix affiché
+    for x in (op.get("murs_haut") or [])[:2]:
+        nv.append({"v": x["k"], "lib": "Mur de calls (options)", "t": "sea", "al": 1})
+    for x in (op.get("murs_bas") or [])[:2]:
+        nv.append({"v": x["k"], "lib": "Mur de puts (options)", "t": "sea", "al": 1})
+    if op.get("aimant"):
+        nv.append({"v": op["aimant"], "lib": "Prix aimant des options", "t": "ref", "al": 0})
     pas = 50 if px > 2000 else 10
     for k in (math.floor(px / pas), math.floor(px / pas) + 1):
         nv.append({"v": float(k * pas), "lib": "Chiffre rond", "t": "ref", "al": 0})
@@ -182,7 +189,7 @@ def sante(dz, a, now):
 def dialogues():
     """Calculateur de position et aide : fenêtres ouvertes par commande, hors des zones rafraîchies."""
     codes = [("GO", "Vue d'ensemble : décision, pourquoi l'or bouge, niveaux"), ("TECH", "Technique : structure, zones, graphiques du plan"),
-             ("STAT", "… statistiques de séance"), ("FA", "Fondamental : note de l'analyste, taux, dollar"), ("MKT", "… tous les marchés"),
+             ("STAT", "… statistiques de séance"), ("OPT", "… carte des options : murs, prix aimant, mouvement attendu"), ("FA", "Fondamental : note de l'analyste, taux, dollar"), ("MKT", "… tous les marchés"),
              ("DATA", "… positionnement, volatilité, ratios"), ("ECO", "Agenda économique"), ("NEWS", "… actualités"),
              ("JRN", "Journal de trading"), ("TRAIN", "… entraînement à l'aveugle et simulateur de risque"),
              ("LAB", "… stratégies testées")]

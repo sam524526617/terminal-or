@@ -26,7 +26,7 @@ import time
 from datetime import date, datetime, timedelta
 
 HORIZON_J = 45       # échéances retenues : celles des 45 prochains jours
-LARGEUR = 0.12       # prix d'exercice gardés : à moins de 12 % du prix
+LARGEUR = 0.08       # prix d'exercice gardés : à moins de 8 % du prix
 TTL_H = 4            # une lecture toutes les 4 heures suffit : les contrats ouverts ne changent qu'une fois par jour
 FICHIER = "options_gld.json"
 
@@ -63,10 +63,16 @@ def charger(dossier_cache, maintenant=None):
         ech = [e for e in (t.options or []) if auj <= date.fromisoformat(e) <= auj + timedelta(days=HORIZON_J)]
         if not ech:
             raise RuntimeError("aucune échéance proche")
-        h = t.history(period="5d", interval="1d", auto_adjust=False)
-        spot, jour = float(h["Close"].dropna().iloc[-1]), str(h["Close"].dropna().index[-1].date())
+        h = t.history(period="5d", interval="1d", auto_adjust=False)["Close"].dropna()
+        spot, jour = float(h.iloc[-1]), str(h.index[-1].date())
         out = {"spot": spot, "jour": jour, "lu": time.time(), "ech": []}
-        for e in ech[:8]:
+        try:      # prix du future or le même jour : donne un rapport or / GLD propre, même quand le GLD est fermé
+            g = yf.Ticker("GC=F").history(period="5d", interval="1d", auto_adjust=False)["Close"].dropna()
+            g = g[[str(d.date()) == jour for d in g.index]]
+            out["or_ref"] = float(g.iloc[-1]) if len(g) else None
+        except Exception:
+            out["or_ref"] = None
+        for e in ech[:16]:
             ch = t.option_chain(e)
             lig = lambda df: [[_n(r.strike), int(_n(r.openInterest)), int(_n(r.volume)), _n(r.impliedVolatility), _n(r.bid), _n(r.ask),
                                _n(r.lastPrice)] for r in df.itertuples() if abs(_n(r.strike) / spot - 1) <= LARGEUR * 1.5]
@@ -87,13 +93,13 @@ def _prix(l):
     return (l[4] + l[5]) / 2 if l[4] > 0 and l[5] > 0 else l[6]
 
 
-def analyser(D, prix_or, or_jour=None, maintenant=None):
-    """D : sortie de charger(). prix_or : prix de l'or affiché. or_jour : prix de l'or à la clôture du jour D['jour']
-    (pour un rapport or / GLD propre) ; à défaut, on prend le prix actuel."""
+def analyser(D, prix_or, ajust=0.0, maintenant=None):
+    """D : sortie de charger(). prix_or : prix de l'or affiché. ajust : écart entre le future et le prix affiché.
+    Le rapport or / GLD vient des deux prix du même jour ; à défaut, du prix actuel."""
     if not D or not D.get("ech") or not prix_or:
         return None
     spot = D["spot"]
-    k = (or_jour or prix_or) / spot                      # 1 $ de GLD = k $ d'or
+    k = ((D["or_ref"] + (ajust or 0.0)) if D.get("or_ref") else prix_or) / spot                      # 1 $ de GLD = k $ d'or
     spot_or = prix_or
     auj = (maintenant.date() if maintenant else date.today())
     C, P = {}, {}
@@ -116,7 +122,7 @@ def analyser(D, prix_or, or_jour=None, maintenant=None):
     # prix aimant : sur l'échéance proche qui porte le plus de contrats
     def poids(e):
         return sum(l[1] for l in e["calls"]) + sum(l[1] for l in e["puts"])
-    grosse = max(D["ech"][:4], key=poids)
+    grosse = max(D["ech"], key=poids)
     ks = sorted(set(l[0] for l in grosse["calls"] + grosse["puts"]))
     def perte(K):
         return (sum(l[1] * max(0.0, K - l[0]) for l in grosse["calls"]) + sum(l[1] * max(0.0, l[0] - K) for l in grosse["puts"]))
@@ -241,7 +247,7 @@ def bloc(O, erreur=None):
         f'<div><span class="k">Échéances lues</span><b>{len(O["echeances"])}</b>'
         f'<small>du {_date(O["echeances"][0])} au {_date(O["echeances"][-1])}</small></div>')
     age = O.get("age_h")
-    fraich = (f'Contrats ouverts à la clôture du {_date(O["jour"])}' if O.get("jour") else "Contrats ouverts de la veille") + \
+    fraich = "Contrats ouverts à la dernière clôture (mis à jour une fois par jour)" + \
              (f', lus il y a {fr(age, 0)} h' if age is not None and age >= 1 else "")
     return (
         '<section><h2>Carte des options</h2>'

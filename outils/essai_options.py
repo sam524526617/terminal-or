@@ -15,7 +15,8 @@ print("GLD", D["spot"], D["jour"], "échéances", [(e["date"], len(e["calls"]), 
 g = yf.download("GC=F", period="5d", interval="1d", progress=False, auto_adjust=False)["Close"].dropna()
 print(g.tail(3))
 prix = float(g.iloc[-1].iloc[0] if hasattr(g.iloc[-1], "iloc") else g.iloc[-1])
-O = options.analyser(D, prix, prix)
+print("or_ref", D.get("or_ref"))
+O = options.analyser(D, prix, 0.0)
 for k in ("prix", "rapport", "murs_haut", "murs_bas", "aimant", "aimant_date", "pc", "tot_c", "tot_p", "attendu", "jour"):
     print(k, ":", O[k])
 print(len(O["profil"]), "prix dans le profil")
