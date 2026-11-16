@@ -83,7 +83,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.4"
+VERSION = "12.5"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -6779,6 +6779,7 @@ def contenus_onglets(data, a, ia):
         "suivi": onglets.bloc_suivi((a["decision"] or {}).get("histo") if dz_ok else None, COMPTE, onglets.bloc_methode()),
         "labo": labo.bloc_labo(labo.charger()),
         "options": options.bloc(a.get("options")),
+        "resume": decision.resume_technique(a["decision"], a.get("seance"), a.get("options")) if dz_ok else "",
         "entrainement": entrainement.bloc(data.get("intraday"), AJUST),
         "marches": marches.bloc_marches(y, f),
         "data": donnees.bloc_donnees(a, AJUST),
@@ -6788,7 +6789,7 @@ def contenus_onglets(data, a, ia):
 # v10 : cinq écrans, dans l'ordre de la méthode. Chaque écran regroupe plusieurs rubriques (code de fonction, titre).
 ECRANS = [
     ("accueil", "GO", "Vue d'ensemble", [("accueil", "GO", "Vue d'ensemble")]),
-    ("technique", "TECH", "Technique", [("direct", "CHART", "Graphiques"), ("technique", "TECH", "Structure et zones du plan"), ("analyse", "HEAT", "Liquidité, heatmap et saisonnalité"),
+    ("technique", "TECH", "Technique", [("resume", "RES", "Résumé technique"), ("direct", "CHART", "Graphiques"), ("technique", "TECH", "Structure et zones du plan"), ("analyse", "HEAT", "Liquidité, heatmap et saisonnalité"),
                                         ("options", "OPT", "Carte des options"),
                                         ("stat", "STAT", "Statistiques de séance")]),
     ("fondamental", "FA", "Fondamental", [("pourquoi", "WHY", "Pourquoi l'or bouge"), ("fondamental", "FA", "Analyste et fondamental"),

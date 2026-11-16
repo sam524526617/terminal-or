@@ -531,6 +531,99 @@ def bloc_technique(dec):
             f'</div></section>')
 
 
+def resume_technique(dec, seance=None, opt=None):
+    """Résumé de la technique, en haut de l'écran : verdict, phrase de synthèse, et quatre cartes
+    (tendance, niveaux qui comptent, momentum, amplitude). Même logique que le plan : Daily et H4 d'accord, H1 pas contre."""
+    t = (dec or {}).get("tech")
+    if not t or t.get("erreur") or not t.get("lignes"):
+        return ""
+    L = {l["ut"]: l for l in t["lignes"]}
+    td = {k: (L[k]["tend"] if k in L else 0) for k in ("D", "H4", "H1", "M15")}
+    px = dec["px"]
+    adj = {1: "haussier", -1: "baissier", 0: "neutre"}
+    cl = {1: "up", -1: "down", 0: "flat"}
+    aligne = td["D"] != 0 and td["D"] == td["H4"]
+    if aligne and td["H1"] != -td["D"]:
+        sens, mot = td["D"], ("HAUSSIER" if td["D"] > 0 else "BAISSIER")
+        effet = f'le plan ne cherche que des {"achats" if sens > 0 else "ventes"}'
+    elif aligne:
+        sens, mot = 0, "EN CORRECTION"
+        effet = f'fond {adj[td["D"]]}, mais le 1 heure va contre : le plan attend'
+    else:
+        sens, mot = 0, "PARTAGÉ"
+        effet = "le Daily et le 4 heures ne sont pas d'accord : le plan ne trade pas"
+
+    # niveaux qui comptent : le plus proche au-dessus et en dessous (sommets et creux à casser, puis zones)
+    cand = []
+    for k, nom in (("H1", "1 h"), ("H4", "4 h"), ("D", "Daily")):
+        l = L.get(k)
+        if not l:
+            continue
+        for cle, lib in (("sommet", "sommet"), ("creux", "creux")):
+            x = l.get(cle)
+            if x and not x["casse"]:
+                cand.append((x["prix"], f"dernier {lib} {nom}"))
+    for z in t.get("zones") or []:
+        cand.append((z["niveau"], f'zone {"d\'achat" if z["sens"] > 0 else "de vente"} {z["type"]} {z["ut"]}'))
+    dessus = min((c for c in cand if c[0] > px), key=lambda c: c[0], default=None)
+    dessous = max((c for c in cand if c[0] < px), key=lambda c: c[0], default=None)
+
+    # phrase de synthèse
+    ph = []
+    if td["D"] == td["H4"] == td["H1"] and td["D"] != 0:
+        ph.append(f'Daily, 4 heures et 1 heure sont tous {adj[td["D"]]}s : la tendance est nette.')
+    elif aligne:
+        ph.append(f'Daily et 4 heures sont {adj[td["D"]]}s, le 1 heure est {adj[td["H1"]]}.')
+    else:
+        ph.append(f'Le Daily est {adj[td["D"]]}, le 4 heures {adj[td["H4"]]}, le 1 heure {adj[td["H1"]]} : pas de direction commune.')
+    if td["M15"] and aligne and td["M15"] == -td["D"]:
+        ph.append(f'Le 15 minutes est {adj[td["M15"]]} : c\'est un {"repli" if td["D"] > 0 else "rebond"} dans la tendance, pas un retournement.')
+    h1 = L.get("H1")
+    if h1:
+        cle = "sommet" if td["H1"] < 0 else "creux"
+        x = h1.get(cle)
+        if x and not x["casse"] and td["H1"] != 0:
+            ph.append(f'Le 1 heure change de sens si le prix clôture {"au-dessus de" if cle == "sommet" else "sous"} {fr(x["prix"], 1)} ({fr(x["prix"] - px, 0, True)} $).')
+    r1, r15 = t.get("rsi_h1"), t.get("rsi15")
+    if r1 is not None and (r1 >= 70 or r1 <= 30):
+        ph.append(f'RSI 1 heure à {fr(r1, 0)} : le mouvement est {"très étiré vers le haut" if r1 >= 70 else "très étiré vers le bas"}, un retour en arrière devient probable.')
+
+    fl = "".join(f'<span class="rt-ut {cl[td[k]]}"><i>{n}</i><b>{FLECHE[td[k]]}</b></span>'
+                 for k, n in (("D", "Daily"), ("H4", "4 h"), ("H1", "1 h"), ("M15", "15 min")))
+    nb_ok = sum(1 for k in ("D", "H4", "H1", "M15") if td[k] == (td["D"] or 0) and td[k] != 0)
+    c_tend = (f'<div class="fd-comp {cl[sens]}"><div class="fd-comp-t"><span class="k">Tendance</span></div><div class="rt-uts">{fl}</div>'
+              f'<p>{nb_ok} unité{"s" if nb_ok > 1 else ""} de temps sur 4 dans le sens du Daily.</p></div>')
+
+    def ligne_niv(x, lib):
+        if not x:
+            return f'<div class="rt-niv"><span>{lib}</span><b>—</b><small>aucun niveau proche</small></div>'
+        return f'<div class="rt-niv"><span>{lib}</span><b>{fr(x[0], 1)}</b><small>{esc(x[1])} · {fr(x[0] - px, 0, True)} $</small></div>'
+    c_niv = (f'<div class="fd-comp"><div class="fd-comp-t"><span class="k">Niveaux qui comptent</span></div>'
+             f'{ligne_niv(dessus, "Au-dessus")}{ligne_niv(dessous, "En dessous")}</div>')
+
+    etat = lambda r: "—" if r is None else ("suracheté" if r >= 70 else "survendu" if r <= 30 else "haut" if r >= 60 else "bas" if r <= 40 else "neutre")
+    div = "divergence haussière" if t.get("div_h") else "divergence baissière" if t.get("div_b") else "pas de divergence"
+    c_mom = (f'<div class="fd-comp"><div class="fd-comp-t"><span class="k">Momentum</span></div>'
+             f'<div class="rt-niv"><span>RSI 1 heure</span><b>{fr(r1, 0)}</b><small>{etat(r1)}</small></div>'
+             f'<div class="rt-niv"><span>RSI 15 min</span><b>{fr(r15, 0)}</b><small>{etat(r15)} · {div}</small></div></div>')
+
+    pa = (seance or {}).get("pct_atr")
+    a = (opt or {}).get("attendu")
+    if pa is not None:
+        lect = ("la journée a déjà beaucoup bougé : viser loin devient peu réaliste" if pa >= 100 else
+                "la journée a encore de la place pour bouger" if pa <= 60 else "amplitude normale pour l'heure")
+        amp = f'<div class="rt-niv"><span>Amplitude du jour</span><b>{fr(pa, 0)} %</b><small>de l\'habitude · {lect}</small></div>'
+    else:
+        amp = '<div class="rt-niv"><span>Amplitude du jour</span><b>—</b><small>indisponible</small></div>'
+    att = (f'<div class="rt-niv"><span>Attendu par les options</span><b>± {fr(a["amp"], 0)} $</b><small>d\'ici {a["jours"]} jours</small></div>' if a else
+           f'<div class="rt-niv"><span>Bougie 1 heure moyenne</span><b>{fr(t.get("atr_h1"), 1)} $</b><small>ATR 1 heure</small></div>')
+    c_vol = f'<div class="fd-comp"><div class="fd-comp-t"><span class="k">Amplitude</span></div>{amp}{att}</div>'
+
+    return (f'<section class="fd rt"><div class="fd-hero {cl[sens]}"><div class="fd-hero-g"><span class="k">Technique du plan</span>'
+            f'<b>{mot}</b><span class="fd-effet">{esc(effet)}</span></div><p class="fd-synth">{" ".join(ph)}</p></div>'
+            f'<div class="fd-comps">{c_tend}{c_niv}{c_mom}{c_vol}</div></section>')
+
+
 # ---------------------------------------------------------------------------
 # AFFICHAGE
 # ---------------------------------------------------------------------------
@@ -640,6 +733,14 @@ def bloc_html(dec):
 
 
 CSS = """
+.rt-uts{display:flex;gap:6px;flex-wrap:wrap}
+.rt-ut{display:flex;flex-direction:column;align-items:center;gap:2px;flex:1 1 52px;padding:6px 4px;border:1px solid var(--band2);border-radius:2px;background:#07080b}
+.rt-ut i{font:600 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--mute);font-style:normal}
+.rt-ut b{font:700 18px var(--mono)} .rt-ut.up b{color:var(--up)} .rt-ut.down b{color:var(--down)} .rt-ut.flat b{color:var(--steel)}
+.rt-niv{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0 10px;align-items:baseline}
+.rt-niv span{font-size:12.5px;color:var(--mute)} .rt-niv b{font:700 16px var(--mono);text-align:right}
+.rt-niv small{grid-column:1/-1}
+
 /* Décision (moteur du plan) */
 .dz{display:flex;flex-wrap:wrap;gap:10px;padding:10px 14px 0}
 .dz .k{color:var(--mute)}
