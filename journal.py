@@ -265,6 +265,7 @@ document.addEventListener('change', function(ev){
 /* Accès pour le calculateur et le verrou */
 T.journal = {
   jour: jour,
+  stats: stats,
   preparer: function(o){
     if (T.onglet) T.onglet('suivi');
     var set = function(id, v, d){ var el = document.getElementById(id); if (el && v != null) el.value = String(Number(v).toFixed(d)).replace('.', ','); };

@@ -184,7 +184,8 @@ def dialogues():
     codes = [("GO", "Vue d'ensemble : décision, pourquoi l'or bouge, niveaux"), ("TECH", "Technique : structure, zones, graphiques du plan"),
              ("STAT", "… statistiques de séance"), ("FA", "Fondamental : note de l'analyste, taux, dollar"), ("MKT", "… tous les marchés"),
              ("DATA", "… positionnement, volatilité, ratios"), ("ECO", "Agenda économique"), ("NEWS", "… actualités"),
-             ("JRN", "Journal de trading"), ("LAB", "… stratégies testées")]
+             ("JRN", "Journal de trading"), ("TRAIN", "… entraînement à l'aveugle et simulateur de risque"),
+             ("LAB", "… stratégies testées")]
     cmds = [("AL 4100", "Crée une alerte de prix à 4 100"), ("CALC", "Ouvre le calculateur de position"),
             ("CALC A 4061 4052 4079", "Achat à 4 061, stop 4 052, objectif 4 079 (V pour une vente)"), ("AIDE", "Cette fenêtre")]
     touches = [("/", "Aller à la barre de commande"), ("1 à 9, 0", "Changer d'écran"), ("C", "Calculateur"), ("?", "Aide"), ("Échap", "Fermer")]

@@ -69,6 +69,7 @@ import donnees  # fonction DATA : positionnement, volatilité, ratios, corrélat
 import marches  # fonction MKT : tableau de tous les marchés et courbe des taux
 import poste  # poste de pilotage : tout l'essentiel sur le premier écran
 import theme  # thème professionnel v8 (police, grille, navigation en haut)
+import entrainement  # fonction TRAIN : entraînement à l'aveugle sur les vraies bougies, simulateur de risque
 import labo  # labo des stratégies : résultats de backtest et statut
 import onglets  # onglets Annonces, Actualités et Suivi (v7)
 import fondamental  # onglet Fondamental (lecture macro reliée au filtre du plan)
@@ -81,7 +82,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.2"
+VERSION = "12.3"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -6755,6 +6756,7 @@ def contenus_onglets(data, a, ia):
         "actus": onglets.bloc_actus(data.get("news"), data.get("fed_off"), a.get("barometre"), MOTS_BAROMETRE, maintenant()),
         "suivi": onglets.bloc_suivi((a["decision"] or {}).get("histo") if dz_ok else None, COMPTE, onglets.bloc_methode()),
         "labo": labo.bloc_labo(labo.charger()),
+        "entrainement": entrainement.bloc(data.get("intraday"), AJUST),
         "marches": marches.bloc_marches(y, f),
         "data": donnees.bloc_donnees(a, AJUST),
     }
@@ -6769,7 +6771,8 @@ ECRANS = [
                                            ("salle", "RISK", "Risque, force des actifs, Fed"), ("marches", "MKT", "Marchés"),
                                            ("data", "DATA", "Positionnement et données")]),
     ("annonces", "ECO", "Agenda et actus", [("annonces", "ECO", "Agenda économique"), ("actus", "NEWS", "Actualités")]),
-    ("suivi", "JRN", "Journal", [("suivi", "JRN", "Journal et plan"), ("labo", "LAB", "Stratégies testées")]),
+    ("suivi", "JRN", "Journal", [("suivi", "JRN", "Journal et plan"), ("entrainement", "TRAIN", "Entraînement et simulateur de risque"),
+                                 ("labo", "LAB", "Stratégies testées")]),
 ]
 
 
@@ -6808,6 +6811,9 @@ def bloc_ecrans(data, a, ia, accueil):
             if r == "annonces":
                 apres = (f'<details class="on-plus"><summary>Calendrier en direct (TradingView)</summary>'
                          f'<div class="tv-cal">{cal_tv}</div></details>')
+            if r == "entrainement":      # manche en cours et score : hors des zones rafraîchies
+                corps += f'<div class="ec-sec" id="sec-{r}">{tete}{contenu}</div>'
+                continue
             corps += (f'<div class="ec-sec" id="sec-{r}">{tete}{avant}<div data-zone="t-{r}">{contenu}</div>{apres}</div>')
         panneaux += f'<div class="tabpanel" id="tab-{cle}" role="tabpanel" aria-label="{esc(titre)}">{sommaire}{corps}</div>'
     nav += ('<form class="cmd" role="search" onsubmit="return false"><label for="cmd">Fonction</label>'
@@ -6863,7 +6869,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             + (theme.POLICES if pro else
                f'<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&'
                f'family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">') +
-            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{labo.CSS if labo is not None else ""}'
+            f'<style>{CSS}{decision.CSS if decision is not None else ""}{fondamental.CSS if fondamental is not None else ""}{onglets.CSS if onglets is not None else ""}{entrainement.CSS}{labo.CSS if labo is not None else ""}'
             f'.fd-plus summary{{cursor:pointer;font:600 15px var(--cond);padding:10px 0;color:var(--brass)}}'
             f'{theme.CSS if pro else ""}{poste.CSS if (pro and poste is not None) else ""}{marches.CSS if (pro and marches is not None) else ""}{donnees.CSS if (pro and donnees is not None) else ""}{eco.CSS if (pro and eco is not None) else ""}{direct.CSS if (pro and direct) else ""}{stats.CSS if (pro and stats) else ""}{journal.CSS if (pro and journal) else ""}{analyste.CSS if (pro and analyste) else ""}{pourquoi.CSS if (pro and pourquoi) else ""}{salle.CSS if (pro and salle) else ""}{ecran.CSS if (pro and ecran) else ""}.jr-sep{{margin-top:8px}}</style></head><body>{corps}'
             f'<script>{JS.replace("__CFG__", cfg)}</script>'
@@ -6872,6 +6878,7 @@ def rendre_html(data, a, brief, ia=None, watch_min=None, site=False):
             f'{"<script>" + theme.JS + "</script>" if pro else ""}'
             f'{"<script>" + direct.JS + "</script>" if (pro and direct) else ""}'
             f'{"<script>" + journal.JS + "</script>" if (pro and journal) else ""}'
+            f'{"<script>" + entrainement.JS + "</script>" if pro else ""}'
             f'{"<script>" + salle.JS + "</script>" if (pro and salle) else ""}'
             f'{"<script>" + ecran.JS + "</script>" if (pro and ecran) else ""}</body></html>')
 
