@@ -49,4 +49,13 @@ with sync_playwright() as pw:
             sortir(nom, el.screenshot(type="jpeg", quality=85))
         except Exception as e:
             print(f"@@ECHEC {nom} {e}")
+    # sections hautes : fenêtre très haute pour les capturer d'un seul tenant (sinon l'image se découpe)
+    p.set_viewport_size({"width": 1600, "height": 7000})
+    for cle, sel, nom in (("fondamental", "#sec-fondamental", "fondamental_complet"), ("data", "#sec-data", "data_complet")):
+        try:
+            onglet(p, cle)
+            p.wait_for_timeout(1500)
+            sortir(nom, p.locator(sel).first.screenshot(type="jpeg", quality=82))
+        except Exception as e:
+            print(f"@@ECHEC {nom} {e}")
     b.close()
