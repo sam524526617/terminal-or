@@ -83,7 +83,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.6"
+VERSION = "12.7"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -1640,7 +1640,10 @@ def cot_etendu(cot, or_s):
            "pct_short": percentile(h["short"], float(der["short"])), "groupes": []}
     for g, lib in (("swap", "Banques (swap dealers)"), ("prod", "Producteurs et négociants")):
         if g + "_net" in cot:
-            res["groupes"].append({"lib": lib, "net": float(der[g + "_net"]),
+            res["groupes"].append({"lib": lib, "cle": g, "net": float(der[g + "_net"]),
+                                   "long": float(der[g + "_long"]), "short": float(der[g + "_short"]),
+                                   "serie": h[g + "_net"].reset_index(drop=True),
+                                   "pct_oi": float(der[g + "_net"] / der["oi"] * 100) if der["oi"] == der["oi"] and der["oi"] else None,
                                    "chg": float(der[g + "_net"] - prec[g + "_net"]),
                                    "pct3a": percentile(h[g + "_net"], float(der[g + "_net"]))})
     d_long, d_short = float(der["long"] - prec["long"]), float(der["short"] - prec["short"])

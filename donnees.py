@@ -73,11 +73,35 @@ def positionnement(a, ajust):
                   ("Variation sur la semaine", fr(c["chg"], 0, True), coul(c["chg"])),
                   ("Acheteurs / vendeurs", f'{fr(c["long"], 0)} / {fr(c["short"], 0)}', ""),
                   ("Part de l'intérêt ouvert", fr(c.get("pct_oi"), 1, unite=" %"), "")]
-        lignes += [(g["lib"], f'{fr(g["net"], 0)} ({fr(g["chg"], 0, True)})', coul(g["chg"])) for g in c.get("groupes", [])]
+        lignes += [(g["lib"], f'{fr(g["net"], 0)} ({fr(g["chg"], 0, True)})', coul(g["chg"])) for g in c.get("groupes", []) if g.get("cle") != "swap"]
         corps = (kv(lignes) + jauge(c["pct3a"], "peu exposés (rachat possible)", "très exposés (liquidation possible)")
                  + f'<p class="dt-lect"><b>{esc(lect[0])}</b> {esc(lect[1])}</p>')
         h.append(carte(f"Fonds spéculatifs (COT, {c.get('categorie', '')}) · {pd.Timestamp(c['date']):%d/%m}",
                        corps, f"Percentile sur 3 ans : {fr(c['pct3a'], 0)}. Publié le vendredi, données du mardi."))
+    bq = next((g for g in (c or {}).get("groupes", []) if g.get("cle") == "swap"), None)
+    if bq:
+        p = bq["pct3a"]
+        sens = "vendeuses" if bq["net"] < 0 else "acheteuses"
+        if p is not None and p <= 15:
+            lect = ("Les banques sont beaucoup plus vendeuses que d'habitude.", "Elles font la contrepartie de fonds très acheteurs : "
+                    "le marché est chargé à l'achat, une déception peut déclencher des ventes en chaîne.")
+        elif p is not None and p >= 85:
+            lect = ("Les banques sont beaucoup moins vendeuses que d'habitude.", "Les fonds ont déjà beaucoup vendu : il reste peu de "
+                    "vendeurs, ce qu'on voit souvent près des points bas.")
+        else:
+            lect = ("Position des banques dans leur zone habituelle.", "Pas de signal particulier de ce côté.")
+        mvt = ("elles ont réduit leurs ventes cette semaine" if bq["chg"] > 0 else "elles ont augmenté leurs ventes cette semaine") if bq["net"] < 0 else \
+              ("elles ont augmenté leurs achats cette semaine" if bq["chg"] > 0 else "elles ont réduit leurs achats cette semaine")
+        lignes = [("Position nette", f'{fr(bq["net"], 0)} contrats ({sens})', ""),
+                  ("Variation sur la semaine", fr(bq["chg"], 0, True), coul(bq["chg"])),
+                  ("Acheteurs / vendeurs", f'{fr(bq["long"], 0)} / {fr(bq["short"], 0)}', ""),
+                  ("Part de l'intérêt ouvert", fr(bq.get("pct_oi"), 1, unite=" %"), ""),
+                  ("Trois ans", spark(bq.get("serie"), n=156), "")]
+        h.append(carte(f"Banques (COT, swap dealers) · {pd.Timestamp(c['date']):%d/%m}",
+                       kv(lignes) + jauge(p, "très vendeuses", "peu vendeuses")
+                       + f'<p class="dt-lect"><b>{esc(lect[0])}</b> {esc(lect[1])} Dernier mouvement : {mvt}.</p>',
+                       f"Percentile sur 3 ans : {fr(p, 0)}. Les banques sont presque toujours vendeuses sur l'or, parce qu'elles prennent "
+                       "l'autre côté des fonds : c'est l'écart avec leur habitude qui compte, pas le signe. Publié le vendredi, données du mardi."))
     cn = a.get("carnets")
     if cn:
         pa = cn.get("part_acheteurs")
