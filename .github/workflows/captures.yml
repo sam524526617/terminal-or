@@ -1,0 +1,21 @@
+# Captures d'écran du terminal en ligne, pour les visuels (lancement manuel).
+name: Captures du terminal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  captures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+      - name: Captures
+        run: python outils/captures.py
