@@ -26,7 +26,7 @@ def onglet(p, cle):
 with sync_playwright() as pw:
     b = pw.chromium.launch()
     p = b.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=2)
-    p.goto(URL, wait_until="networkidle", timeout=90000)
+    p.goto(URL, wait_until="load", timeout=90000)
     p.wait_for_timeout(9000)                      # TradingView et polices
     p.evaluate("document.querySelectorAll('.tabpanel').length")
     sortir("accueil", p.screenshot(type="jpeg", quality=82))
