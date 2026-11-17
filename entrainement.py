@@ -97,6 +97,78 @@ LEXIQUE = [
 ]
 
 
+# (indicateur, ce que c'est, sens pour l'or quand il monte : -1 baisse, +1 hausse, 0 selon le cas, pourquoi, où le voir : rubrique, code)
+FONDA = [
+    ("Les trois moteurs du plan", [
+        ("Taux réel 10 ans", "Ce que rapporte une obligation américaine à 10 ans une fois l'inflation retirée.", -1,
+         "L'or ne rapporte rien. Plus le taux réel est haut, plus garder de l'or coûte cher par rapport à un placement sûr. C'est le moteur numéro un.", "fondamental", "FA"),
+        ("Dollar (indice DXY)", "La valeur du dollar face aux grandes monnaies (euro, yen, livre…).", -1,
+         "L'or est coté en dollars : un dollar plus fort le rend plus cher pour le reste du monde, donc moins demandé.", "fondamental", "FA"),
+        ("Taux 2 ans", "Le taux des obligations américaines à 2 ans : il suit de près ce que le marché attend de la Fed.", -1,
+         "S'il monte, le marché attend une Fed plus stricte (taux plus hauts, plus longtemps) : mauvais pour l'or.", "fondamental", "FA"),
+    ]),
+    ("La Fed", [
+        ("Taux directeur attendu", "Les hausses ou baisses de taux que le marché anticipe pour les prochaines réunions, tirées des futures.", -1,
+         "Plus de hausses attendues = taux et dollar plus hauts. Des baisses attendues soutiennent l'or. Ce qui compte, c'est le changement par rapport à hier.", "fondamental", "FA"),
+        ("Discours et décisions", "Les réunions de la Fed (8 par an) et les prises de parole de ses membres.", 0,
+         "Ton plus dur que prévu : l'or baisse. Ton plus souple : l'or monte. Le marché réagit à la surprise, pas à la décision elle-même.", "annonces", "ECO"),
+    ]),
+    ("Les chiffres économiques américains", [
+        ("Inflation (CPI, PCE, PPI)", "La hausse des prix sur un mois ou un an. Le PCE est la mesure préférée de la Fed.", -1,
+         "À court terme, une inflation plus haute que prévu pousse la Fed à rester stricte : l'or baisse. Paradoxe à connaître : sur des années, "
+         "l'inflation soutient l'or, mais le jour du chiffre c'est la réaction de la Fed qui domine.", "annonces", "ECO"),
+        ("Emploi (NFP, chômage, inscriptions)", "Les créations d'emplois du mois, le taux de chômage, les nouvelles inscriptions au chômage chaque semaine.", -1,
+         "Un emploi solide laisse la Fed libre de garder des taux hauts : l'or baisse. Attention au sens : pour le chômage et les inscriptions, "
+         "c'est une hausse qui soutient l'or.", "annonces", "ECO"),
+        ("Activité (PIB, ISM, ventes au détail)", "La croissance, le moral des entreprises, la consommation.", -1,
+         "Une économie forte = pas besoin de baisser les taux : l'or baisse. Une économie qui ralentit fait attendre des baisses de taux : l'or monte.", "annonces", "ECO"),
+    ]),
+    ("Le climat des marchés", [
+        ("Peur (VIX, jauge de risque)", "Le VIX mesure la nervosité sur les actions ; la jauge du terminal résume 7 marchés.", 1,
+         "Quand la peur monte, une partie de l'argent cherche un refuge, dont l'or. Exception : dans une panique générale, tout est vendu "
+         "d'abord, l'or aussi, pour trouver du cash.", "salle", "RISK"),
+        ("Pétrole", "Le prix du baril (Brent).", 0,
+         "Effet double : il fait monter l'inflation (la Fed se durcit, mauvais pour l'or) mais il monte souvent avec les tensions "
+         "géopolitiques (bon pour l'or). À lire avec le reste.", "marches", "MKT"),
+        ("Inflation anticipée", "L'inflation que le marché attend sur 10 ans, tirée des obligations.", 1,
+         "Si elle monte plus vite que les taux, le taux réel baisse : c'est favorable à l'or.", "fondamental", "FA"),
+    ]),
+    ("Les flux : qui achète, qui vend", [
+        ("Fonds spéculatifs (COT)", "La position des fonds sur les futures or, publiée chaque vendredi.", 0,
+         "Des fonds qui achètent accompagnent la hausse. Mais des fonds déjà très exposés n'ont plus grand-chose à acheter : le risque de retournement monte.", "data", "DATA"),
+        ("Banques (COT)", "La position des banques, presque toujours vendeuses parce qu'elles prennent l'autre côté des fonds.", 0,
+         "Regarde l'écart avec leur habitude : beaucoup plus vendeuses que d'habitude = marché chargé à l'achat.", "data", "DATA"),
+        ("ETF GLD", "Les tonnes d'or détenues par le plus gros fonds adossé à l'or.", 1,
+         "Des entrées = des investisseurs achètent de l'or physique via le fonds. Des sorties = ils allègent.", "data", "DATA"),
+        ("Particuliers", "La part de petits traders acheteurs ou vendeurs chez un courtier.", 0,
+         "Se lit à l'envers : une foule très acheteuse est plutôt un mauvais signe, elle a souvent tort aux extrêmes.", "data", "DATA"),
+    ]),
+]
+
+
+def guide_fonda():
+    """Les indicateurs fondamentaux un par un : ce que c'est, l'effet sur l'or, pourquoi, où le voir."""
+    eff = {-1: ('<em class="down">l\'or baisse</em>', "down"), 1: ('<em class="up">l\'or monte</em>', "up"), 0: ('<em class="flat">ça dépend</em>', "flat")}
+    groupes = ""
+    for titre, lignes in FONDA:
+        cartes = "".join(
+            f'<div class="en-ind {eff[sens][1]}"><div class="en-ind-t"><h4>{nom}</h4><a href="#analyse" data-aller="{cible}" class="en-lien"><span class="fc">{code}</span>voir</a></div>'
+            f'<p class="en-def">{quoi}</p><p class="en-eff">{"Quand il monte" if sens else "Effet sur l'or"} : {eff[sens][0]}</p><p>{pourquoi}</p></div>'
+            for nom, quoi, sens, pourquoi, cible, code in lignes)
+        groupes += f'<h3 class="en-gr">{titre}</h3><div class="en-inds">{cartes}</div>'
+    return ('<section class="jr" id="en-fonda"><h2>Comprendre les indicateurs fondamentaux</h2>'
+            '<p class="pourquoi">Presque tout se ramène à une chaîne : <b>économie américaine forte ou inflation haute → Fed plus stricte → '
+            'taux et dollar en hausse → l\'or baisse</b>. Et l\'inverse : économie qui faiblit → Fed plus souple → taux et dollar en baisse → '
+            'l\'or monte. Une bonne nouvelle pour l\'économie américaine est donc souvent une mauvaise nouvelle pour l\'or.</p>'
+            '<div class="en-regles"><div><b>Le marché réagit à la surprise.</b> Ce qui compte n\'est pas le chiffre, mais l\'écart avec ce qui était prévu. '
+            'Un bon chiffre déjà attendu ne fait rien bouger.</div>'
+            '<div><b>Le plan ne compte que trois moteurs.</b> Taux réel, dollar et taux 2 ans : il en faut deux sur trois du même côté pour que le '
+            'fondamental penche. Le reste sert à comprendre, pas à décider.</div>'
+            '<div><b>Le lien n\'est pas permanent.</b> Certaines semaines, l\'or ignore les taux et le dollar (achats des banques centrales, '
+            'géopolitique). La rubrique « Pourquoi l\'or bouge » dit si le lien fonctionne en ce moment.</div></div>'
+            f'{groupes}</section>')
+
+
 def guide():
     """Mode d'emploi : la lecture du terminal dans l'ordre, les pièges, le vocabulaire."""
     etapes = "".join(
@@ -159,10 +231,23 @@ def bloc(intra, ajust=0.0):
         'moitié des cas, bande claire = 9 cas sur 10.</p>'
         '<div class="en-tab" id="en-sim-tab"></div>'
         '<p class="en-lecture" id="en-sim-lecture"></p></section>')
-    return guide() + jeu + sim
+    return guide() + guide_fonda() + jeu + sim
 
 
 CSS = """
+.en-regles{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-bottom:6px}
+.en-regles div{background:#0b0c10;border:1px solid var(--band2);border-left:3px solid var(--brass);padding:10px 12px;font-size:13.5px;line-height:1.5;color:var(--steel);min-width:0}
+.en-regles b{color:var(--ink)}
+h3.en-gr{margin:16px 0 8px;font:700 12px var(--titre);letter-spacing:.14em;text-transform:uppercase;color:var(--brass)}
+.en-inds{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:10px}
+.en-ind{background:#0b0c10;border:1px solid var(--band2);border-radius:2px;padding:12px 14px;min-width:0}
+.en-ind.up{border-left:3px solid var(--up)} .en-ind.down{border-left:3px solid var(--down)} .en-ind.flat{border-left:3px solid var(--steel)}
+.en-ind-t{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.en-ind-t h4{flex:1;margin:0;font:700 15px var(--titre);letter-spacing:.03em;color:var(--ink);min-width:0}
+.en-ind p{margin:0 0 6px;font-size:13.5px;line-height:1.5;color:var(--steel)} .en-ind p:last-child{margin:0}
+.en-ind .en-def{color:var(--mute);font-size:13px}
+.en-ind .en-eff{font-weight:600;color:var(--ink)} .en-ind em{font-style:normal;font-weight:700}
+.en-ind em.up{color:var(--up)} .en-ind em.down{color:var(--down)} .en-ind em.flat{color:var(--steel)}
 .en-etapes{list-style:none;margin:0 0 12px;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
 .en-etape{background:#0b0c10;border:1px solid var(--band2);border-radius:2px;padding:12px 14px;min-width:0}
 .en-et-t{display:flex;align-items:center;gap:10px;margin-bottom:8px}

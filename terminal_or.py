@@ -83,7 +83,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.8"
+VERSION = "12.9"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
