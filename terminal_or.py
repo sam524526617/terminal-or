@@ -83,7 +83,7 @@ try:
 except ImportError:
     yf = None
 
-VERSION = "12.7"
+VERSION = "12.8"
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION : tout ce que tu peux ajuster est ici
@@ -6880,7 +6880,7 @@ ECRANS = [
                                            ("salle", "RISK", "Risque, force des actifs, Fed"), ("marches", "MKT", "Marchés"),
                                            ("data", "DATA", "Positionnement et données")]),
     ("annonces", "ECO", "Agenda et actus", [("annonces", "ECO", "Agenda économique"), ("actus", "NEWS", "Actualités")]),
-    ("suivi", "JRN", "Journal", [("suivi", "JRN", "Journal et plan"), ("entrainement", "TRAIN", "Entraînement et simulateur de risque"),
+    ("suivi", "JRN", "Journal", [("suivi", "JRN", "Journal et plan"), ("entrainement", "TRAIN", "Mode d'emploi, entraînement et simulateur de risque"),
                                  ("labo", "LAB", "Stratégies testées")]),
 ]
 

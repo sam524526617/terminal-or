@@ -38,6 +38,82 @@ def donnees(intra, ajust=0.0):
     return [[int(m), *map(float, r)] for m, r in zip(t, v)]
 
 
+ETAPES = [
+    ("Y a-t-il une annonce ?", "annonces", "ECO",
+     "L'en-tête affiche la prochaine annonce forte et son compte à rebours. Un bandeau rouge apparaît quand elle approche.",
+     "Pas d'entrée 30 minutes avant ni 30 minutes après une annonce forte : le prix part dans tous les sens et les stops sautent. "
+     "Après la publication, le bandeau défilant résume le chiffre et la réaction de l'or."),
+    ("Que dit le fondamental ?", "fondamental", "FA",
+     "Le gros mot en haut de l'écran Fondamental : HAUSSIER, BAISSIER ou NEUTRE. Il résume les taux réels, le dollar et les taux 2 ans.",
+     "S'il est baissier, n'achète pas ; s'il est haussier, ne vends pas. Neutre : il ne bloque rien, c'est la technique qui décide. "
+     "La rubrique « Pourquoi l'or bouge » explique les derniers jours en clair."),
+    ("Que dit la technique ?", "resume", "RES",
+     "Le résumé technique : un verdict (HAUSSIER, BAISSIER, EN CORRECTION, PARTAGÉ) et quatre flèches, du Daily au 15 minutes.",
+     "Le plan ne trade que si le Daily et le 4 heures vont dans le même sens et que le 1 heure ne les contredit pas. "
+     "« En correction » ou « partagé » veut dire : attendre. La phrase de synthèse donne le prix exact qui changerait la situation."),
+    ("Où sont les niveaux ?", "accueil", "GO",
+     "Le panneau « Niveaux en direct » de la Vue d'ensemble : zones d'achat (vert) et de vente (rouge), sommets et creux à casser, "
+     "niveaux de la veille. La carte des options (OPT) ajoute les murs.",
+     "On n'achète pas juste sous une résistance et on ne vend pas juste au-dessus d'un support. Une bonne entrée se fait près d'un "
+     "niveau, avec de la place jusqu'au suivant pour l'objectif."),
+    ("La journée a-t-elle encore de la place ?", "stat", "STAT",
+     "Dans le résumé technique, la carte « Amplitude » : la part de l'amplitude habituelle déjà faite aujourd'hui, et le mouvement "
+     "attendu par les options.",
+     "Au-delà de 100 %, la journée a déjà beaucoup bougé : viser loin devient peu réaliste. L'écran STAT montre à quelles heures "
+     "l'or fait d'habitude son plus haut et son plus bas."),
+    ("Que font les gros et la foule ?", "data", "DATA",
+     "Les cartes Fonds, Banques et Particuliers, et la jauge de risque (RISK).",
+     "C'est du contexte, pas un signal d'entrée. Un extrême compte : des fonds très exposés ou une foule très acheteuse rendent "
+     "un retournement plus probable. Le rapport COT ne sort qu'une fois par semaine."),
+    ("Que dit le plan ?", "accueil", "GO",
+     "Le panneau « Décision du plan » : RIEN, ACHAT ou VENTE, la liste des filtres, et « ce qui débloque ».",
+     "RIEN est la réponse normale la plupart du temps. Les signaux sont marqués DÉMO parce que le plan perd au backtest : "
+     "sers-t'en pour apprendre à lire, pas pour trader en réel."),
+    ("Avant d'entrer", "suivi", "JRN",
+     "Le calculateur (touche C, ou CALC dans la barre de commande) : entrée, stop, objectif, taille de position.",
+     "Risque 1 % du compte au maximum, stop placé avant d'entrer, objectif d'au moins 2 fois le risque. Note le trade dans le "
+     "journal tout de suite : c'est lui qui dira si tu progresses."),
+]
+
+PIEGES = [
+    ("Un seul indicateur ne suffit jamais.", "Cherche trois éléments d'accord : le fond, la technique, et un niveau proche."),
+    ("Quand les éléments se contredisent, la bonne décision est de ne rien faire.", "Passer son tour ne coûte rien."),
+    ("Un RSI « suracheté » n'est pas un signal de vente.", "Dans une tendance forte, il peut le rester longtemps."),
+    ("Les murs d'options et les zones sont des endroits où le prix réagit souvent, pas des prévisions.", "Ils cassent parfois, et violemment."),
+    ("Le terminal explique le passé et décrit le présent.", "Il ne connaît pas l'avenir, et aucune de ses stratégies n'a passé la validation."),
+]
+
+LEXIQUE = [
+    ("R", "le risque d'un trade : la distance entre l'entrée et le stop. Un gain de 2 R = deux fois ce que tu risquais."),
+    ("OB (bloc d'ordres)", "la dernière bougie avant un mouvement fort : une zone où le prix revient souvent réagir."),
+    ("FVG (déséquilibre)", "un vide laissé par trois bougies rapides : le prix revient souvent le combler."),
+    ("Cassure de structure", "une clôture au-delà du dernier sommet ou creux : c'est ce qui fixe la tendance."),
+    ("ATR", "la taille moyenne d'une bougie : sert à placer un stop ni trop serré ni trop large."),
+    ("RSI", "la force du mouvement récent, de 0 à 100 : au-dessus de 70 il est étiré vers le haut, sous 30 vers le bas."),
+    ("VWAP", "le prix moyen payé dans la journée, pondéré par les volumes."),
+    ("COT", "le rapport hebdomadaire qui dit qui est acheteur ou vendeur sur le marché des futures."),
+    ("Put / call", "un put protège contre une baisse, un call parie sur une hausse."),
+    ("Taux réel", "ce que rapporte une obligation américaine une fois l'inflation retirée : quand il monte, l'or baisse souvent."),
+]
+
+
+def guide():
+    """Mode d'emploi : la lecture du terminal dans l'ordre, les pièges, le vocabulaire."""
+    etapes = "".join(
+        f'<li class="en-etape"><div class="en-et-t"><span class="en-num">{i}</span><h3>{t}</h3>'
+        f'<a href="#analyse" data-aller="{cible}" class="en-lien"><span class="fc">{code}</span>ouvrir</a></div>'
+        f'<p><b>Où regarder.</b> {ou}</p><p><b>Comment le lire.</b> {lire}</p></li>'
+        for i, (t, cible, code, ou, lire) in enumerate(ETAPES, 1))
+    pieges = "".join(f'<li><b>{a}</b> {b}</li>' for a, b in PIEGES)
+    lex = "".join(f'<div><dt>{a}</dt><dd>{b}</dd></div>' for a, b in LEXIQUE)
+    return ('<section class="jr" id="en-guide"><h2>Comment lire le terminal</h2>'
+            '<p class="pourquoi">La routine à suivre avant chaque trade, toujours dans le même ordre. Elle prend cinq minutes. '
+            'Si une étape dit non, on s\'arrête : pas besoin de regarder la suite.</p>'
+            f'<ol class="en-etapes">{etapes}</ol>'
+            f'<div class="en-deux"><div class="en-bloc"><h3>Les pièges de lecture</h3><ul class="en-pieges">{pieges}</ul></div>'
+            f'<details class="en-bloc"><summary>Le vocabulaire en une ligne</summary><dl class="en-lex">{lex}</dl></details></div></section>')
+
+
 def bloc(intra, ajust=0.0):
     d = donnees(intra, ajust)
     if len(d) < 400:
@@ -83,10 +159,26 @@ def bloc(intra, ajust=0.0):
         'moitié des cas, bande claire = 9 cas sur 10.</p>'
         '<div class="en-tab" id="en-sim-tab"></div>'
         '<p class="en-lecture" id="en-sim-lecture"></p></section>')
-    return jeu + sim
+    return guide() + jeu + sim
 
 
 CSS = """
+.en-etapes{list-style:none;margin:0 0 12px;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
+.en-etape{background:#0b0c10;border:1px solid var(--band2);border-radius:2px;padding:12px 14px;min-width:0}
+.en-et-t{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.en-et-t h3{flex:1;margin:0;font:700 15px var(--titre);letter-spacing:.04em;color:var(--ink);min-width:0}
+.en-num{flex:none;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--brass);color:var(--brass);font:700 12px var(--mono)}
+.en-lien{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--brass);text-decoration:none}
+.en-lien:hover{text-decoration:underline}
+.en-etape p{margin:0 0 6px;font-size:13.5px;line-height:1.5;color:var(--steel)} .en-etape p:last-child{margin:0} .en-etape p b{color:var(--ink)}
+.en-deux{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:start}
+.en-bloc{background:#0b0c10;border:1px solid var(--band2);border-radius:2px;padding:12px 14px;min-width:0}
+.en-bloc h3,.en-bloc summary{margin:0 0 8px;font:700 12px var(--titre);letter-spacing:.14em;text-transform:uppercase;color:var(--brass)}
+.en-bloc summary{cursor:pointer;margin:0} .en-bloc[open] summary{margin-bottom:8px}
+.en-pieges{margin:0;padding-left:18px;font-size:13.5px;line-height:1.55;color:var(--steel)} .en-pieges li{margin-bottom:6px} .en-pieges b{color:var(--ink)}
+.en-lex{margin:0;font-size:13.5px;line-height:1.5} .en-lex div{padding:6px 0;border-top:1px solid var(--band2)} .en-lex div:first-child{border:0}
+.en-lex dt{display:inline;font-weight:700;color:var(--ink)} .en-lex dt::after{content:" : "} .en-lex dd{display:inline;margin:0;color:var(--steel)}
+@media (max-width:800px){.en-deux{grid-template-columns:1fr}}
 .en-info{display:flex;flex-wrap:wrap;gap:6px 18px;font:500 13px var(--mono);color:var(--mute);margin:0 0 8px}
 .en-info b{color:var(--ink);font-weight:600}
 .en-graph{position:relative;height:380px;background:#07080b;border:1px solid var(--band2);border-radius:2px;overflow:hidden;min-width:0}
