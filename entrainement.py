@@ -146,16 +146,110 @@ FONDA = [
 ]
 
 
-def guide_fonda():
-    """Les indicateurs fondamentaux un par un : ce que c'est, l'effet sur l'or, pourquoi, où le voir."""
+def cartes_groupes(liste):
+    """Groupes de cartes d'indicateurs. Chaque ligne : (nom, ce que c'est, sens pour l'or quand il monte, pourquoi, rubrique, code)
+    et en option un 7e élément : le libellé d'effet à afficher à la place de « Quand il monte : … »."""
     eff = {-1: ('<em class="down">l\'or baisse</em>', "down"), 1: ('<em class="up">l\'or monte</em>', "up"), 0: ('<em class="flat">ça dépend</em>', "flat")}
     groupes = ""
-    for titre, lignes in FONDA:
-        cartes = "".join(
-            f'<div class="en-ind {eff[sens][1]}"><div class="en-ind-t"><h4>{nom}</h4><a href="#analyse" data-aller="{cible}" class="en-lien"><span class="fc">{code}</span>voir</a></div>'
-            f'<p class="en-def">{quoi}</p><p class="en-eff">{"Quand il monte" if sens else "Effet sur l'or"} : {eff[sens][0]}</p><p>{pourquoi}</p></div>'
-            for nom, quoi, sens, pourquoi, cible, code in lignes)
+    for titre, lignes in liste:
+        cartes = ""
+        for l in lignes:
+            nom, quoi, sens, pourquoi, cible, code = l[:6]
+            ligne_eff = (f'<p class="en-eff">{l[6]}</p>' if len(l) > 6 else
+                         f'<p class="en-eff">{"Quand il monte" if sens else "Effet sur l\'or"} : {eff[sens][0]}</p>')
+            cartes += (f'<div class="en-ind {eff[sens][1]}"><div class="en-ind-t"><h4>{nom}</h4><a href="#analyse" data-aller="{cible}" class="en-lien">'
+                       f'<span class="fc">{code}</span>voir</a></div><p class="en-def">{quoi}</p>{ligne_eff}<p>{pourquoi}</p></div>')
         groupes += f'<h3 class="en-gr">{titre}</h3><div class="en-inds">{cartes}</div>'
+    return groupes
+
+
+AUTRES = [
+    ("Les options", [
+        ("Murs de calls et de puts", "Les prix où beaucoup de contrats d'options sont ouverts : calls au-dessus du prix, puts en dessous.", 0,
+         "Ceux qui ont vendu ces options se couvrent : ils vendent de l'or quand le prix monte vers un mur de calls, en achètent quand il descend "
+         "vers un mur de puts. Le prix bute donc souvent dessus. Si un mur casse, le mouvement peut s'accélérer, car tout le monde se couvre en même temps.",
+         "options", "OPT", 'À lire : <em class="flat">un frein, pas une prévision</em>'),
+        ("Prix aimant", "Le prix où le plus d'acheteurs d'options perdent à l'échéance (« max pain »).", 0,
+         "L'or a tendance à s'en rapprocher dans les derniers jours avant l'échéance. Loin de l'échéance, l'effet est faible : ne t'en sers pas pour viser un objectif dans une semaine.",
+         "options", "OPT", 'À lire : <em class="flat">surtout la semaine de l\'échéance</em>'),
+        ("Mouvement attendu", "L'amplitude que le marché paie pour se couvrir d'ici une échéance (prix d'un call et d'un put au prix actuel).", 0,
+         "Exemple : « ± 100 $ d'ici le 23/11 ». C'est une fourchette réaliste pour tes objectifs. Un objectif plus loin que le mouvement attendu a peu de chances d'être touché.",
+         "options", "OPT", 'À lire : <em class="flat">la taille du terrain de jeu</em>'),
+        ("Puts pour 1 call", "Le nombre de contrats de protection contre la baisse pour un contrat qui parie sur la hausse.", 0,
+         "Au-dessus de 1,1 : le marché se protège surtout contre une baisse. Sous 0,7 : il parie surtout sur la hausse. Aux extrêmes, il se lit à l'envers : "
+         "quand tout le monde est déjà protégé, il reste peu de vendeurs.", "options", "OPT", 'À lire : <em class="flat">l\'humeur, parfois à l\'envers</em>'),
+    ]),
+    ("La volatilité et le stress", [
+        ("GVZ (volatilité attendue de l'or)", "L'amplitude que les options sur l'or anticipent pour le mois à venir, en % sur un an.", 0,
+         "Un GVZ qui monte veut dire que le marché attend de gros mouvements, pas forcément une hausse. Élargis tes stops ou réduis ta taille quand il est haut.",
+         "data", "DATA", 'Quand il monte : <em class="flat">plus de mouvement attendu, dans un sens ou l\'autre</em>'),
+        ("Volatilité réalisée", "L'amplitude que l'or a vraiment faite sur les 20 derniers jours.", 0,
+         "Compare-la au GVZ. Options plus chères que la réalité : le marché se prépare à un choc (annonce, géopolitique). L'or qui bouge plus que prévu : la volatilité surprend, prudence sur les stops.",
+         "data", "DATA", 'À lire : <em class="flat">comparée au GVZ</em>'),
+        ("MOVE (nervosité sur les taux)", "L'équivalent du VIX pour les obligations américaines : les mouvements de taux que le marché attend.", 0,
+         "Des taux nerveux font bouger le dollar et les taux réels, donc l'or, dans tous les sens. Un MOVE haut annonce des journées agitées, pas une direction.",
+         "fondamental", "FA", 'Quand il monte : <em class="flat">plus d\'agitation sur l\'or</em>'),
+        ("Écart de crédit (haut rendement)", "La prime que paient les entreprises fragiles pour emprunter, par rapport à l'État américain.", 1,
+         "Quand il s'élargit, les investisseurs craignent des faillites : l'argent cherche des refuges, dont l'or. Un écart qui bondit d'un coup peut aussi provoquer des ventes de tout, or compris.",
+         "fondamental", "FA"),
+        ("Conditions financières", "Un indice de la Fed de Chicago : est-il facile ou difficile d'emprunter et d'investir ? Au-dessus de 0, c'est plus tendu que la normale.", 1,
+         "Des conditions qui se tendent freinent l'économie et rapprochent les baisses de taux : plutôt favorable à l'or à quelques semaines. Le jour même, le stress peut faire vendre.",
+         "fondamental", "FA"),
+    ]),
+    ("Les taux et la liquidité", [
+        ("Prime de terme", "Le supplément que les investisseurs exigent pour prêter longtemps à l'État américain (10 ans) plutôt qu'à court terme.", 0,
+         "Si elle monte par crainte de l'inflation ou de la dette américaine, c'est plutôt bon pour l'or (méfiance envers les obligations). Si elle monte avec les taux réels, l'effet taux domine et l'or baisse.",
+         "fondamental", "FA"),
+        ("SOFR", "Le taux auquel les banques se prêtent du cash pour une nuit, garanti par des obligations. Il suit le taux directeur de la Fed.", -1,
+         "Plus il est haut, plus garder de l'or (qui ne rapporte rien) coûte cher. Il sert aussi à calculer le coût de portage de l'or.",
+         "fondamental", "FA"),
+        ("Liquidité nette (Fed et Trésor)", "L'argent disponible dans le système : le bilan de la Fed, moins ce que le Trésor garde sur son compte et ce qui est placé à la Fed au jour le jour.", 1,
+         "Quand la liquidité monte, il y a plus d'argent à placer : les actifs montent en général, l'or aussi. Quand elle se retire, tout devient plus difficile. Effet lent, sur des semaines.",
+         "fondamental", "FA"),
+        ("Adjudications du Trésor", "Les ventes d'obligations de l'État américain aux investisseurs, plusieurs fois par semaine.", 0,
+         "Une demande faible fait monter les taux (mauvais pour l'or) mais nourrit le doute sur les finances américaines (bon pour l'or). Les 10 et 30 ans sont les plus suivies.",
+         "annonces", "ECO", 'À lire : <em class="flat">la demande compte plus que le taux</em>'),
+    ]),
+    ("L'or physique", [
+        ("Coût de portage", "L'écart de prix entre les contrats futures or d'échéances différentes, ramené en % par an.", 0,
+         "Normalement, il est proche du SOFR : garder de l'or coûte le prix de l'argent emprunté. S'il tombe nettement sous le SOFR, l'or physique est rare : les acheteurs veulent du métal tout de suite, signe de force.",
+         "data", "DATA", 'À lire : <em class="flat">comparé au SOFR</em>'),
+        ("Location implicite", "Ce que coûte l'emprunt d'or physique, déduit de l'écart entre le SOFR et le coût de portage.", 1,
+         "Une location qui monte veut dire que l'or physique manque (forte demande de métal, stocks tendus) : c'est un soutien pour le prix.",
+         "data", "DATA"),
+    ]),
+    ("Les ratios et les liens", [
+        ("Or / argent", "Le nombre d'onces d'argent pour acheter une once d'or.", 0,
+         "Il monte quand l'or surperforme l'argent, en général dans les périodes de peur (l'argent est plus industriel). Très haut, il signale souvent un pessimisme sur la croissance.",
+         "data", "DATA", 'Quand il monte : <em class="flat">l\'or joue son rôle de refuge</em>'),
+        ("Or / cuivre", "L'or (défensif) divisé par le cuivre (lié à l'industrie).", 0,
+         "Sa hausse traduit une inquiétude sur la croissance mondiale. Il bouge souvent avec les taux longs, dans le sens inverse.",
+         "data", "DATA", 'Quand il monte : <em class="flat">inquiétude sur la croissance</em>'),
+        ("Or / pétrole", "Combien de barils achète une once d'or.", 0,
+         "Il dit si l'or suit l'inflation de l'énergie ou s'en détache. Une hausse brutale arrive souvent quand le pétrole s'effondre sur une crainte de récession.",
+         "data", "DATA", 'À lire : <em class="flat">l\'or face à l\'inflation énergétique</em>'),
+        ("Or / actions (S&amp;P 500)", "La performance de l'or face aux actions américaines.", 0,
+         "Sa hausse montre une préférence pour les actifs défensifs. Les actions minières (GDX) qui montent moins que l'or pendant une hausse rendent cette hausse moins solide.",
+         "data", "DATA", 'Quand il monte : <em class="flat">les investisseurs se protègent</em>'),
+        ("Corrélations", "À quel point l'or bouge avec (ou contre) un autre marché sur 60 jours, de −1 à +1.", 0,
+         "Près de −1 avec le dollar : le lien habituel fonctionne. Proche de 0 : l'or vit sa vie (banques centrales, géopolitique) et les moteurs du plan expliquent moins bien ses mouvements. "
+         "Un lien peut casser du jour au lendemain.", "fondamental", "FA", 'À lire : <em class="flat">le lien habituel tient-il ?</em>'),
+    ]),
+]
+
+
+def guide_autres():
+    """Les indicateurs de second rang : options, volatilité, taux et liquidité, or physique, ratios."""
+    return ('<section class="jr" id="en-autres"><h2>Les autres indicateurs</h2>'
+            '<p class="pourquoi">Ils ne décident pas d\'un trade. Ils disent dans quel décor tu trades : quelle amplitude attendre, si le marché est '
+            'nerveux, si l\'or physique manque, si les liens habituels tiennent. Sers-t\'en pour régler la taille de ta position, la largeur de ton '
+            'stop et la distance de ton objectif.</p>'
+            f'{cartes_groupes(AUTRES)}</section>')
+
+
+def guide_fonda():
+    """Les indicateurs fondamentaux un par un : ce que c'est, l'effet sur l'or, pourquoi, où le voir."""
+    groupes = cartes_groupes(FONDA)
     return ('<section class="jr" id="en-fonda"><h2>Comprendre les indicateurs fondamentaux</h2>'
             '<p class="pourquoi">Presque tout se ramène à une chaîne : <b>économie américaine forte ou inflation haute → Fed plus stricte → '
             'taux et dollar en hausse → l\'or baisse</b>. Et l\'inverse : économie qui faiblit → Fed plus souple → taux et dollar en baisse → '
@@ -231,7 +325,7 @@ def bloc(intra, ajust=0.0):
         'moitié des cas, bande claire = 9 cas sur 10.</p>'
         '<div class="en-tab" id="en-sim-tab"></div>'
         '<p class="en-lecture" id="en-sim-lecture"></p></section>')
-    return guide() + guide_fonda() + jeu + sim
+    return guide() + guide_fonda() + guide_autres() + jeu + sim
 
 
 CSS = """
