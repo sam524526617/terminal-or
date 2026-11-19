@@ -1,0 +1,27 @@
+# Voix off de synthèse pour les vidéos (lancement manuel).
+name: Voix off
+
+on:
+  workflow_dispatch:
+    inputs:
+      voix:
+        description: Voix Piper (nom[:locuteur]), séparées par des espaces
+        default: fr_FR-tom-medium fr_FR-upmc-medium:1 fr_FR-siwis-medium
+
+permissions:
+  contents: read
+
+jobs:
+  voix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install piper-tts
+      - name: Voix
+        env:
+          VOIX: ${{ inputs.voix }}
+        run: python outils/voix.py $VOIX
